@@ -1426,7 +1426,8 @@ impl ExportView {
 /// head of a checkpoint, or the published head of a running node. go-quai
 /// reads side-chain blocks from its database when a reorg walks back; the
 /// block store keeps only the canonical chain, so the pool remembers the
-/// heads it has seen (1,024).
+/// heads it sees and their ancestors (1,024 blocks; at most 128 for one
+/// head, back to a remembered block).
 pub struct ViewChain {
     view: ExportView,
     seen: Mutex<Lru<Arc<BlockData>>>,
@@ -1451,11 +1452,38 @@ impl ViewChain {
         let block = view
             .block_by_number(view.head())?
             .ok_or_else(|| ViewError::Unavailable("head block".into()))?;
-        remember(&self.seen, block.hash, &block, SEEN_HEADS);
+        self.remember_chain(&block);
         if let Ok(mut last) = self.last.lock() {
             *last = Some(block.clone());
         }
         Ok(block)
+    }
+    /// Remembers a block and its ancestors up to a remembered one (at most
+    /// 128), so that every remembered block has its ancestors too.
+    fn remember_chain(&self, block: &Arc<BlockData>) {
+        remember(&self.seen, block.hash, block, SEEN_HEADS);
+        let mut b = block.clone();
+        for _ in 0..128 {
+            if b.number == 0 {
+                break;
+            }
+            let parent = crate::txpool::block::parent(&b);
+            let known = self
+                .seen
+                .lock()
+                .map(|s| s.0.contains_key(&parent))
+                .unwrap_or(true);
+            if known {
+                break;
+            }
+            match self.view.block_by_hash(&parent) {
+                Ok(Some(p)) if p.number + 1 == b.number => {
+                    remember(&self.seen, p.hash, &p, SEEN_HEADS);
+                    b = p;
+                }
+                _ => break,
+            }
+        }
     }
 }
 impl crate::txpool::PoolChain for ViewChain {
@@ -1504,5 +1532,13 @@ impl crate::txpool::PoolChain for ViewChain {
             Some((head, size)) if head == *block => size,
             _ => 0,
         }
+    }
+    /// The block of a head event, remembered with its ancestors, so that a
+    /// later reorg can walk back through them after the store has dropped
+    /// them.
+    fn head_block(&self, hash: &Hash) -> Option<Arc<BlockData>> {
+        let block = self.view.block_by_hash(hash).ok().flatten()?;
+        self.remember_chain(&block);
+        Some(block)
     }
 }

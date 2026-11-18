@@ -164,6 +164,11 @@ pub trait PoolChain: Send + Sync {
     fn utxo(&self, hash: &Hash, index: u16) -> Option<UtxoData>;
     /// `rawdb.ReadUTXOSetSize(block)`.
     fn utxo_set_size(&self, block: &Hash) -> u64;
+    /// The block of a head event, which the chain may remember for a later
+    /// reorg walk (go-quai reads side chains from its database).
+    fn head_block(&self, hash: &Hash) -> Option<Arc<BlockData>> {
+        self.header_by_hash(hash)
+    }
 }
 
 /// Header fields of a work object as go-quai's accessors return them.
@@ -349,6 +354,11 @@ pub struct Pool {
     /// journaling.
     pub journaling: bool,
     journal_pending: Vec<Tx>,
+    /// Resets that reached the new head, and resets that stopped early
+    /// (missing old head, unrooted walk, no state), as go-quai's do.
+    resets: u64,
+    reset_stops: u64,
+    reset_head: Option<Hash>,
 }
 
 /// The pool's content for snapshots and the RPC.
@@ -388,6 +398,9 @@ impl Pool {
             dirty: None,
             journaling: false,
             journal_pending: vec![],
+            resets: 0,
+            reset_stops: 0,
+            reset_head: None,
             chain: chain.clone(),
             config,
         };
@@ -448,6 +461,11 @@ impl Pool {
             return Some(t.clone());
         }
         self.qi_pool.get(hash).map(|e| e.tx.clone())
+    }
+    /// The head of the last completed reset, completed resets, and resets
+    /// that stopped early.
+    pub fn reset_state(&self) -> (Option<Hash>, u64, u64) {
+        (self.reset_head, self.resets, self.reset_stops)
     }
     /// The Qi pool from the oldest to the newest entry.
     pub fn qi_pending(&self) -> Vec<QiEntry> {
@@ -931,8 +949,18 @@ impl Pool {
         }
     }
 
-    /// `reset`.
+    /// `reset`, with its outcome counted.
     fn reset(&mut self, old: Option<Arc<BlockData>>, new: Arc<BlockData>, now: u64) {
+        let hash = new.hash;
+        if self.reset_to(old, new, now) {
+            self.resets += 1;
+            self.reset_head = Some(hash);
+        } else {
+            self.reset_stops += 1;
+        }
+    }
+    /// go-quai's `reset`; false where it returns early.
+    fn reset_to(&mut self, old: Option<Arc<BlockData>>, new: Arc<BlockData>, now: u64) -> bool {
         let mut reinject: Vec<Tx> = vec![];
         let chain = self.chain.clone();
         match &old {
@@ -945,13 +973,13 @@ impl Pool {
                         None => {
                             if new_num >= old_num {
                                 // "Transaction pool reset with missing oldhead".
-                                return;
+                                return false;
                             }
                             // A setHead: no reinjection, the state still resets.
                         }
                         Some(mut rem) => {
                             let Some(mut add) = add else {
-                                return;
+                                return false;
                             };
                             let mut discarded = vec![];
                             let mut included = vec![];
@@ -959,26 +987,26 @@ impl Pool {
                                 discarded.extend(block::transactions(&rem, now));
                                 match chain.get_block(&block::parent(&rem), rem.number - 1) {
                                     Some(b) => rem = b,
-                                    None => return,
+                                    None => return false,
                                 }
                             }
                             while add.number > rem.number {
                                 included.extend(block::transactions(&add, now));
                                 match chain.get_block(&block::parent(&add), add.number - 1) {
                                     Some(b) => add = b,
-                                    None => return,
+                                    None => return false,
                                 }
                             }
                             while rem.hash != add.hash {
                                 discarded.extend(block::transactions(&rem, now));
                                 match chain.get_block(&block::parent(&rem), rem.number - 1) {
                                     Some(b) => rem = b,
-                                    None => return,
+                                    None => return false,
                                 }
                                 included.extend(block::transactions(&add, now));
                                 match chain.get_block(&block::parent(&add), add.number - 1) {
                                     Some(b) => add = b,
-                                    None => return,
+                                    None => return false,
                                 }
                             }
                             // TxDifferenceWithoutETXs, with the time reset.
@@ -1008,7 +1036,7 @@ impl Pool {
         }
         let state = match chain.state_at(&new) {
             Ok(s) => s,
-            Err(_) => return,
+            Err(_) => return false,
         };
         self.current_state = state.clone();
         self.qi_scaling = (chain.utxo_set_size(&new.hash) as f64).ln();
@@ -1028,6 +1056,7 @@ impl Pool {
         if !qis.is_empty() {
             self.add_qi_txs_without_validation(qis, now);
         }
+        true
     }
 
     /// `promoteExecutables`.

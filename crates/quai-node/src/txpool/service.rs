@@ -319,20 +319,30 @@ impl Service {
             runtime.spawn(async move {
                 let mut head = svc.chain.current_block();
                 while !stop.load(Ordering::Relaxed) {
-                    match heads.recv().await {
-                        Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            let new = svc.chain.current_block();
-                            if new.hash == head.hash {
-                                continue;
-                            }
-                            let old = head.clone();
-                            let s = svc.clone();
-                            let n = new.clone();
-                            tokio::task::block_in_place(|| s.reset(Some(old), n));
-                            head = new;
-                        }
+                    let event = match heads.recv().await {
+                        Ok(hash) => Some(hash),
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
                         Err(_) => break,
+                    };
+                    // The event's block and its ancestors are remembered for
+                    // a later reorg walk. The reset goes to the current head:
+                    // go-quai also merges the heads that arrive before its
+                    // next reorg run into one reset, and the view has state
+                    // at the head only.
+                    let s = svc.clone();
+                    let new = tokio::task::block_in_place(|| {
+                        if let Some(hash) = event {
+                            let _ = s.chain.head_block(&hash);
+                        }
+                        s.chain.current_block()
+                    });
+                    if new.hash == head.hash {
+                        continue;
                     }
+                    let old = head.clone();
+                    let n = new.clone();
+                    tokio::task::block_in_place(|| s.reset(Some(old), n));
+                    head = new;
                 }
             });
         }
@@ -341,6 +351,11 @@ impl Service {
 
 /// The answers of the RPC pool hooks (`ChainView::pool_*`).
 impl Service {
+    /// The head of the last completed reset, completed resets, and resets
+    /// that stopped early (`Pool::reset_state`).
+    pub fn reset_state(&self) -> (Option<Hash>, u64, u64) {
+        self.pool().reset_state()
+    }
     pub fn rpc_nonce(&self, a: &[u8; 20]) -> u64 {
         self.pool().nonce(a)
     }

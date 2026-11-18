@@ -135,13 +135,13 @@ impl<'a> Cursor<'a> {
         Ok(v)
     }
     fn hash(&mut self) -> Result<Hash, Error> {
-        Ok(self.take(32)?.try_into().unwrap())
+        Ok(crate::slice::array(self.take(32)?)?)
     }
     fn byte(&mut self) -> Result<u8, Error> {
         Ok(self.take(1)?[0])
     }
     fn count(&mut self, max: usize) -> Result<usize, Error> {
-        let n = u32::from_be_bytes(self.take(4)?.try_into().unwrap()) as usize;
+        let n = u32::from_be_bytes(crate::slice::array(self.take(4)?)?) as usize;
         if n > max {
             return Err(invalid());
         }

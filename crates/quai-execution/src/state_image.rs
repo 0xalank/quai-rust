@@ -176,7 +176,7 @@ impl<'a> Reader<'a> {
         Ok(value)
     }
     fn fixed<const N: usize>(&mut self) -> Result<[u8; N], String> {
-        Ok(self.take(N)?.try_into().unwrap())
+        Ok(crate::slice::array(&self.take(N)?)?)
     }
     fn u64(&mut self) -> Result<u64, String> {
         Ok(u64::from_be_bytes(self.fixed()?))

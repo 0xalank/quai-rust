@@ -2,6 +2,7 @@
 //! Bounded proof, auxiliary and ancestry components do not establish canonical
 //! history, economic state validity or full block consensus.
 pub mod donor;
+pub(crate) mod slice;
 pub mod pow;
 pub mod rules;
 pub mod verifier;

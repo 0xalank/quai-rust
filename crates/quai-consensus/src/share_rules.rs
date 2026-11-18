@@ -345,12 +345,14 @@ pub fn next_kawpow_difficulty(
         Ok(t) => t,
         Err(_) => return Ok(previous),
     };
-    let signature = template.signature_time.unwrap();
-    let timestamp = u32::from_le_bytes(parent.header()[68..72].try_into().unwrap());
+    let signature = template
+        .signature_time
+        .ok_or(Error::Invalid("template signature time"))?;
+    let timestamp = u32::from_le_bytes(crate::slice::array(&parent.header()[68..72])?);
     if signature.wrapping_add(18) < timestamp {
         return Ok(previous);
     }
-    let bits = u32::from_le_bytes(parent.header()[72..76].try_into().unwrap());
+    let bits = u32::from_le_bytes(crate::slice::array(&parent.header()[72..76])?);
     if bits & 0x00800000 != 0 {
         return Err(Error::Unsupported("negative compact target"));
     }

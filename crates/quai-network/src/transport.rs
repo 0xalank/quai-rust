@@ -355,7 +355,7 @@ impl PrivatePeer {
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(120)))
             .build();
         swarm
-            .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .listen_on("/ip4/127.0.0.1/tcp/0".parse().map_err(err)?)
             .map_err(err)?;
         let mut control = swarm.behaviour().streams.new_control();
         let mut incoming = control
@@ -372,21 +372,21 @@ impl PrivatePeer {
             let mut ready = Some(ready);
             loop {
                 tokio::select! {
-                 stream=incoming.next()=>{if let Some((peer,inner))=stream{if permitted.read().unwrap().contains(&peer){if let Ok(permit)=permits.clone().try_acquire_owned(){let _=events.try_send(Event::Stream{peer,stream:WireStream{inner,_permit:permit,failed:false}});}}}else{break;}},
+                 stream=incoming.next()=>{if let Some((peer,inner))=stream{if permitted.read().unwrap_or_else(|e| e.into_inner()).contains(&peer){if let Ok(permit)=permits.clone().try_acquire_owned(){let _=events.try_send(Event::Stream{peer,stream:WireStream{inner,_permit:permit,failed:false}});}}}else{break;}},
                  command=commands.recv()=>{let Some(command)=command else{break;};match command{
-                  Command::Dial(peer,address,reply)=>{let result=if !loopback_address(&address)||!permitted.read().unwrap().contains(&peer){Err(io::Error::new(io::ErrorKind::PermissionDenied,"private peer is not enrolled"))}else{swarm.behaviour_mut().kad.add_address(&peer,address.clone());swarm.dial(libp2p::swarm::dial_opts::DialOpts::peer_id(peer).addresses(vec![address]).build()).map_err(err)};let _=reply.send(result);},
+                  Command::Dial(peer,address,reply)=>{let result=if !loopback_address(&address)||!permitted.read().unwrap_or_else(|e| e.into_inner()).contains(&peer){Err(io::Error::new(io::ErrorKind::PermissionDenied,"private peer is not enrolled"))}else{swarm.behaviour_mut().kad.add_address(&peer,address.clone());swarm.dial(libp2p::swarm::dial_opts::DialOpts::peer_id(peer).addresses(vec![address]).build()).map_err(err)};let _=reply.send(result);},
                   Command::Subscribe(topic,reply)=>{let result=swarm.behaviour_mut().gossip.subscribe(&gossipsub::IdentTopic::new(topic)).map(|_|()).map_err(err);let _=reply.send(result);},
                   Command::Publish(topic,data,reply)=>{let result=swarm.behaviour_mut().gossip.publish(gossipsub::IdentTopic::new(topic),data).map(|_|()).map_err(err);let _=reply.send(result);},
                   Command::Validate(id,peer,accepted)=>{let decision=if accepted{gossipsub::MessageAcceptance::Accept}else{gossipsub::MessageAcceptance::Reject};let _=swarm.behaviour_mut().gossip.report_message_validation_result(&id,&peer,decision);},
                  }},
                  event=swarm.select_next_some()=>{match event{
                   SwarmEvent::NewListenAddr{address,..}=>{if let Some(reply)=ready.take(){let _=reply.send(address);}},
-                  SwarmEvent::ConnectionEstablished{peer_id,endpoint,..}=>{if !permitted.read().unwrap().contains(&peer_id)||!loopback_address(endpoint.get_remote_address()){let _=swarm.disconnect_peer_id(peer_id);}else{let _=events.try_send(Event::Connected(peer_id));}},
+                  SwarmEvent::ConnectionEstablished{peer_id,endpoint,..}=>{if !permitted.read().unwrap_or_else(|e| e.into_inner()).contains(&peer_id)||!loopback_address(endpoint.get_remote_address()){let _=swarm.disconnect_peer_id(peer_id);}else{let _=events.try_send(Event::Connected(peer_id));}},
                   SwarmEvent::ConnectionClosed{peer_id,..}=>{let _=events.try_send(Event::Disconnected(peer_id));},
-                  SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received{peer_id,info,..}))=>{if permitted.read().unwrap().contains(&peer_id){for a in info.listen_addrs{if loopback_address(&a){swarm.behaviour_mut().kad.add_address(&peer_id,a);}}}},
+                  SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received{peer_id,info,..}))=>{if permitted.read().unwrap_or_else(|e| e.into_inner()).contains(&peer_id){for a in info.listen_addrs{if loopback_address(&a){swarm.behaviour_mut().kad.add_address(&peer_id,a);}}}},
                   SwarmEvent::Behaviour(BehaviourEvent::Gossip(gossipsub::Event::Message{propagation_source,message_id,message}))=>{
                    let id=message_id;let peer=propagation_source;
-                   if !permitted.read().unwrap().contains(&peer)||message.data.len()>MAX_FRAME_BYTES{let _=swarm.behaviour_mut().gossip.report_message_validation_result(&id,&peer,gossipsub::MessageAcceptance::Reject);}else if events.try_send(Event::Gossip{peer,id:id.clone(),topic:message.topic,data:message.data}).is_err(){let _=swarm.behaviour_mut().gossip.report_message_validation_result(&id,&peer,gossipsub::MessageAcceptance::Ignore);}
+                   if !permitted.read().unwrap_or_else(|e| e.into_inner()).contains(&peer)||message.data.len()>MAX_FRAME_BYTES{let _=swarm.behaviour_mut().gossip.report_message_validation_result(&id,&peer,gossipsub::MessageAcceptance::Reject);}else if events.try_send(Event::Gossip{peer,id:id.clone(),topic:message.topic,data:message.data}).is_err(){let _=swarm.behaviour_mut().gossip.report_message_validation_result(&id,&peer,gossipsub::MessageAcceptance::Ignore);}
                   },_=>{}
                  }}
                 }
@@ -408,7 +408,7 @@ impl PrivatePeer {
         })
     }
     pub fn enroll(&self, peer: PeerId) -> io::Result<()> {
-        let mut peers = self.allowed.write().unwrap();
+        let mut peers = self.allowed.write().unwrap_or_else(|e| e.into_inner());
         if peers.len() >= 32 && !peers.contains(&peer) {
             return Err(io::Error::other("private peer limit"));
         }
@@ -424,7 +424,7 @@ impl PrivatePeer {
         rx.await.map_err(err)?
     }
     pub async fn open(&self, peer: PeerId) -> io::Result<WireStream> {
-        if !self.allowed.read().unwrap().contains(&peer) {
+        if !self.allowed.read().unwrap_or_else(|e| e.into_inner()).contains(&peer) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "private peer is not enrolled",

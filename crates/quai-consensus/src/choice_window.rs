@@ -47,8 +47,16 @@ pub fn derive(
     let quote = economics::reward_quote_at_difficulty(
         parent.header(),
         exchange,
-        share_rules::uint(body.avg_tx_fees.as_deref().unwrap())?,
-        share_rules::uint(body.miner_difficulty.as_deref().unwrap())?,
+        share_rules::uint(
+            body.avg_tx_fees
+                .as_deref()
+                .ok_or(Error::Invalid("parent average fees"))?,
+        )?,
+        share_rules::uint(
+            body.miner_difficulty
+                .as_deref()
+                .ok_or(Error::Invalid("parent miner difficulty"))?,
+        )?,
     )?;
     let mut choice = Choice {
         quai: 0,
@@ -118,9 +126,9 @@ impl Choice {
     pub(crate) fn decode(raw: &[u8]) -> io::Result<Self> {
         need(raw.len() == 48, "choice row bytes")?;
         Ok(Self {
-            quai: u64::from_be_bytes(raw[..8].try_into().unwrap()),
-            qi: u64::from_be_bytes(raw[8..16].try_into().unwrap()),
-            difficulty: Uint::from_be_bytes(raw[16..].try_into().unwrap()),
+            quai: u64::from_be_bytes(crate::slice::array(&raw[..8])?),
+            qi: u64::from_be_bytes(crate::slice::array(&raw[8..16])?),
+            difficulty: Uint::from_be_bytes(crate::slice::array(&raw[16..])?),
         })
     }
 }
@@ -320,21 +328,21 @@ impl Window {
         )?;
         need(raw.starts_with(MAGIC), "choice window format")?;
         let offset = MAGIC.len();
-        let block = raw[offset..offset + 32].try_into().unwrap();
+        let block = crate::slice::array(&raw[offset..offset + 32])?;
         let mut out = Self::empty_at(
             block,
-            u64::from_be_bytes(raw[offset + 32..offset + 40].try_into().unwrap()),
+            u64::from_be_bytes(crate::slice::array(&raw[offset + 32..offset + 40])?),
         );
-        out.start = u16::from_be_bytes(raw[offset + 40..offset + 42].try_into().unwrap()) as usize;
+        out.start = u16::from_be_bytes(crate::slice::array(&raw[offset + 40..offset + 42])?) as usize;
         need(out.start < N, "choice window cursor")?;
-        let expected = U512::from_be_bytes(raw[offset + 42..offset + 106].try_into().unwrap());
+        let expected = U512::from_be_bytes(crate::slice::array(&raw[offset + 42..offset + 106])?);
         let flag = raw[offset + 106];
         need(
             (flag == 0 && raw.len() == fixed) || (flag == 1 && raw.len() == fixed + 32),
             "choice window parent flag",
         )?;
         out.parent = if flag == 1 {
-            Some(raw[fixed..].try_into().unwrap())
+            Some(crate::slice::array(&raw[fixed..])?)
         } else {
             None
         };

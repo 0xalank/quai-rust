@@ -13,9 +13,9 @@ fn take<'a>(bytes: &'a [u8], cursor: &mut usize, length: usize) -> Result<&'a [u
 fn varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, Error> {
     let c = take(bytes, cursor, 1)?[0];
     Ok(match c {
-        253 => u16::from_le_bytes(take(bytes, cursor, 2)?.try_into().unwrap()) as u64,
-        254 => u32::from_le_bytes(take(bytes, cursor, 4)?.try_into().unwrap()) as u64,
-        255 => u64::from_le_bytes(take(bytes, cursor, 8)?.try_into().unwrap()),
+        253 => u16::from_le_bytes(crate::slice::array(take(bytes, cursor, 2)?)?) as u64,
+        254 => u32::from_le_bytes(crate::slice::array(take(bytes, cursor, 4)?)?) as u64,
+        255 => u64::from_le_bytes(crate::slice::array(take(bytes, cursor, 8)?)?),
         _ => c as u64,
     })
 }
@@ -79,15 +79,15 @@ impl Coinbase {
         if payload.len() != 44 || payload[..4] != [0xfa, 0xbe, 0x6d, 0x6d] {
             return Err(Error::Invalid("coinbase merged-mining commitment"));
         }
-        let commitment = payload[4..36].try_into().unwrap();
-        let merkle_size = u32::from_le_bytes(payload[36..40].try_into().unwrap());
-        let merkle_nonce = u32::from_le_bytes(payload[40..].try_into().unwrap());
+        let commitment = crate::slice::array(&payload[4..36])?;
+        let merkle_size = u32::from_le_bytes(crate::slice::array(&payload[36..40])?);
+        let merkle_nonce = u32::from_le_bytes(crate::slice::array(&payload[40..])?);
         push(&script, &mut cursor)?;
         let time = push(&script, &mut cursor)?;
         if time.len() != 4 {
             return Err(Error::Invalid("coinbase signature time"));
         }
-        let signature_time = u32::from_le_bytes(time.try_into().unwrap());
+        let signature_time = u32::from_le_bytes(crate::slice::array(time)?);
         Ok(Self {
             script,
             outputs,

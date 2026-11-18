@@ -49,10 +49,10 @@ impl Lockup {
         }
         Ok(Self {
             balance: from_bytes(&b[..32]),
-            unlock_height: u32::from_be_bytes(b[32..36].try_into().unwrap()),
-            elements: u16::from_be_bytes(b[36..38].try_into().unwrap()),
+            unlock_height: u32::from_be_bytes(crate::slice::array(&b[32..36])?),
+            elements: u16::from_be_bytes(crate::slice::array(&b[36..38])?),
             delegate: if b.len() == 58 {
-                b[38..].try_into().unwrap()
+                crate::slice::array(&b[38..])?
             } else {
                 [0; 20]
             },

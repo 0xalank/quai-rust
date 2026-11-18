@@ -64,7 +64,9 @@ fn atomic(path: &Path, b: &[u8]) -> io::Result<()> {
         .ok_or_else(|| bad("canonical parent directory"))?;
     let tmp = parent.join(format!(
         ".{}-{}-{}.pending",
-        path.file_name().unwrap().to_string_lossy(),
+        path.file_name()
+            .ok_or_else(|| bad("canonical file name"))?
+            .to_string_lossy(),
         std::process::id(),
         SERIAL.fetch_add(1, Ordering::Relaxed)
     ));
@@ -194,7 +196,7 @@ impl<'a> Reader<'a> {
         Ok(b)
     }
     fn fixed<const N: usize>(&mut self) -> io::Result<[u8; N]> {
-        Ok(self.take(N)?.try_into().unwrap())
+        Ok(crate::slice::array(self.take(N)?)?)
     }
     fn blob(&mut self) -> io::Result<Vec<u8>> {
         let n = u32::from_be_bytes(self.fixed()?) as usize;

@@ -60,7 +60,7 @@ pub(super) fn materialize_slots(
         )?;
         need(
             slots
-                .insert(key.try_into().unwrap(), decode_slot(raw)?)
+                .insert(crate::slice::array(&key)?, decode_slot(raw)?)
                 .is_none(),
             "duplicate storage preimage",
         )?;
@@ -225,7 +225,7 @@ impl AccountReader for Reader {
                 max_entries,
                 max_bytes,
                 &mut |hashed, raw| {
-                    let address: Address = preimage(hashed, raw, 20)?.try_into().unwrap();
+                    let address: Address = crate::slice::array(&preimage(hashed, raw, 20)?)?;
                     let account = self.decode(&snapshot, address, raw)?;
                     bytes = bytes
                         .checked_add(account.code.len() + raw.len())

@@ -33,7 +33,7 @@ fn decode(point: OutPoint, raw: &[u8]) -> Result<Utxo, ReadError> {
         return Err(unavailable("UTXO record key/width"));
     }
     let denomination = raw[34];
-    let address = raw[35..55].try_into().unwrap();
+    let address = crate::slice::array(&raw[35..55])?;
     let len = raw[55] as usize;
     if denomination as usize >= crate::qi::DENOMINATIONS.len() || len > 32 || raw.len() != 56 + len
     {
@@ -120,8 +120,8 @@ impl crate::utxo::Reader for Reader {
             .scan(b"utxos", max_entries, max_bytes, &mut |key, value| {
                 let raw = preimage(key, value, 34)?;
                 let point = OutPoint {
-                    hash: raw[..32].try_into().unwrap(),
-                    index: u16::from_be_bytes(raw[32..].try_into().unwrap()),
+                    hash: crate::slice::array(&raw[..32])?,
+                    index: u16::from_be_bytes(crate::slice::array(&raw[32..])?),
                 };
                 let value = decode(point, value).map_err(bad)?;
                 need(

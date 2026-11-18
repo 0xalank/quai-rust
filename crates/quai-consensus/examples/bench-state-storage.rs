@@ -83,7 +83,7 @@ fn main() {
             &history,
             r,
             [0, 0],
-            quai_consensus::rules::Uint::from_u64(economics::INITIAL_EXCHANGE_RATE),
+            quai_consensus::rules::Uint::from_u128(economics::INITIAL_EXCHANGE_RATE),
             0,
         )
         .unwrap();

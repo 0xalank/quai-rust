@@ -2,8 +2,9 @@
 //! Callers must authenticate history and conversion inputs independently.
 use crate::{rules::Uint, Error};
 use crypto_bigint::{U1024, U512};
+use quai_primitives::spec::FORKS;
 
-pub const KICK_IN: u64 = 262_000;
+/// params.MinerDifficultyWindow (= params.TokenChoiceSetSize).
 pub const WINDOW: u64 = 4_000;
 pub const DISCOUNT_SCALE: u64 = 100_000;
 
@@ -36,7 +37,7 @@ pub fn conversion_flow(previous: Uint, current: Uint) -> Result<Uint, Error> {
 
 /// Input height belongs to the parent, as in HeaderChain.ComputeMinerDifficulty.
 pub fn miner_difficulty(number: u64, difficulty: Uint, previous: Uint) -> Result<Uint, Error> {
-    if number <= KICK_IN {
+    if number <= FORKS.controller_kick_in {
         return Ok(difficulty);
     }
     narrow(
@@ -55,8 +56,10 @@ pub fn k_quai_discount(
     old_exchange: Option<Uint>,
     exchange: Uint,
 ) -> Result<Uint, Error> {
-    if number <= KICK_IN {
-        return Ok(Uint::from_u64(100));
+    if number <= FORKS.controller_kick_in {
+        return Ok(Uint::from_u128(
+            quai_primitives::spec::ECONOMICS.k_quai_discount,
+        ));
     }
     let old = old_exchange.ok_or(Error::Unavailable("controller historical exchange rate"))?;
     if old == Uint::ZERO {
@@ -102,7 +105,7 @@ pub fn calculate_k_quai(
         .wrapping_mul(&U1024::from_u128(logarithm));
     let factor = if signal > d1 {
         let mut increase = signal.wrapping_sub(&d1);
-        if number > 752_000 && number < crate::rules::KAWPOW_FORK {
+        if number > FORKS.k_quai_change && number < FORKS.kawpow {
             increase = increase.wrapping_div(&U1024::from_u64(3));
         }
         denominator.wrapping_add(&increase)
@@ -149,43 +152,40 @@ fn exchange_rate_with_sum(
     miner: Uint,
     sum: impl FnOnce() -> U512,
 ) -> Result<Uint, Error> {
-    let initial = Uint::from_u64(crate::economics::INITIAL_EXCHANGE_RATE);
-    if number >= crate::economics::CONVERSION_LOCK_FORK {
+    // core/exchange_controller.go CalculateBetaFromMiningChoiceAndConversions.
+    let initial = Uint::from_u128(crate::economics::INITIAL_EXCHANGE_RATE);
+    if number >= FORKS.k_quai_freeze() {
         return Ok(parent);
     }
-    if number < KICK_IN + WINDOW {
+    if number < FORKS.controller_kick_in + WINDOW {
         return Ok(initial);
     }
-    if number < crate::rules::KAWPOW_FORK {
-        for (height, percent) in [
-            (752_000, 50),
-            (1_011_200, 75),
-            (1_270_400, 75),
-            (1_529_600, 75),
-        ] {
+    if number < FORKS.kawpow {
+        for (height, percent) in FORKS.k_quai_change_table {
             if number == height {
-                return if number == 752_000 {
+                return if number == FORKS.k_quai_change {
                     Ok(initial)
                 } else {
                     narrow(wide(parent).wrapping_mul(&u(percent)).wrapping_div(&u(100)))
                 };
             }
-            if number > height && number < height + 20_000 {
+            if number > height && number < height + FORKS.k_quai_change_hold {
                 return Ok(parent);
             }
         }
-    } else if number < crate::economics::SHA_EQUIVALENT_FORK {
-        if number == crate::rules::KAWPOW_FORK {
+    } else if number < FORKS.sha_equivalent_difficulty {
+        if number == FORKS.k_quai_reset_after_kawpow() {
             return narrow(wide(initial).wrapping_mul(&u(30)));
         }
-        if number < crate::rules::KAWPOW_FORK + 648_000 {
+        if number < FORKS.k_quai_reset_after_kawpow() + FORKS.exchange_rate_hold_after_kawpow {
             return Ok(parent);
         }
     } else {
-        if number == crate::economics::SHA_EQUIVALENT_FORK {
+        if number == FORKS.sha_equivalent_difficulty {
             return narrow(wide(initial).wrapping_mul(&u(60)));
         }
-        if number < crate::economics::SHA_EQUIVALENT_FORK + 518_400 {
+        if number < FORKS.sha_equivalent_difficulty + FORKS.exchange_rate_hold_after_sha_equivalent
+        {
             return Ok(parent);
         }
     }

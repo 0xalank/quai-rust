@@ -22,7 +22,7 @@ fn polaris_identity_deduplication_uses_prime_activation_height() {
     {
         assert_eq!(
             row["kind"] == "duplicate",
-            row["prime"].as_u64().unwrap() >= quai_consensus::rules::POLARIS_FORK
+            row["prime"].as_u64().unwrap() >= quai_primitives::spec::FORKS.polaris
         );
     }
 }

@@ -5,11 +5,8 @@ use k256::{
 };
 use quai_primitives::Hash;
 use sha2::{Digest, Sha256};
-pub const PINNED_KEYS: [&str; 3] = [
-    "02cae78e4905da54dc93d6009119d56a2ef91b11e129c8fa41342310ec3a9b499c",
-    "03374cbfcea6cb8172b2fdc09e9f7ec0cc2ff10aaa2192fb19fa04d9391b0a75c2",
-    "03abfe95f7d487a44cac59c9d62fe63e9e01dc3e06dc9fe96b7038d73d99a62fa6",
-];
+/// params.MuSig2PublicKeys, from the chain spec.
+pub const PINNED_KEYS: [&str; 3] = quai_primitives::spec::MUSIG2_PUBLIC_KEYS;
 pub const PAIRS: [[usize; 2]; 6] = [[0, 1], [1, 0], [0, 2], [2, 0], [1, 2], [2, 1]];
 fn tagged(tag: &[u8], message: &[u8]) -> Hash {
     let t = Sha256::digest(tag);
@@ -27,6 +24,10 @@ pub struct Quorum {
     verifiers: [k256::schnorr::VerifyingKey; 6],
 }
 impl Quorum {
+    /// The quorum of a chain spec (params.MuSig2PublicKeys for go-quai).
+    pub fn for_spec(spec: &quai_primitives::spec::ChainSpec) -> Result<Self, Error> {
+        Self::from_trusted_keys(spec.quorum_keys)
+    }
     pub fn pinned() -> Self {
         Self::from_trusted_keys(std::array::from_fn(|i| {
             quai_primitives::decode_hex(&format!("0x{}", PINNED_KEYS[i]))

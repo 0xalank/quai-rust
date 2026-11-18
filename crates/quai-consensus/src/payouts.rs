@@ -9,6 +9,7 @@ use crate::{
     Error,
 };
 use crypto_bigint::{Encoding, U1024};
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     transaction::{External, Transaction},
     Hash, Header,
@@ -60,8 +61,8 @@ pub fn average_fees(
         return Ok(Uint::ZERO);
     }
     let previous = body_number(parent, "avg")?;
-    let signal = if current.prime >= economics::CONVERSION_LOCK_FORK {
-        if parent.prime < economics::CONVERSION_LOCK_FORK {
+    let signal = if current.prime >= FORKS.conversion_lock_change {
+        if parent.prime < FORKS.conversion_lock_change {
             return Ok(previous);
         }
         let cap = wide(quote.quai).wrapping_mul(&U1024::from_u64(4));
@@ -98,7 +99,7 @@ pub struct Distribution {
     pub fully_validated: bool,
 }
 fn reward_pool(target: &Record, quote: &RewardQuote) -> Result<Uint, Error> {
-    if target.prime >= economics::CONVERSION_LOCK_FORK {
+    if target.prime >= FORKS.conversion_lock_change {
         Ok(quote.conversion_quai)
     } else {
         narrow(
@@ -172,7 +173,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                 continue;
             }
             let mut entropy = Uint::ZERO;
-            if block.prime < rules::KAWPOW_FORK {
+            if block.prime < FORKS.kawpow {
                 let pow = hash(&header)?;
                 let difficulty = share_rules::uint(h.difficulty.as_deref().unwrap())?;
                 if difficulty == Uint::ZERO {
@@ -213,13 +214,13 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
             .unwrap();
         let qi = to[1] & 128 != 0;
         let mut reward;
-        if block.prime < rules::KAWPOW_FORK {
+        if block.prime < FORKS.kawpow {
             reward = narrow(wide(pool).wrapping_mul(&wide(entropy)).wrapping_div(&total))?;
             if reward > pool {
                 return Err(Error::Invalid("share exceeds reward pool"));
             }
         } else {
-            reward = if qi && target.prime >= economics::CONVERSION_LOCK_FORK {
+            reward = if qi && target.prime >= FORKS.conversion_lock_change {
                 base_qi
             } else {
                 base_quai
@@ -249,7 +250,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                         .map(|v| v.signature_time);
                 let signature = signature_result.clone().unwrap_or(0);
                 let timestamp = u32::from_le_bytes(aux.header()[68..72].try_into().unwrap());
-                reward = if block.prime < 1_330_000 {
+                reward = if block.prime < FORKS.inclusion_depth_change {
                     if signature_result.is_err() || signature.wrapping_add(18) < timestamp {
                         narrow(
                             wide(reward)
@@ -277,7 +278,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
         if qi {
             origin[1] |= 128;
             origin[3] |= 128;
-            if target.prime < economics::CONVERSION_LOCK_FORK {
+            if target.prime < FORKS.conversion_lock_change {
                 if quote.conversion_quai == Uint::ZERO {
                     return Err(Error::Invalid("zero conversion quote"));
                 }

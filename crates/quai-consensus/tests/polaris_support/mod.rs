@@ -110,6 +110,6 @@ pub fn check(v: &Value) -> Value {
             kind == expected,
         );
     }
-    let r = json!({"passed":failures.is_empty(),"checks":checks,"failures":failures,"bindings":v["bindings"].as_array().unwrap().len(),"identities":v["identities"].as_array().unwrap().len(),"reference_revision":quai_primitives::REFERENCE_REVISION,"polaris_prime_block":quai_consensus::rules::POLARIS_FORK,"full_consensus":false});
+    let r = json!({"passed":failures.is_empty(),"checks":checks,"failures":failures,"bindings":v["bindings"].as_array().unwrap().len(),"identities":v["identities"].as_array().unwrap().len(),"reference_revision":quai_primitives::REFERENCE_REVISION,"polaris_prime_block":quai_primitives::spec::FORKS.polaris,"full_consensus":false});
     r
 }

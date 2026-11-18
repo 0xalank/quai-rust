@@ -8,12 +8,14 @@ use crate::{
     rules::Uint,
     share_rules, Error,
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     transaction::{Kind, Transaction},
     Hash,
 };
 use quai_store::state_db::Workspace;
-const BLOCKS_PER_YEAR: u64 = 365 * 17_280;
+/// params.BlocksPerYear.
+const BLOCKS_PER_YEAR: u64 = quai_primitives::spec::BLOCKS_PER_YEAR;
 pub struct Prepared {
     block: Hash,
     window: Window,
@@ -62,7 +64,7 @@ pub fn prepare_component(
     block.verify_binding()?;
     parent.verify_binding()?;
     let number = block.number(0)?;
-    if number <= controllers::KICK_IN {
+    if number <= FORKS.controller_kick_in {
         return Err(Error::Unsupported("prime forward before controller"));
     }
     if block.parent(0)? != parent.id()
@@ -73,9 +75,6 @@ pub fn prepare_component(
         return Err(Error::Invalid("prime forward parent/window binding"));
     }
     let input = inbound.ok_or(Error::Unavailable("prime forward inbound history"))?;
-    if input.len() > 8192 {
-        return Err(Error::ResourceLimit("prime conversion ETXs"));
-    }
     for tx in input {
         match tx.kind() {
             Kind::External(e) if e.etx_type == 2 && share_rules::uint(&e.value)? == Uint::ZERO => {

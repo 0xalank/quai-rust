@@ -21,9 +21,13 @@ pub struct PrivateChain {
     pub(crate) header_admission: bool,
     pub(crate) hierarchy_admission: bool,
     pub fingerprint: Hash,
+    /// The profile name ("quai-rust-hierarchy-v1", ...).
+    pub name: String,
     pub chain_id: u64,
     pub location: [u8; 2],
     pub genesis: [Record; 3],
+    /// The genesis fields the records were built from.
+    pub genesis_fields: quai_primitives::spec::Genesis,
     pub gas_limit: u64,
     pub state_limit: u64,
     pub listen: String,
@@ -102,6 +106,20 @@ impl PrivateChain {
     pub fn reviewed_hierarchy() -> Result<Self, Error> {
         Self::decode(HIERARCHY_BYTES)
     }
+    /// This profile as a chain spec: chain 1337, the Go oracle harness header
+    /// policy (reference/*/harness.go PowConfig: DurationLimit 5, MinDifficulty 2,
+    /// GasCeil = the profile block gas limit), no allocations and the go-quai
+    /// fork schedule (`fork_manifest` must equal it).
+    pub fn spec(&self) -> quai_primitives::spec::ChainSpec {
+        let mut spec = quai_primitives::spec::ChainSpec::private(
+            &self.name,
+            self.genesis_fields.clone(),
+            self.gas_limit,
+        );
+        spec.chain_id = self.chain_id;
+        spec.location = self.location;
+        spec
+    }
     pub fn decode(input: &[u8]) -> Result<Self, Error> {
         if input.len() > 65536 {
             return Err(Error::ResourceLimit("private profile"));
@@ -134,16 +152,16 @@ impl PrivateChain {
         {
             return Err(Error::Invalid("private network contract"));
         }
-        if number(&v["fork_manifest"], "polaris_prime")? != crate::rules::POLARIS_FORK
-            || number(&v["fork_manifest"], "kawpow_prime")? != crate::rules::KAWPOW_FORK
-            || number(&v["fork_manifest"], "new_opcodes_zone")?
-                != quai_execution::evm::NEW_OPS_HEIGHT
+        let forks = quai_primitives::spec::FORKS;
+        if number(&v["fork_manifest"], "polaris_prime")? != forks.polaris
+            || number(&v["fork_manifest"], "kawpow_prime")? != forks.kawpow
+            || number(&v["fork_manifest"], "new_opcodes_zone")? != forks.max_code_size
+            || number(&v["fork_manifest"], "max_grind_increase_zone")? != forks.max_grind_increase
+            || number(&v["fork_manifest"], "transition_duration_prime")? != forks.kawpow_transition
         {
             return Err(Error::Invalid("private fork manifest"));
         }
-        if number(&v["fork_manifest"], "progpow_grace_end_prime")?
-            != crate::rules::KAWPOW_FORK + crate::rules::TRANSITION
-        {
+        if number(&v["fork_manifest"], "progpow_grace_end_prime")? != forks.progpow_grace_end() {
             return Err(Error::Invalid("private transition window"));
         }
         if !v["initial_allocations"]
@@ -156,6 +174,7 @@ impl PrivateChain {
         }
         let g = &v["genesis"];
         let mut genesis = vec![];
+        let mut genesis_fields = None;
         for context in 0..3 {
             let spec = GenesisSpec {
                 context,
@@ -174,6 +193,19 @@ impl PrivateChain {
                 starting_expansion: number(g, "starting_expansion")?,
             };
             let block = build_genesis(&spec)?;
+            genesis_fields = Some(quai_primitives::spec::Genesis {
+                hash: block.id(),
+                nonce: spec.nonce,
+                extra: spec.extra.clone(),
+                timestamp: spec.timestamp,
+                gas_limit: spec.gas_limit,
+                difficulty: text(g, "difficulty")?
+                    .parse()
+                    .map_err(|_| Error::Invalid("private genesis difficulty"))?,
+                allocation_hash: spec.allocation_hash,
+                starting_expansion: u8::try_from(spec.starting_expansion)
+                    .map_err(|_| Error::Invalid("private starting expansion"))?,
+            });
             let expected = &g["contexts"][context];
             if raw(expected, "hash")?.as_slice() != block.id().as_slice()
                 || raw(expected, "body_hash")?.as_slice()
@@ -196,11 +228,13 @@ impl PrivateChain {
             header_admission,
             hierarchy_admission,
             fingerprint,
+            name: text(&v, "name")?.into(),
             chain_id: 1337,
             location: [0, 0],
             genesis: genesis
                 .try_into()
                 .map_err(|_| Error::Invalid("private contexts"))?,
+            genesis_fields: genesis_fields.ok_or(Error::Invalid("private contexts"))?,
             gas_limit: number(&v["protocol_limits"], "block_gas_limit")?,
             state_limit: number(&v["protocol_limits"], "state_limit")?,
             listen: text(&v["transport"], "listen")?.into(),

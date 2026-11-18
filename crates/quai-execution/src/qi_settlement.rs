@@ -7,6 +7,7 @@ use crate::{
     utxo::UtxoState,
 };
 use crypto_bigint::U512;
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     receipt::Receipt,
     transaction::{External, Kind, Transaction},
@@ -149,7 +150,8 @@ pub fn apply_qi(
     let mut used = intrinsic;
     let prefix = ctx.inputs.location[0] << 4 | ctx.inputs.location[1];
     for (index, output) in qi.outputs.iter().enumerate() {
-        if output.address.as_ref().is_some_and(|a| a.len() > 20) && ctx.prime_number < 2_444_574 {
+        if output.address.as_ref().is_some_and(|a| a.len() > 20) && ctx.prime_number < FORKS.polaris
+        {
             return Err(Error::Unsupported(crate::evm::CapabilityError::Context(
                 "legacy long Qi output address",
             )));
@@ -189,7 +191,7 @@ pub fn apply_qi(
             aggregate += value;
             *output_counts.get_mut(&output.denomination).unwrap() -= 1;
             addresses.remove(&a);
-            if ctx.prime_number >= 1_570_000 {
+            if ctx.prime_number >= FORKS.qi_wrapping_change {
                 continue;
             }
         } else if a[1] & 128 == 0 {
@@ -253,10 +255,7 @@ pub fn apply_qi(
     if fee_quai < minimum(ctx, required)? {
         return Err(Error::Invalid("Qi minimum fee"));
     }
-    if conversion
-        && ((1_171_500..1_191_500).contains(&ctx.prime_number)
-            || (1_755_000..1_775_000).contains(&ctx.prime_number))
-    {
+    if conversion && FORKS.conversion_hold(ctx.prime_number) {
         return Err(Error::Invalid("Qi conversion hold"));
     }
     if conversion || wrapping {

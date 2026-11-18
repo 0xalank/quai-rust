@@ -1,13 +1,11 @@
 //! Exact bounded consensus rule arithmetic. These projections are not block validity.
 use crate::Error;
 use crypto_bigint::{Encoding, U256, U512};
-use quai_primitives::Hash;
+use quai_primitives::{
+    spec::{self, FORKS},
+    Hash,
+};
 pub type Uint = U256;
-pub const KAWPOW_FORK: u64 = 1_171_500;
-pub const POLARIS_FORK: u64 = 2_444_574;
-pub const TRANSITION: u64 = 129_600;
-pub const BLOCKS_PER_MONTH: u64 = 518_400;
-pub const START_TX: u64 = 259_200;
 fn wide(n: Uint) -> U512 {
     n.resize()
 }
@@ -40,9 +38,9 @@ pub fn intrinsic(hash: Hash) -> Result<Uint, Error> {
     }
     Ok(log(d.resize()))
 }
+/// params.PrimeEntropyTarget and RegionEntropyTarget.
 pub fn entropy_targets(expansion: u8) -> (u64, u64) {
-    let regions = expansion as u64 / 2 + 1;
-    let zones = (expansion as u64 + 1) / 2 + 1;
+    let (regions, zones) = spec::hierarchy_size(expansion);
     (
         regions.max(2) * zones.max(2) * regions * zones,
         zones.max(2) * zones,
@@ -50,14 +48,14 @@ pub fn entropy_targets(expansion: u8) -> (u64, u64) {
 }
 /// Mirrors block versus workshare PoW-ID rules, including the inclusive transition end.
 pub fn pow_id_valid(prime: u64, aux_id: Option<u8>, workshare: bool) -> bool {
-    if prime < KAWPOW_FORK {
+    if prime < FORKS.kawpow {
         return aux_id.is_none();
     }
     if !workshare {
         return (aux_id.is_none() || aux_id == Some(1))
-            && (prime <= KAWPOW_FORK + TRANSITION || aux_id.is_some());
+            && (prime <= FORKS.progpow_grace_end() || aux_id.is_some());
     }
-    if prime <= KAWPOW_FORK + TRANSITION {
+    if prime <= FORKS.progpow_grace_end() {
         return aux_id.is_none_or(|id| id <= 4);
     }
     aux_id.is_some_and(|id| id > 0 && id <= 4)
@@ -73,12 +71,15 @@ pub fn adjust_difficulty(
     if parent == Uint::ZERO || min == Uint::ZERO || duration == 0 {
         return Err(Error::Invalid("positive difficulty/configuration required"));
     }
-    let delta = (parent_time as i128 - grandparent_time as i128).min(100);
+    let delta = (parent_time as i128 - grandparent_time as i128)
+        .min(spec::MAX_TIME_DIFF_BETWEEN_BLOCKS as i128);
     let change = duration as i128 - delta;
     let value = wide(parent)
         .wrapping_mul(&U512::from_u128(change.unsigned_abs()))
         .wrapping_mul(&U512::from_u64(parent.bits_vartime() as u64 - 1));
-    let denominator = U512::from_u64(duration).wrapping_mul(&U512::from_u64(40 * 720));
+    let denominator = U512::from_u64(duration).wrapping_mul(&U512::from_u64(
+        spec::DIFFICULTY_ADJUSTMENT_FACTOR * spec::DIFFICULTY_ADJUSTMENT_PERIOD,
+    ));
     let quotient = value.wrapping_div(&denominator);
     let next = if change >= 0 {
         wide(parent).wrapping_add(&quotient)
@@ -228,14 +229,15 @@ pub fn entropy(input: &EntropyInput) -> Result<Entropy, Error> {
 fn intrinsic_of_target(target: U512) -> Result<Uint, Error> {
     intrinsic(narrow(target)?.to_be_bytes())
 }
-/// Pinned gas and state ceiling schedule; u64 multiplication intentionally wraps as Go does.
+/// Gas and state ceiling schedule (core/block_validator.go CalcGasLimit,
+/// consensus/misc/statefee.go CalcStateLimit); u64 multiplication wraps as Go does.
 pub fn next_limit(parent_number: u64, parent_limit: u64, ceiling: u64) -> u64 {
-    if parent_number < START_TX {
+    if parent_number < FORKS.start_tx {
         0
     } else if parent_limit == 0 {
-        12_000_000
-    } else if parent_number < 2 * BLOCKS_PER_MONTH {
-        (parent_number.wrapping_mul(ceiling) / (2 * BLOCKS_PER_MONTH)).max(12_000_000)
+        spec::MIN_GAS_LIMIT
+    } else if parent_number < FORKS.lockup_start {
+        (parent_number.wrapping_mul(ceiling) / FORKS.lockup_start).max(spec::MIN_GAS_LIMIT)
     } else {
         ceiling
     }

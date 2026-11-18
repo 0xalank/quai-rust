@@ -18,18 +18,18 @@ use crate::checkpoint::{self, Checkpoint};
 use crate::log::Log;
 use crate::pow::{Done, Job, Pool};
 use crate::qex::{self, Context, ExportError, ExportReader, Height, Manifest};
-use crate::spec::ChainSpec;
+use crate::spec::Chain;
 use crate::state::{self, StateReplay};
 use crate::store::{self, PastDb, StateStore};
 use crate::window::Window;
 use crypto_bigint::Encoding as _;
 use quai_consensus::{
-    confirmation::cross_prime,
+    confirmation::{self, cross_prime},
     economics,
     history::{History, Record},
     placement::{self, CandidateIndex, Snapshot},
     pow::SharedCaches,
-    prefork_shares, rules, share_rules, validation,
+    rules, share_rules, validation,
     verifier::Verifier,
     zone_header, Error,
 };
@@ -261,7 +261,7 @@ struct Slot {
 }
 
 struct Checker {
-    spec: ChainSpec,
+    chain: Arc<Chain>,
     profiles: [placement::Profile; 3],
     zone_profile: validation::Profile,
     verifier: Verifier,
@@ -309,22 +309,14 @@ fn h32(v: &[u8]) -> Hash {
 
 impl Checker {
     fn new(
-        spec: ChainSpec,
+        chain: Arc<Chain>,
         caches: Arc<SharedCaches>,
         receipts: bool,
         state: Option<StateReplay>,
     ) -> Self {
         let window = Window::new();
-        let profiles = std::array::from_fn(|c| spec.profile(c));
-        let zone_profile = validation::Profile {
-            location: spec.location.to_vec(),
-            minimum_difficulty: spec.minimum_difficulty,
-            duration: spec.duration,
-            gas_ceiling: spec.gas_ceiling,
-            p2p_threshold: spec.p2p_threshold,
-            genesis: [spec.genesis_hash()].into(),
-            default_genesis: spec.default_genesis,
-        };
+        let profiles = std::array::from_fn(|c| chain.placement_profile(c));
+        let zone_profile = chain.zone_profile();
         Self {
             histories: std::array::from_fn(|c| History::with_reader(window.history_reader(c))),
             indexes: std::array::from_fn(|c| CandidateIndex::with_reader(window.index_reader(c))),
@@ -341,7 +333,7 @@ impl Checker {
                 .unwrap_or(0),
             receipts,
             state,
-            spec,
+            chain,
         }
     }
     fn remember_order(&mut self, id: Hash, order: u8) {
@@ -353,7 +345,7 @@ impl Checker {
         }
     }
     fn genesis(&mut self, slot: Slot) -> Result<(), Fail> {
-        let expected = self.spec.genesis_hash();
+        let expected = self.chain.genesis_hash();
         let mut zone = None;
         for c in CONTEXTS {
             let raw = slot.height.records[c.index()].as_ref().unwrap();
@@ -384,7 +376,7 @@ impl Checker {
         drop(zone);
         self.install_genesis();
         self.window
-            .pin_prime_view(Arc::new(self.spec.genesis.clone()));
+            .pin_prime_view(Arc::new(self.chain.genesis().clone()));
         for c in 0..3 {
             self.heads[c] = Some((expected, 0));
         }
@@ -393,7 +385,7 @@ impl Checker {
     }
     /// The trusted genesis in every context, as the chain spec builds it.
     fn install_genesis(&mut self) {
-        let zone = Arc::new(self.spec.genesis.clone());
+        let zone = Arc::new(self.chain.genesis().clone());
         let snapshots: [Arc<Snapshot>; 3] = std::array::from_fn(|c| {
             Arc::new(
                 placement::bootstrap_candidate(&zone, &self.profiles[c])
@@ -425,8 +417,8 @@ impl Checker {
                 .collect()
         });
         Ok(Checkpoint {
-            environment: self.spec.environment.to_string(),
-            genesis: self.spec.genesis_hash(),
+            environment: self.chain.spec().environment.clone(),
+            genesis: self.chain.genesis_hash(),
             height,
             block,
             counters,
@@ -471,7 +463,7 @@ impl Checker {
                 .map_err(|e| format!("checkpoint prime view: {}", describe(&e)))?;
             self.window.pin_prime_view(Arc::new(record));
         }
-        let genesis = self.spec.genesis_hash();
+        let genesis = self.chain.genesis_hash();
         for (c, head) in cp.heads.iter().enumerate() {
             let (hash, number) = head.ok_or("checkpoint without a head")?;
             let tail = match cp.windows[c].last() {
@@ -664,7 +656,7 @@ impl Checker {
                     rules::next_limit(
                         parent.number(2).unwrap_or(0),
                         pb.state_limit.unwrap_or(0),
-                        50_000_000
+                        quai_primitives::spec::STATE_CEIL
                     )
                 ),
                 format!(
@@ -772,7 +764,7 @@ impl Checker {
                 records,
                 order,
                 accumulated,
-                self.spec.location,
+                self.chain.location(),
             )
             .map_err(|e| fail(z, "state: confirmation", "confirmed ETXs", describe(&e)))?;
         let inbound = st
@@ -803,7 +795,7 @@ impl Checker {
             Err(e) => e,
         };
         // Execute again without the commitment comparison to report values.
-        let location = self.spec.location;
+        let location = self.chain.location();
         let verifier = &mut self.verifier;
         let computed = state::diagnose(
             &st.state,
@@ -981,36 +973,45 @@ impl Checker {
                 }
             }
         }
-        // 7a. pre-KAWPOW uncled entropy
+        // 7a. uncled entropy (pre-KawPow share entropy, UncledLogEntropy after)
         let zb = zone.object().header().wire();
-        if zone.prime() < rules::KAWPOW_FORK {
-            let shares =
-                prefork_shares::native_components(&mut self.verifier, &self.histories[2], &zone)
-                    .map_err(|e| {
-                        fail(
-                            Context::Zone,
-                            "uncled entropy",
-                            "native share entropy",
-                            describe(&e),
-                        )
-                    })?;
-            let actual = share_rules::uint(zb.uncled_entropy.as_deref().unwrap_or_default())
+        let expected =
+            confirmation::expected_uncled_entropy(&mut self.verifier, &self.histories[2], &zone)
                 .map_err(|e| {
                     fail(
                         Context::Zone,
                         "uncled entropy",
-                        "a 256-bit value",
+                        "native share entropy",
                         describe(&e),
                     )
                 })?;
-            if actual != shares.uncled {
-                return Err(fail(
+        let actual =
+            share_rules::uint(zb.uncled_entropy.as_deref().unwrap_or_default()).map_err(|e| {
+                fail(
                     Context::Zone,
                     "uncled entropy",
-                    uint(shares.uncled),
-                    uint(actual),
-                ));
-            }
+                    "a 256-bit value",
+                    describe(&e),
+                )
+            })?;
+        if actual != expected {
+            return Err(fail(
+                Context::Zone,
+                "uncled entropy",
+                uint(expected),
+                uint(actual),
+            ));
+        }
+        // 7a'. prime controller starting values (core/slice.go Append)
+        if order == 0 {
+            confirmation::check_prime_economics(&self.chain, &zone).map_err(|e| {
+                fail(
+                    Context::Prime,
+                    "prime economics",
+                    "the starting controller values",
+                    describe(&e),
+                )
+            })?;
         }
         // 7b. ETX rollup root over the zone parent's manifest
         let parent = self.indexes[2]
@@ -1032,7 +1033,7 @@ impl Checker {
             })?;
             accumulated.extend_from_slice(block.object().outbound_etxs());
         }
-        let cross = cross_prime(&accumulated, self.spec.location[0]).map_err(|e| {
+        let cross = cross_prime(&accumulated, self.chain.location()[0]).map_err(|e| {
             fail(
                 Context::Zone,
                 "ETX rollup",
@@ -1043,7 +1044,8 @@ impl Checker {
         let root = work::transactions_root(&cross)
             .map_err(|e| fail(Context::Zone, "ETX rollup", "rollup root", e))?;
         let committed = &zb.etx_rollup_hash.as_ref().unwrap().value;
-        if root.as_slice() != committed.as_slice() {
+        // Go checks EtxRollupHash in the region Append: region-coincident blocks.
+        if order <= 1 && root.as_slice() != committed.as_slice() {
             return Err(fail(
                 Context::Zone,
                 "ETX rollup root",
@@ -1256,8 +1258,8 @@ fn io_err(what: &str) -> impl Fn(std::io::Error) -> String + '_ {
     move |e| format!("{what}: {e}")
 }
 /// Checkpoint directory for this chain and mode.
-pub fn checkpoint_dir(datadir: &std::path::Path, spec: &ChainSpec, state: bool) -> PathBuf {
-    store::chain_dir(datadir, spec.environment, &spec.genesis_hash()).join(if state {
+pub fn checkpoint_dir(datadir: &std::path::Path, chain: &Chain, state: bool) -> PathBuf {
+    store::chain_dir(datadir, &chain.spec().environment, &chain.genesis_hash()).join(if state {
         "state"
     } else {
         "headers"
@@ -1270,7 +1272,7 @@ struct Resumed {
 }
 fn load_checkpoint(
     dir: &std::path::Path,
-    spec: &ChainSpec,
+    chain: &Chain,
     state: bool,
 ) -> Result<Option<Resumed>, String> {
     let list = checkpoint::list(dir).map_err(io_err("checkpoint directory"))?;
@@ -1279,8 +1281,8 @@ fn load_checkpoint(
     };
     let cp = checkpoint::read(path).map_err(|e| format!("checkpoint {height} rejected: {e}"))?;
     if cp.height != *height
-        || cp.environment != spec.environment
-        || cp.genesis != spec.genesis_hash()
+        || cp.environment != chain.spec().environment
+        || cp.genesis != chain.genesis_hash()
     {
         return Err(format!(
             "checkpoint {height} rejected: it is for {} {} at height {}",
@@ -1295,13 +1297,7 @@ fn load_checkpoint(
     let state = match &cp.state {
         None => None,
         Some(section) => {
-            let profile = state::profile_for(
-                spec.environment,
-                spec.chain_id,
-                spec.location,
-                spec.genesis_hash(),
-            )
-            .map_err(|e| describe(&e))?;
+            let profile = state::profile_for(chain).map_err(|e| describe(&e))?;
             let commitment = quai_execution::state_store::Commitment {
                 roots: quai_execution::state_image::Roots {
                     evm: section.evm,
@@ -1314,7 +1310,7 @@ fn load_checkpoint(
             };
             let store = StateStore::open(
                 dir,
-                store::profile(spec.environment, &spec.genesis_hash()),
+                store::profile(&chain.spec().environment, &chain.genesis_hash()),
                 *height,
                 section.version,
                 commitment,
@@ -1325,7 +1321,7 @@ fn load_checkpoint(
             Some(
                 StateReplay::resume(
                     profile,
-                    spec.genesis_hash(),
+                    chain.genesis_hash(),
                     store,
                     past,
                     section,
@@ -1429,7 +1425,7 @@ pub fn run_with(
 ) -> Result<Summary, String> {
     let started = Instant::now();
     let manifest = Manifest::load(&opts.export).map_err(|e| e.to_string())?;
-    let spec = ChainSpec::for_environment(&manifest.environment).map_err(|e| {
+    let spec = Chain::for_environment(&manifest.environment).map_err(|e| {
         format!(
             "chain spec for environment {:?}: {}",
             manifest.environment,
@@ -1440,7 +1436,7 @@ pub fn run_with(
         return Err(format!(
             "manifest genesis_hash {} is not the {} genesis {}",
             hex(&manifest.genesis_hash),
-            spec.environment,
+            spec.spec().environment,
             hex(&spec.genesis_hash())
         ));
     }
@@ -1488,8 +1484,8 @@ pub fn run_with(
     log.info(&format!(
         "replay {}: environment {} (chain {}), genesis {}, {} segments, zone heights {start}..={}{}, {} proof-of-work threads{}",
         opts.export.display(),
-        spec.environment,
-        spec.chain_id,
+        spec.spec().environment,
+        spec.spec().chain_id,
         hex(&spec.genesis_hash()),
         manifest.segments.len(),
         manifest.last_zone,
@@ -1515,7 +1511,7 @@ pub fn run_with(
         Some(c) => c,
         None => Arc::new(SharedCaches::new(4).map_err(|e| describe(&e))?),
     };
-    let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location.to_vec());
+    let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location().to_vec());
     let genesis = spec.genesis_hash();
     let mut summary = Summary {
         environment,
@@ -1559,9 +1555,8 @@ pub fn run_with(
         None => {
             let state = if opts.state {
                 let dir = dir.as_ref().unwrap();
-                let profile =
-                    state::profile_for(spec.environment, spec.chain_id, spec.location, genesis)
-                        .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
+                let profile = state::profile_for(&spec)
+                    .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
                 let past_path = dir.join("past.redb");
                 if past_path.exists() {
                     std::fs::remove_file(&past_path).map_err(io_err("past.redb"))?;
@@ -1569,7 +1564,7 @@ pub fn run_with(
                 let past = PastDb::open(&past_path).map_err(io_err("past.redb"))?;
                 let store = StateStore::create_genesis(
                     dir,
-                    store::profile(spec.environment, &genesis),
+                    store::profile(&spec.spec().environment, &genesis),
                     genesis,
                 )
                 .map_err(io_err("state database"))?;

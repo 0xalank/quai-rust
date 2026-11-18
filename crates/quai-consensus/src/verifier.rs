@@ -49,10 +49,8 @@ pub struct WorkMemoStats {
     pub entry_limit: usize,
     pub logical_byte_limit: usize,
 }
-pub const PINNED_SCHEDULE: Schedule = Schedule {
-    kawpow_fork: rules::KAWPOW_FORK,
-    transition_period: rules::TRANSITION,
-};
+/// The header codec schedule of the go-quai fork schedule.
+pub const PINNED_SCHEDULE: Schedule = quai_primitives::spec::FORKS.header_schedule();
 /// Successful inclusion work computed by a local native verifier. Like
 /// `HeaderProofMemo`, only a verifier can fill it and it never carries strong
 /// block proofs, failures or values decoded from a peer.

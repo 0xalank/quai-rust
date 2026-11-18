@@ -2,6 +2,7 @@
 //! it cannot admit a checkpoint or confer canonical consensus authority.
 use crate::{controllers, economics, history::Record, rules::Uint, share_rules, Error};
 use crypto_bigint::{Encoding, U512};
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     transaction::{Kind, Transaction},
     Hash,
@@ -216,7 +217,7 @@ impl Window {
         if parent != self.block || self.number.checked_add(1) != Some(number) {
             return Err(Error::Invalid("token choice parent/height"));
         }
-        let mut next = if number <= controllers::KICK_IN + 1 {
+        let mut next = if number <= FORKS.controller_kick_in + 1 {
             Self::empty_at(block, number)
         } else {
             self.clone()
@@ -227,13 +228,13 @@ impl Window {
         next.persisted_root = None;
         next.persisted_row_writes = None;
         next.copied_rows = 0;
-        if number < controllers::KICK_IN {
+        if number < FORKS.controller_kick_in {
             return Ok(next);
         }
-        let slot = if number <= controllers::KICK_IN + 1 {
+        let slot = if number <= FORKS.controller_kick_in + 1 {
             0
-        } else if number <= controllers::KICK_IN + controllers::WINDOW {
-            (number - controllers::KICK_IN - 1) as usize
+        } else if number <= FORKS.controller_kick_in + controllers::WINDOW {
+            (number - FORKS.controller_kick_in - 1) as usize
         } else {
             let old = next.start;
             next.start = (next.start + 1) % N;

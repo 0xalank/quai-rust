@@ -8,6 +8,7 @@ use crate::{
     Error,
 };
 use crypto_bigint::Encoding;
+use quai_primitives::spec::FORKS;
 use quai_primitives::Hash;
 use sha2::{Digest, Sha256};
 #[derive(Clone, Debug)]
@@ -80,7 +81,7 @@ pub fn project_entropy(record: &Record, hash: Hash, context: usize) -> Result<En
         return Err(Error::Unsupported("zero-number score projection"));
     }
     let uncles = record.uncles()?;
-    if context == 2 && record.prime() < rules::KAWPOW_FORK && !uncles.is_empty() {
+    if context == 2 && record.prime() < FORKS.kawpow && !uncles.is_empty() {
         return Err(Error::Unsupported("pre-fork nonempty workshare score"));
     }
     base_entropy(record, hash, context)
@@ -103,7 +104,7 @@ fn base_entropy(record: &Record, hash: Hash, context: usize) -> Result<Entropy, 
         parent_delta: arr(&b.parent_delta_entropy)?,
         parent_uncled_delta: arr(&b.parent_uncled_delta_entropy)?,
         uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap())?,
-        postfork_share_count: if context == 2 && record.prime() >= rules::KAWPOW_FORK {
+        postfork_share_count: if context == 2 && record.prime() >= FORKS.kawpow {
             Some(uncles.len() as u32)
         } else {
             None
@@ -125,7 +126,7 @@ pub fn native_entropy_components(
     record.verify_binding()?;
     let proof = v.verify_header_proof(record.header())?;
     let mut metrics = base_entropy(record, proof.hash(), context)?;
-    if context == 2 && record.prime() < rules::KAWPOW_FORK {
+    if context == 2 && record.prime() < FORKS.kawpow {
         let shares = crate::prefork_shares::native_components(v, history, record)?;
         rules::add_pre_fork_work(&mut metrics, shares.workshares)?;
     }

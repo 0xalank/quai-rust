@@ -4,22 +4,22 @@
 //! state, ETX set, UTXO set, receipts, outbound ETXs, gas and state counters.
 //!
 //! The inbound ETXs of a block are the ETXs its parent confirmed. The
-//! confirmation follows `confirmation::Hierarchy::prepare_scoped` (which is
-//! bound to the private chain profile): a prime block confirms the region
-//! rollups in its manifest, a region block the zone outbound ETXs since the
-//! last region block.
+//! confirmation is the shared `quai_consensus::confirmation::confirm` (go-quai
+//! core/slice.go CollectNewlyConfirmedEtxs) over the chain spec's location;
+//! this module only supplies what it reads: the orders of recent blocks and
+//! the region rollups and confirmations recorded here.
 //!
 //! The state is the lazy World, UTXO, ETX and lockup state of
 //! `state_store::restore_sparse` over the replay's state database
 //! (`store::StateStore`). Changes stay in an overlay until the next commit,
 //! every `commit_every` heights, which writes them as a new version and
-//! restarts the overlay from it. The ETX and lockup overlays refuse more than
-//! 65,536 changes, so commits come long before that (about 18 ETX changes per
-//! early mainnet block). The redemption and trim history is `store::PastDb`.
+//! restarts the overlay from it. The redemption and trim history is
+//! `store::PastDb`.
 use crate::checkpoint::StateSection;
 use crate::store::{self, PastDb, StateStore};
 use quai_consensus::{
-    confirmation::filter_to_sub,
+    chain::Chain,
+    confirmation::{self, Known},
     history::{History, Record},
     zone_execution::{self, Profile, State},
     Error,
@@ -33,8 +33,6 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::Arc;
 
-/// Rust limit of the private composition, kept as is.
-const MAX_ETXS: usize = 8192;
 /// Confirmation and rollup lists kept for recent blocks.
 const KEEP: usize = 4096;
 
@@ -52,12 +50,25 @@ pub struct StateReplay {
     /// Zone height of the last committed version.
     pub committed_height: u64,
 }
-fn extend(out: &mut Vec<Transaction>, part: &[Transaction]) -> Result<(), Error> {
-    if out.len() + part.len() > MAX_ETXS {
-        return Err(Error::ResourceLimit("confirmed rollup transaction count"));
+/// The orders of recent blocks and this replay's recorded rollups and
+/// confirmations, as the shared confirmation derivation reads them.
+struct KnownView<'a> {
+    orders: &'a HashMap<Hash, u8>,
+    state: &'a StateReplay,
+}
+impl Known for KnownView<'_> {
+    fn order(&self, id: &Hash) -> Result<u8, Error> {
+        self.orders
+            .get(id)
+            .copied()
+            .ok_or(Error::Unavailable("confirmed ancestry order"))
     }
-    out.extend_from_slice(part);
-    Ok(())
+    fn region_rollup(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
+        self.state.region(id)
+    }
+    fn confirmed(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
+        self.state.confirmed_after(id)
+    }
 }
 impl StateReplay {
     /// A fresh replay state at genesis: an empty state database and history.
@@ -179,71 +190,8 @@ impl StateReplay {
             .cloned()
             .ok_or(Error::Unavailable("confirmed parent ETXs"))
     }
-    fn sub_rollup(
-        &self,
-        histories: &[History; 3],
-        record: &Record,
-        context: usize,
-    ) -> Result<Vec<Transaction>, Error> {
-        let mut out = vec![];
-        for id in record.object().manifest_hashes() {
-            if context == 1 {
-                let zone = histories[2].get(&id)?;
-                extend(&mut out, zone.object().outbound_etxs())?;
-            } else if context == 0 {
-                extend(&mut out, &self.region(&id)?)?;
-            }
-        }
-        Ok(out)
-    }
-    fn collect(
-        &self,
-        histories: &[History; 3],
-        orders: &HashMap<Hash, u8>,
-        block: &Record,
-        context: usize,
-        order: u8,
-        current: &[Transaction],
-    ) -> Result<Vec<Transaction>, Error> {
-        let location: [u8; 2] = block
-            .header()
-            .wire()
-            .location
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .map_err(|_| Error::Unsupported("confirmation location"))?;
-        let mut out = filter_to_sub(current, location, context, order)?;
-        let mut cursor: Arc<Record> = Arc::new(block.clone());
-        loop {
-            let parent = histories[context].get(&cursor.parent(context)?)?;
-            if parent.number(context)?.checked_add(1) != Some(cursor.number(context)?) {
-                return Err(Error::Invalid("confirmation ancestry height"));
-            }
-            if parent.number(context)? == 0 {
-                return Ok(out);
-            }
-            let parent_order = *orders
-                .get(&parent.id())
-                .ok_or(Error::Unavailable("confirmed ancestry order"))?;
-            let pl = &parent.header().wire().location.as_ref().unwrap().value;
-            if pl.get(context) == Some(&location[context]) && parent_order as usize == context {
-                return Ok(out);
-            }
-            if context == 1 && parent_order == 0 && pl.as_slice() != location {
-                let list = self.confirmed_after(&parent.id())?;
-                extend(&mut out, &filter_to_sub(&list, location, 1, 0)?)?;
-            }
-            let part = self.sub_rollup(histories, &parent, context)?;
-            extend(&mut out, &filter_to_sub(&part, location, context, order)?)?;
-            cursor = parent;
-        }
-    }
-    /// The ETXs this block confirms for its zone children (prepare_scoped,
-    /// which writes the zone location [0, 0] as a literal).
-    #[allow(clippy::too_many_arguments)]
+    /// The ETXs this block confirms for its zone children (the shared
+    /// `confirmation::confirm` at the chain spec's location).
     pub fn confirm(
         &self,
         histories: &[History; 3],
@@ -253,27 +201,21 @@ impl StateReplay {
         accumulated: &[Transaction],
         location: [u8; 2],
     ) -> Result<Vec<Transaction>, Error> {
-        Ok(if order == 0 {
-            let prime = records[0].as_ref().unwrap();
-            let sub = self.sub_rollup(histories, prime, 0)?;
-            filter_to_sub(
-                &self.collect(histories, orders, prime, 0, order, &sub)?,
-                location,
-                1,
-                0,
-            )?
-        } else if order == 1 {
-            self.collect(
-                histories,
+        confirmation::confirm(
+            histories,
+            &KnownView {
                 orders,
-                records[1].as_ref().unwrap(),
-                1,
-                order,
-                accumulated,
-            )?
-        } else {
-            vec![]
-        })
+                state: self,
+            },
+            [
+                records[0].as_deref(),
+                records[1].as_deref(),
+                records[2].as_deref(),
+            ],
+            order,
+            accumulated,
+            location,
+        )
     }
     /// Record a block that executed and passed every check.
     pub fn record(
@@ -310,20 +252,8 @@ impl StateReplay {
         Ok(())
     }
 }
-pub fn profile_for(
-    environment: &str,
-    chain_id: u64,
-    location: [u8; 2],
-    genesis: Hash,
-) -> Result<Profile, Error> {
-    match environment {
-        "colosseum" => Profile::official(
-            quai_consensus::rules::Uint::from_u64(chain_id),
-            location,
-            [genesis].into(),
-        ),
-        "local" => Profile::reviewed_hierarchy(),
-        _ => Err(Error::Unsupported("state replay environment")),
-    }
+/// The execution profile of a chain spec.
+pub fn profile_for(chain: &Chain) -> Result<Profile, Error> {
+    chain.execution_profile()
 }
 pub use zone_execution::{diagnose, native_components};

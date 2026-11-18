@@ -3,6 +3,7 @@ use super::{
     journal::Journal, run_code, state::World, state_gas, word::Word, CapabilityError, Context,
     Fault, Outcome,
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::transaction::{AccessTuple, Address};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -229,7 +230,9 @@ pub fn execute_call_with_env(
     if outcome.error.is_none() && !outcome.reverted
         || (!context.read_only
             && context.address == crate::lockup::contract(context.location)
-            && environment.prime_number.is_some_and(|p| p < 1_755_000))
+            && environment
+                .prime_number
+                .is_some_and(|p| p < FORKS.sha_equivalent_difficulty))
     {
         state.finalize_sizes()?;
         outcome.logs = state.logs.clone();
@@ -283,7 +286,7 @@ pub fn creation_address(
         return Ok((direct, gas));
     }
     let cost = 30 + (code.len() as u64).div_ceil(32) * 6;
-    let attempts = if block_number < 1_865_000 {
+    let attempts = if block_number < FORKS.max_grind_increase {
         1000
     } else {
         10000
@@ -372,7 +375,7 @@ pub(crate) fn create(
     context.value = value;
     let mut out = run_code(s, &context, &[], gas, code.to_vec(), depth)?;
     if out.error.is_none() && !out.reverted {
-        let max = if parent.block_number < Word::from_u64(3_490_000) {
+        let max = if parent.block_number < Word::from_u64(FORKS.max_code_size) {
             24576
         } else {
             32768

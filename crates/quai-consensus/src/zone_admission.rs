@@ -4,25 +4,16 @@ use crate::{
     history::{History, Record},
     placement::{self, CandidateIndex, Prepared},
     private_profile::PrivateChain,
-    rules::{self, Uint},
     verifier::Verifier,
     Error,
 };
-use std::collections::BTreeSet;
+use quai_primitives::spec::FORKS;
 pub fn profile() -> Result<placement::Profile, Error> {
     let p = PrivateChain::reviewed_admission()?;
-    Ok(placement::Profile {
-        location: p.location.to_vec(),
-        genesis: BTreeSet::from([p.genesis[2].id()]),
-        default_genesis: None,
-        minimum_difficulty: Uint::from_u64(2),
-        duration: 5,
-        gas_ceiling: p.gas_limit,
-        p2p_threshold: 7,
-    })
+    Ok(crate::chain::Chain::from_private(std::sync::Arc::new(p)).placement_profile(2))
 }
 fn domain(block: &Record) -> Result<(), Error> {
-    if block.number(2)? > rules::START_TX
+    if block.number(2)? > FORKS.start_tx
         || block.prime != 0
         || !block.uncles()?.is_empty()
         || !block.object().transactions().is_empty()

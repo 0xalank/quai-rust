@@ -11,16 +11,27 @@ fn official_prime_controller_arithmetic_matches_all_frozen_go_cases() {
 #[test]
 fn controller_history_is_required_after_activation_and_zero_is_invalid() {
     assert_eq!(
-        controllers::k_quai_discount(controllers::KICK_IN, Uint::ZERO, None, Uint::ZERO).unwrap(),
+        controllers::k_quai_discount(
+            quai_primitives::spec::FORKS.controller_kick_in,
+            Uint::ZERO,
+            None,
+            Uint::ZERO
+        )
+        .unwrap(),
         Uint::from_u64(100)
     );
     assert!(matches!(
-        controllers::k_quai_discount(controllers::KICK_IN + 1, Uint::ZERO, None, Uint::ONE),
+        controllers::k_quai_discount(
+            quai_primitives::spec::FORKS.controller_kick_in + 1,
+            Uint::ZERO,
+            None,
+            Uint::ONE
+        ),
         Err(Error::Unavailable(_))
     ));
     assert!(matches!(
         controllers::k_quai_discount(
-            controllers::KICK_IN + 1,
+            quai_primitives::spec::FORKS.controller_kick_in + 1,
             Uint::ZERO,
             Some(Uint::ZERO),
             Uint::ONE
@@ -46,7 +57,7 @@ fn feedback_rejects_undefined_math_and_schedule_shortcuts_preserve_history() {
     // Official early/hold/freeze branches do not inspect a feedback window.
     assert_eq!(
         controllers::exchange_rate(265_999, Uint::ZERO, Uint::ZERO, &zero).unwrap(),
-        Uint::from_u64(quai_consensus::economics::INITIAL_EXCHANGE_RATE)
+        Uint::from_u128(quai_consensus::economics::INITIAL_EXCHANGE_RATE)
     );
     for number in [752_001, 1_171_501, 1_755_001, 2_237_000] {
         assert_eq!(

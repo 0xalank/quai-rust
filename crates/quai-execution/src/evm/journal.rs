@@ -5,6 +5,7 @@ use super::{
     word::Word,
     CapabilityError,
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     receipt::Log,
     transaction::{AccessTuple, Address, Transaction},
@@ -184,7 +185,10 @@ impl Journal {
         let refund = checkpoint.refund;
         let deleted = checkpoint.deleted.clone();
         let deleted_hashes = checkpoint.deleted_hashes;
-        if self.prime_number.is_some_and(|p| p >= 2_317_000) {
+        if self
+            .prime_number
+            .is_some_and(|p| p >= FORKS.security_hardening)
+        {
             for (k, v) in self.deleted.iter() {
                 if !deleted.contains_key(k) {
                     self.world.set_lockup(*k, Some(v.clone()))?;

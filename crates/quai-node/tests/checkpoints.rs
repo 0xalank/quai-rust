@@ -6,7 +6,7 @@ use quai_node::checkpoint::{self, Checkpoint};
 use quai_node::log::{Level, Log};
 use quai_node::qex::{Context, ExportWriter, Manifest, RawRecord};
 use quai_node::replay::{self, checkpoint_dir, End, Options, Summary};
-use quai_node::spec::ChainSpec;
+use quai_node::spec::Chain;
 use quai_node::store;
 use quai_primitives::{decode_hex, Hash};
 use std::path::{Path, PathBuf};
@@ -111,7 +111,7 @@ fn run(o: &Options) -> Result<Summary, String> {
 }
 fn dir_of(export: &Path, data: &Path) -> PathBuf {
     let env = Manifest::load(export).unwrap().environment;
-    checkpoint_dir(data, &ChainSpec::for_environment(&env).unwrap(), true)
+    checkpoint_dir(data, &Chain::for_environment(&env).unwrap(), true)
 }
 fn latest(export: &Path, data: &Path) -> Checkpoint {
     let dir = dir_of(export, data);

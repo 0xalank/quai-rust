@@ -6,6 +6,7 @@ use super::{
     CapabilityError, Context, Fault, Outcome,
 };
 use crate::lockup::{self, Key};
+use quai_primitives::spec::FORKS;
 use quai_primitives::transaction::{Address, External, Transaction};
 enum Failure {
     Capability(CapabilityError),
@@ -201,7 +202,7 @@ pub(crate) fn invoke(
         }
         Err(Failure::Capability(error)) => return Err(error),
         Err(e) => {
-            if prime >= 1_755_000 {
+            if prime >= FORKS.sha_equivalent_difficulty {
                 s.revert(revision)?;
             } else {
                 s.commit(revision)?;

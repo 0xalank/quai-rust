@@ -9,6 +9,7 @@ use crate::{
     Error,
 };
 use crypto_bigint::{Encoding, U1024};
+use quai_primitives::spec::FORKS;
 use quai_primitives::{work::Context, Hash};
 use std::collections::BTreeSet;
 #[derive(Clone, Debug)]
@@ -94,7 +95,7 @@ pub fn update_etx_eligible(
     }
     let pos = location[0] as usize * 16 + location[1] as usize;
     let bit = 1u8 << (pos % 8);
-    if zone_number > rules::START_TX {
+    if zone_number > FORKS.start_tx {
         bitmap[pos / 8] |= bit
     } else {
         bitmap[pos / 8] &= !bit
@@ -263,7 +264,7 @@ pub fn check_projection(
         return Err(Error::Invalid("region state root"));
     }
     role(header)?;
-    if header.prime >= rules::KAWPOW_FORK && w.aux_pow.is_some() {
+    if header.prime >= FORKS.kawpow && w.aux_pow.is_some() {
         verifier.verify_auxiliary_components(&header.header, false)?;
     }
     let number = if profile.genesis.contains(&parent.id) {

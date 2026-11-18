@@ -5,7 +5,7 @@ use crate::{
     history::{History, Record},
     payouts,
     private_profile::PrivateChain,
-    rules::{self, Uint},
+    rules::Uint,
     share_rules,
     verifier::Verifier,
     Error,
@@ -26,6 +26,7 @@ use quai_execution::{
     settlement::{self, BlockContext},
     utxo::{self, UtxoState},
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     receipt::{receipts_root, Receipt},
     transaction::{Kind, Transaction},
@@ -46,10 +47,13 @@ pub struct Profile {
     official_allocations: bool,
 }
 impl Profile {
-    pub fn official(
+    /// Chain ID, slice location, trusted genesis set and the allocation policy
+    /// (`true`: the official genesis unlocks of core/state/gen_allocs.go).
+    pub fn new(
         chain_id: Uint,
         location: [u8; 2],
         genesis: BTreeSet<Hash>,
+        official_allocations: bool,
     ) -> Result<Self, Error> {
         if location.iter().any(|v| *v >= 16) || genesis.is_empty() {
             return Err(Error::Invalid("zone execution profile"));
@@ -58,8 +62,15 @@ impl Profile {
             chain_id,
             location,
             genesis,
-            official_allocations: true,
+            official_allocations,
         })
+    }
+    pub fn official(
+        chain_id: Uint,
+        location: [u8; 2],
+        genesis: BTreeSet<Hash>,
+    ) -> Result<Self, Error> {
+        Self::new(chain_id, location, genesis, true)
     }
     pub fn reviewed_private() -> Result<Self, Error> {
         let p = PrivateChain::reviewed()?;
@@ -444,7 +455,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
         .read(state.world.etxs().oldest())
         .map_err(|error| state_error(error, Error::ResourceLimit("ETX head lookup")))?
         .is_some();
-    if block.numbers[2] <= rules::START_TX {
+    if block.numbers[2] <= FORKS.start_tx {
         if available && etx_count < 50 || etx_count > 100 {
             return Err(invalid("ETX count range"));
         }
@@ -794,20 +805,33 @@ pub fn execute_prepared_components(
         return Err(Error::Invalid("hierarchy/execution block binding"));
     }
     let expected = prepared.chain_profile();
-    if profile.official_allocations
-        || profile.chain_id != Uint::from_u64(expected.chain_id)
-        || profile.location != expected.location
-        || profile.genesis != BTreeSet::from([expected.genesis[2].id()])
+    let official = expected.spec().allocations == quai_primitives::spec::Allocations::Official;
+    if profile.official_allocations != official
+        || profile.chain_id != Uint::from_u64(expected.spec().chain_id)
+        || profile.location != expected.location()
+        || profile.genesis != BTreeSet::from([expected.genesis_hash()])
     {
         return Err(Error::Invalid("hierarchy/execution profile binding"));
     }
-    native_private_components(
-        verifier,
-        state,
-        history,
-        past,
-        block,
-        profile,
-        prepared.inbound_for_execution(),
-    )
+    if official {
+        native_components(
+            verifier,
+            state,
+            history,
+            past,
+            block,
+            profile,
+            prepared.inbound_for_execution(),
+        )
+    } else {
+        native_private_components(
+            verifier,
+            state,
+            history,
+            past,
+            block,
+            profile,
+            prepared.inbound_for_execution(),
+        )
+    }
 }

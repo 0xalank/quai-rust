@@ -9,7 +9,7 @@ fn composed_parent_conversion_and_controller_fields_match_unmodified_go_verifier
 }
 
 #[test]
-fn parent_controller_scope_and_etx_resource_bounds_remain_explicit() {
+fn parent_controller_scope_is_explicit_and_inbound_lists_are_unbounded_as_in_go() {
     use quai_consensus::{choice_window::Window, history::Record, prime_economics, Error};
     use quai_primitives::{
         decode_hex,
@@ -23,19 +23,22 @@ fn parent_controller_scope_and_etx_resource_bounds_remain_explicit() {
     let parent = Record::decode(&decode_hex(row["parent"].as_str().unwrap()).unwrap()).unwrap();
     let tx =
         Transaction::decode(&decode_hex(row["inbound"][0].as_str().unwrap()).unwrap()).unwrap();
-    assert!(matches!(
-        prime_economics::conversions(&parent, &vec![tx.clone(); 8193], None),
-        Err(Error::ResourceLimit(_))
-    ));
+    // core/slice.go Append prices any number of inbound ETXs; the former
+    // 8,192-ETX and 32 MiB caps were Rust-only.
+    let many = prime_economics::conversions(&parent, &vec![tx.clone(); 8193], None).unwrap();
+    assert_eq!(many.etxs.len(), 8193);
     let Kind::External(mut large) = tx.kind().clone() else {
         unreachable!()
     };
     large.data = vec![7; 128 * 1024];
     let large = Transaction::external(large).unwrap();
-    assert!(matches!(
-        prime_economics::conversions(&parent, &vec![large; 257], None),
-        Err(Error::ResourceLimit(_))
-    ));
+    assert_eq!(
+        prime_economics::conversions(&parent, &vec![large; 257], None)
+            .unwrap()
+            .etxs
+            .len(),
+        257
+    );
     let canonical: serde_json::Value =
         serde_json::from_str(include_str!("../../../fixtures/protocol/canonical.json")).unwrap();
     let genesis =

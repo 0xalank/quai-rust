@@ -136,9 +136,27 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        step 6); 8,192 ETXs per rollup. The in-memory World keeps its snapshot
        bounds (65,536 accounts), so mainnet replay must move to the lazy World
        (`restore_sparse`) before the state passes them.
-6. [ ] Replace the per-profile code with one chain spec and one fork schedule.
-       Then make `validate_block` do real validation.
-       The replay works around private-profile entry points today: it copies
+6. [x] Replace the per-profile code with one chain spec and one fork schedule.
+       Then make `validate_block` do real validation (`e1f4cfb`).
+       `quai_primitives::spec`: `ChainSpec` (colosseum and the private
+       profiles) and `ForkSchedule` (every fork height of v0.57.0), checked
+       against the Go oracle (`reference/chain-spec`,
+       `scripts/gen_chain_spec_vectors.py`, `fixtures/protocol/chain-spec.json`).
+       Fork literals in consensus, execution and the EVM are spec lookups now.
+       The confirmation logic is shared (the copy in quai-node is gone); the
+       private refusals apply only to the private domains. Removed Rust-only
+       caps: ETX and lockup overlay change caps, 8,192-ETX rollup caps, header
+       data, uncle, manifest and interlink caps. `Verifier::validate_block`
+       validates a block against an explicit parent context (spec, history
+       windows, state handle) and `quai-node replay` calls it at every height.
+       Open: prime controllers after ControllerKickIn (prime 262,000) stop with
+       `Unsupported("prime controllers after ControllerKickInBlock are not
+       ported")`; legacy long Qi output addresses before Polaris stop
+       explicitly; `trie::MAX_LIST_ITEMS` (65,536 items / 64 MiB), the ETX
+       auxiliary entry bounds and the auxiliary.rs field caps are still
+       Rust-only; the region inbound path assumes one slice (correct for
+       expansion 0).
+       Before this step, the replay worked around private-profile entry points: it copied
        the ETX confirmation logic of `Hierarchy::prepare_scoped` into
        `crates/quai-node/src/state.rs`. `prepare_scoped` refuses prime >=
        1,171,500, zone > 259,200 outside the private activated profiles,
@@ -246,3 +264,5 @@ Mining, block templates and Stratum come last.
 | 2026-11-17 | Phase 3.3, 4.1 | libsecp256k1 sender recovery, decoder fuzz tests, 112 fewer unwraps (`5df7277`) |
 | 2026-11-18 | Phase 1.3, 2.1 | Replay runs long: lazy disk state, checkpoints, `--resume`, `replay_loop.sh` (`4828e14`); agent's loop pass: all roots equal to zone 27,406 |
 | 2026-11-18 | Phase 1, 2.2 | `peer-export` (`2176432`): QEX1 from peers, identical to the Go export to zone 27,406; public export to zone 686,009. Long `--state` replay on it started (log: `~/quai-data/mainnet-v0.57.0/logs/replay-public.err`) |
+| 2026-11-18 | Phase 1.6 | One ChainSpec/ForkSchedule checked against Go; shared confirmation; `validate_block` validates real blocks and the replay calls it (`e1f4cfb`); agent's run: 343/343 workspace + 21/21, replay 0–27,406 PASS from genesis |
+| 2026-11-18 | Phase 1 | Long replay: the `f841a74` binary passed every check to checkpoint 180,000 with no failure; resumed there with `e1f4cfb` (log: `replay-public-e1f4cfb.err`) |

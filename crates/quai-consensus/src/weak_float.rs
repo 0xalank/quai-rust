@@ -138,6 +138,9 @@ impl F {
 }
 /// The deficit is threshold entropy minus work entropy in Q64. Reference
 /// precision is max(64, bitlen(deficit), 65); distance division truncates last.
+// 0.6931 is go-quai `common/math/big.go` `ln2 = big.NewFloat(0.6931)`, not
+// `LN_2`: consensus needs the exact Go value.
+#[allow(clippy::approx_constant)]
 pub fn discount(deficit: Uint, distance: u64) -> Result<Uint, Error> {
     if deficit > Uint::from_u64(256).shl_vartime(64) || distance > 4 {
         return Err(unsupported());

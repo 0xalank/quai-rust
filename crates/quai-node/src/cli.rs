@@ -19,6 +19,8 @@ Commands:
             receipts, logs, state, calls
   run       Sync zone [0 0] from go-quai peers, validate and store every
             block, follow the peers' head, and serve RPC and metrics
+  observe   Apply go-quai's head choice to the live gossip of slice [0 0]
+            without validating (proof-of-work and entropy only); count reorgs
   help      Print this help
 
 Global options:
@@ -58,7 +60,12 @@ Run options:
   --no-public           Do not use the colosseum boot peers and the DHT
   --margin <N>          Stay N zone blocks below the peers' head (default: 64)
   --max-peers <N>       Peers to fetch from (default: 8)
+  --no-gossip           At the peers' head, poll by number instead of
+                        following the head through gossip
   --jobs, --to, --progress, --checkpoint-every, --commit-every as for replay
+
+Observe options:
+  --seconds <N>         Stop after N seconds (default: 1800)
 
 `run` starts from the latest checkpoint of the data directory (or the
 genesis), keeps checkpoints and the block store in
@@ -90,6 +97,8 @@ Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error,
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Help,
+    /// `observe` for this many seconds.
+    Observe(u64),
     Run(crate::node::Options),
     Replay(ReplayArgs),
     Rpc(RpcArgs),
@@ -158,6 +167,8 @@ struct Flags {
     metrics_listen: Option<String>,
     peers: Vec<String>,
     no_public: bool,
+    no_gossip: bool,
+    seconds: Option<u64>,
     margin: Option<u64>,
     max_peers: Option<usize>,
 }
@@ -168,6 +179,7 @@ const RUN_ONLY: &[&str] = &[
     "--metrics-listen",
     "--peer",
     "--no-public",
+    "--no-gossip",
     "--margin",
     "--max-peers",
 ];
@@ -210,6 +222,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--peer"
                 | "--margin"
                 | "--max-peers"
+                | "--seconds"
         );
         let value = if takes_value {
             match inline {
@@ -276,6 +289,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--resume" => f.resume = true,
             "--stateless" => f.stateless = true,
             "--no-public" => f.no_public = true,
+            "--no-gossip" => f.no_gossip = true,
+            "--seconds" => f.seconds = Some(number("--seconds", &v)?),
             "--checkpoint-every" | "--commit-every" => {
                 let n: u64 = number(&flag, &v)?;
                 if n == 0 {
@@ -333,8 +348,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     belongs(RUN_ONLY, &["run"])?;
     belongs(SYNC, &["replay", "run"])?;
     belongs(&["--listen"], &["rpc"])?;
+    belongs(&["--seconds"], &["observe"])?;
     let command = match command_name.as_str() {
         "help" => Command::Help,
+        "observe" => Command::Observe(f.seconds.unwrap_or(1800)),
         "replay" => Command::Replay(ReplayArgs {
             export: f.export.take().ok_or("replay needs --export <DIR>")?,
             to: f.to,
@@ -398,6 +415,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     Some(n) => n,
                     None => config.number("sync.commit_every")?.unwrap_or(1_000),
                 },
+                gossip: !f.no_gossip,
             })
         }
         c => return Err(format!("unknown command {c:?}")),
@@ -440,6 +458,13 @@ pub fn main_with(args: &[String]) -> i32 {
             print!("{USAGE}");
             0
         }
+        Command::Observe(seconds) => match crate::tip::observe(seconds, &log) {
+            Ok(code) => code,
+            Err(e) => {
+                log.error(&format!("observe: {e}"));
+                2
+            }
+        },
         Command::Run(o) => match crate::node::run(&o, &log) {
             Ok(code) => code,
             Err(e) => {

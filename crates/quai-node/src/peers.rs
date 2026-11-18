@@ -1098,6 +1098,9 @@ pub struct Options {
     pub peers: Vec<Multiaddr>,
     /// Use the colosseum boot peers and the peers they lead to.
     pub public: bool,
+    /// End the source once it delivered every height up to the best peer
+    /// head less `margin` (the node then follows the head through gossip).
+    pub handoff: bool,
 }
 
 enum Item {
@@ -1362,6 +1365,19 @@ async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: cr
         };
         match step {
             Step::Wait => {
+                let caught_up = {
+                    let s = lock(&shared.sched);
+                    s.zone_end > 0 && z >= s.zone_end
+                };
+                if o.handoff && caught_up {
+                    log.info(&format!(
+                        "peers: every height to {} delivered (peers' head {} less margin {})",
+                        z.saturating_sub(1),
+                        shared.status.head.load(Ordering::Relaxed),
+                        o.margin
+                    ));
+                    return;
+                }
                 let _ = tokio::time::timeout(Duration::from_millis(200), shared.notify.notified())
                     .await;
             }

@@ -418,8 +418,22 @@ impl Checker {
     ) -> Result<Checkpoint, String> {
         let (block, height) = self.heads[2].ok_or("checkpoint before genesis")?;
         let (windows, views) = self.window.export();
+        // Only the ancestors of each head: in tip mode the window also
+        // holds blocks of other branches.
+        let mut c = 0;
         let windows = windows.map(|w| {
+            let ctx = c;
+            c += 1;
+            let mut keep = std::collections::HashSet::new();
+            let mut at = self.heads[ctx].map(|h| h.0);
+            let by_id: HashMap<Hash, &Arc<Record>> = w.iter().map(|(r, _)| (r.id(), r)).collect();
+            while let Some(id) = at {
+                let Some(r) = by_id.get(&id) else { break };
+                keep.insert(id);
+                at = r.parent(ctx).ok();
+            }
             w.into_iter()
+                .filter(|(r, _)| keep.contains(&r.id()))
                 .map(|(r, s)| {
                     (
                         r.bytes().to_vec(),
@@ -1339,6 +1353,8 @@ pub struct Processor {
     verify_first: bool,
     stop: Arc<AtomicBool>,
     store: Option<BlockStore>,
+    /// Tip mode: go-quai's head choice and the branches above the base.
+    tip: Option<Tip>,
     /// The RPC view of a running node, which follows the published head.
     live: Option<Arc<crate::rpc_view::Live>>,
     metrics: Option<Arc<crate::metrics::Metrics>>,
@@ -1489,6 +1505,7 @@ impl Processor {
             seq: 0,
             stop: Arc::new(AtomicBool::new(false)),
             store,
+            tip: None,
             live: None,
             metrics: None,
         })
@@ -1900,4 +1917,563 @@ fn open_store(
     }
     checker.collect = true;
     Ok(store)
+}
+
+// ---------------------------------------------------------------------------
+// Tip mode: go-quai's head choice over checked blocks, with reorgs.
+
+/// What the next block is checked against besides the shared window, orders
+/// and rollups (both keyed by block hash, so every branch shares them).
+#[derive(Clone)]
+struct TipContext {
+    heads: [Option<(Hash, u64)>; 3],
+    controller: prime_controller::State,
+}
+/// A block of the tip: checked against its parent's context.
+struct TipBlock {
+    number: u64,
+    parent: Hash,
+    height: Height,
+    zone: Arc<Record>,
+    checked: block::Checked,
+    after: TipContext,
+    /// With state: the state after the block, while it is canonical.
+    state: Option<quai_consensus::zone_execution::State>,
+}
+/// The head, the blocks above the tip base and go-quai's choice among them.
+pub struct Tip {
+    choice: crate::forkchoice::Choice,
+    blocks: HashMap<Hash, TipBlock>,
+    /// The canonical blocks above the base, oldest first.
+    canonical: Vec<Hash>,
+    base: (Hash, u64),
+    base_ctx: TipContext,
+    base_state: Option<quai_consensus::zone_execution::State>,
+    base_commit: u64,
+}
+/// What became of an offered block.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Offer {
+    /// The block was already offered (or is the base or below it).
+    Known,
+    /// Its zone parent is not known yet: offer that first.
+    NeedParent(Hash),
+    /// It is more than 60 zone blocks above the head (`ErrSubNotSyncedToDom`).
+    TooFar,
+    /// A check failed; the block takes no part in the head choice.
+    Rejected(Failure),
+    /// Checked. `head` is the head after go-quai's choice; `removed` the
+    /// canonical blocks a reorg took out, newest first.
+    Accepted {
+        head: (Hash, u64),
+        removed: Vec<(Hash, u64)>,
+        refused: bool,
+    },
+}
+impl Tip {
+    pub fn head(&self) -> (Hash, u64) {
+        self.canonical
+            .last()
+            .and_then(|h| self.blocks.get(h).map(|b| (*h, b.number)))
+            .unwrap_or(self.base)
+    }
+    fn context_of(&self, hash: &Hash) -> Option<&TipContext> {
+        if *hash == self.base.0 {
+            return Some(&self.base_ctx);
+        }
+        self.blocks.get(hash).map(|b| &b.after)
+    }
+    fn is_canonical(&self, hash: &Hash) -> bool {
+        *hash == self.base.0 || self.canonical.contains(hash)
+    }
+    pub fn len(&self) -> usize {
+        self.blocks.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
+}
+/// go-quai's `TotalLogEntropy` of a block in the context of its order (the
+/// backend that sends its `ChainEvent`): the zone backend adds the
+/// workshare entropy, the region and prime backends do not.
+fn fork_entropy(
+    verifier: &mut Verifier,
+    history: &History,
+    chain: &Chain,
+    record: &Record,
+) -> Result<(u8, Uint), Error> {
+    if record.number(2)? == 0 {
+        return Ok((0, Uint::ZERO));
+    }
+    let zone = quai_consensus::validation::native_parent_metrics(
+        verifier,
+        history,
+        record,
+        &chain.zone_profile(),
+    )?;
+    if zone.order == 2 {
+        return Ok((2, zone.total));
+    }
+    let proof = verifier.verify_header_proof(record.header())?;
+    let b = record.object().header().wire();
+    let arr = |v: &[Vec<u8>]| -> Result<[Uint; 3], Error> {
+        v.iter()
+            .map(|b| share_rules::uint(b))
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| Error::Invalid("entropy array"))
+    };
+    let e = quai_consensus::rules::entropy(&quai_consensus::rules::EntropyInput {
+        hash: proof.hash(),
+        difficulty: record.difficulty()?,
+        expansion: b.expansion_number.unwrap_or(0) as u8,
+        parent_entropy: arr(&b.parent_entropy)?,
+        parent_delta: arr(&b.parent_delta_entropy)?,
+        parent_uncled_delta: arr(&b.parent_uncled_delta_entropy)?,
+        uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap_or_default())?,
+        postfork_share_count: None,
+        node_context: zone.order,
+    })?;
+    Ok((zone.order, e.total))
+}
+fn failure_of(f: Fail, slot: &Slot) -> Failure {
+    let raw = slot.height.records[f.context.index()].as_ref();
+    Failure {
+        zone_height: Some(slot.height.zone_height),
+        context: f.context.name().into(),
+        number: raw.map(|r| r.number),
+        hash: raw.map(|r| r.hash),
+        check: f.check,
+        expected: f.expected,
+        actual: f.actual,
+    }
+}
+fn records_of(slot: &Slot) -> Result<[Option<Arc<Record>>; 3], Fail> {
+    let mut records: [Option<Arc<Record>>; 3] = [None, None, None];
+    for c in CONTEXTS {
+        let Some(raw) = &slot.height.records[c.index()] else {
+            continue;
+        };
+        let record = match slot.records[c.index()].as_ref() {
+            Some(Ok(r)) => r,
+            Some(Err(e)) => {
+                return Err(fail(
+                    c,
+                    "decode",
+                    "a work object the Rust codec accepts",
+                    decode_reason(&raw.block, e),
+                ))
+            }
+            None => continue,
+        };
+        if record.id() != raw.hash {
+            return Err(fail(c, "block hash", hex(&raw.hash), hex(&record.id())));
+        }
+        let n = record.number(c.index()).unwrap_or(u64::MAX);
+        if n != raw.number {
+            return Err(fail(
+                c,
+                "record number",
+                raw.number.to_string(),
+                n.to_string(),
+            ));
+        }
+        records[c.index()] = Some(Arc::new(record.clone()));
+    }
+    Ok(records)
+}
+impl Processor {
+    /// Enter tip mode at the current head: from now on blocks come through
+    /// [`Processor::offer`] and go-quai's head choice picks the head.
+    pub fn enable_tip(&mut self) -> Result<(), String> {
+        let c = &mut self.checker;
+        let heads = c.heads;
+        let controller = c.controller.clone().ok_or("tip mode before genesis")?;
+        let base = heads[2].ok_or("tip mode before genesis")?;
+        // The seed node set: each context's head with the entropy go-quai's
+        // coordinator holds for it after a run from genesis.
+        let mut nodes = [crate::forkchoice::Node {
+            hash: base.0,
+            entropy: Uint::ZERO,
+        }; 3];
+        for (ctx, node) in nodes.iter_mut().enumerate() {
+            let (hash, _) = heads[ctx].ok_or("tip mode without a head")?;
+            let record = c.histories[2]
+                .get(&hash)
+                .or_else(|_| c.histories[ctx].get(&hash))
+                .map_err(|e| format!("tip seed record: {}", describe(&e)))?;
+            let (_, entropy) = fork_entropy(&mut c.verifier, &c.histories[2], &c.chain, &record)
+                .map_err(|e| format!("tip seed entropy: {}", describe(&e)))?;
+            *node = crate::forkchoice::Node { hash, entropy };
+        }
+        let seed = crate::forkchoice::NodeSet { nodes };
+        self.tip = Some(Tip {
+            choice: crate::forkchoice::Choice::new(seed),
+            blocks: HashMap::new(),
+            canonical: vec![],
+            base,
+            base_ctx: TipContext { heads, controller },
+            base_state: c.state.as_ref().map(|s| s.state.clone()),
+            base_commit: c.state.as_ref().map_or(0, |s| s.committed_height),
+        });
+        Ok(())
+    }
+    pub fn tip(&self) -> Option<&Tip> {
+        self.tip.as_ref()
+    }
+    /// Check a block of the tip against its parent's context, let go-quai's
+    /// head choice decide and move the head, with a reorg when the choice
+    /// leaves the canonical chain.
+    pub fn offer(&mut self, height: Height, log: &Log) -> Result<Offer, String> {
+        let tip = self.tip.as_ref().ok_or("offer outside tip mode")?;
+        let zone_raw = height.zone().clone();
+        let hash = zone_raw.hash;
+        if tip.blocks.contains_key(&hash) || tip.is_canonical(&hash) {
+            return Ok(Offer::Known);
+        }
+        if zone_raw.number <= tip.base.1 {
+            return Ok(Offer::Known);
+        }
+        let slot = decode(height, 0);
+        let records = match records_of(&slot) {
+            Ok(r) => r,
+            Err(f) => return Ok(Offer::Rejected(failure_of(f, &slot))),
+        };
+        let zone = records[2]
+            .clone()
+            .ok_or("tip block without a zone record")?;
+        let parent = zone.parent(2).unwrap_or_default();
+        let number = zone_raw.number;
+        let Some(ctx) = tip.context_of(&parent).cloned() else {
+            return Ok(Offer::NeedParent(parent));
+        };
+        if !crate::forkchoice::append_allowed(tip.head().1, number) {
+            return Ok(Offer::TooFar);
+        }
+        // The checks that need no state, against the parent's context.
+        let c = &mut self.checker;
+        let heads = ctx.heads.map(|h| h.unwrap_or_default());
+        let checked = {
+            let known = state::KnownView {
+                orders: &c.orders,
+                region_rollups: &c.rollups,
+                maps: None,
+            };
+            let parent_ctx = block::Parent {
+                chain: &c.chain,
+                histories: &c.histories,
+                indexes: &c.indexes,
+                heads,
+                known: &known,
+                controller: &ctx.controller,
+                now: unix_now(),
+            };
+            block::check(&mut c.verifier, &parent_ctx, records)
+        };
+        let checked = match checked {
+            Ok(x) => x,
+            Err(f) => {
+                let f = Fail {
+                    context: CONTEXTS[f.context.min(2)],
+                    check: f.check,
+                    expected: f.expected,
+                    actual: f.actual,
+                };
+                let failure = failure_of(f, &slot);
+                log.warn(&format!(
+                    "tip: block {} at {number} rejected: {} {}: expected {}, actual {}",
+                    hex(&hash),
+                    failure.context,
+                    failure.check,
+                    failure.expected,
+                    failure.actual
+                ));
+                return Ok(Offer::Rejected(failure));
+            }
+        };
+        let order = checked.order;
+        for ctxi in order as usize..3 {
+            let r = checked.records[ctxi].clone().ok_or("checked record")?;
+            let snapshot = checked.next[ctxi].clone().ok_or("checked snapshot")?;
+            c.window.insert(ctxi, r, Arc::new(snapshot));
+        }
+        if order == 0 {
+            c.window.pin_prime_view(zone.clone());
+        }
+        c.remember_order(hash, order);
+        if order <= 1 {
+            c.remember_rollup(hash, Arc::new(checked.cross.clone()));
+        }
+        let mut after = ctx.clone();
+        for (ctxi, head) in after.heads.iter_mut().enumerate().skip(order as usize) {
+            let r = checked.records[ctxi].as_ref().ok_or("checked record")?;
+            *head = Some((r.id(), r.number(ctxi).map_err(|e| describe(&e))?));
+        }
+        if let Some(step) = &checked.prime {
+            after.controller = step.state().clone();
+        }
+        let (fork_order, entropy) = fork_entropy(&mut c.verifier, &c.histories[2], &c.chain, &zone)
+            .map_err(|e| format!("tip entropy of {}: {}", hex(&hash), describe(&e)))?;
+        if fork_order != order {
+            return Err(format!(
+                "tip block {}: entropy order {fork_order} is not its checked order {order}",
+                hex(&hash)
+            ));
+        }
+        let parents = [
+            zone.parent(0).unwrap_or_default(),
+            zone.parent(1).unwrap_or_default(),
+            parent,
+        ];
+        let tip = self.tip.as_mut().ok_or("tip mode")?;
+        tip.blocks.insert(
+            hash,
+            TipBlock {
+                number,
+                parent,
+                height: slot.height,
+                zone,
+                checked,
+                after,
+                state: None,
+            },
+        );
+        let best = tip.choice.build(parents, hash, order, entropy);
+        let target = best.map(|b| b.zone()).unwrap_or(tip.head().0);
+        self.move_head(target, log)
+    }
+    /// `SetCurrentHeader`: make `target` the head, rolling the canonical
+    /// chain back to the common ancestor first when needed.
+    fn move_head(&mut self, target: Hash, log: &Log) -> Result<Offer, String> {
+        let tip = self.tip.as_ref().ok_or("tip mode")?;
+        let current = tip.head();
+        if target == current.0 {
+            return Ok(Offer::Accepted {
+                head: current,
+                removed: vec![],
+                refused: false,
+            });
+        }
+        // The new branch back to the canonical chain.
+        let mut path = vec![];
+        let mut at = target;
+        while !tip.is_canonical(&at) {
+            let b = tip
+                .blocks
+                .get(&at)
+                .ok_or("tip branch without its ancestors")?;
+            path.push(at);
+            at = b.parent;
+        }
+        path.reverse();
+        let common = at;
+        let common_number = if common == tip.base.0 {
+            tip.base.1
+        } else {
+            tip.blocks.get(&common).map_or(tip.base.1, |b| b.number)
+        };
+        if !crate::forkchoice::reorg_allowed(current.1, common_number) {
+            log.warn(&format!(
+                "tip: head {} at {} not taken: common header {common_number} too old (more than {} below {})",
+                hex(&target),
+                tip.blocks.get(&target).map_or(0, |b| b.number),
+                crate::forkchoice::ZONE_HORIZON,
+                current.1
+            ));
+            return Ok(Offer::Accepted {
+                head: current,
+                removed: vec![],
+                refused: true,
+            });
+        }
+        // Roll back to the common ancestor.
+        let mut removed = vec![];
+        if common != current.0 {
+            let tip = self.tip.as_mut().ok_or("tip mode")?;
+            let keep = tip
+                .canonical
+                .iter()
+                .position(|h| *h == common)
+                .map_or(0, |i| i + 1);
+            for h in tip.canonical.drain(keep..).rev() {
+                let n = tip.blocks.get(&h).map_or(0, |b| b.number);
+                removed.push((h, n));
+            }
+            let (ctx, state) = if common == tip.base.0 {
+                (tip.base_ctx.clone(), tip.base_state.clone())
+            } else {
+                let b = tip.blocks.get(&common).ok_or("common block")?;
+                (b.after.clone(), b.state.clone())
+            };
+            let base_commit = tip.base_commit;
+            if let Some(st) = self.checker.state.as_mut() {
+                if st.committed_height > common_number.max(base_commit) {
+                    return Err(format!(
+                        "reorg to {} needs the state below the last state commit at {}: restart from an older checkpoint",
+                        hex(&target),
+                        st.committed_height
+                    ));
+                }
+                st.state = state.ok_or("tip state of the common block")?;
+                st.past
+                    .truncate_above(common_number)
+                    .map_err(io_err("past.redb"))?;
+                st.executed = st.executed.saturating_sub(removed.len() as u64);
+            }
+            if let Some(store) = self.store.as_mut() {
+                // The logs of the removed blocks, for the RPC's filters.
+                store.flush(false).map_err(io_err("block store"))?;
+                if let Some(live) = &self.live {
+                    let reader = store.reader().map_err(io_err("block store"))?;
+                    for (h, n) in removed.iter().rev() {
+                        let Some(b) = reader.block(h).map_err(io_err("block store"))? else {
+                            continue;
+                        };
+                        let receipts = b
+                            .receipts
+                            .as_deref()
+                            .map(crate::rpc_view::decode_receipts)
+                            .transpose()?
+                            .unwrap_or_default();
+                        let logs: Vec<_> = receipts
+                            .into_iter()
+                            .enumerate()
+                            .flat_map(|(i, r)| {
+                                let tx = r.tx_hash;
+                                r.logs.into_iter().map(move |l| (tx, i as u64, l))
+                            })
+                            .collect();
+                        if !logs.is_empty() {
+                            live.removed(quai_rpc::view::RemovedLogs {
+                                block_hash: *h,
+                                block_number: *n,
+                                logs,
+                            });
+                        }
+                    }
+                }
+                store
+                    .rollback_to(common_number)
+                    .map_err(io_err("block store"))?;
+            }
+            self.checker.heads = ctx.heads;
+            self.checker.controller = Some(ctx.controller);
+            if let Some(m) = &self.metrics {
+                m.reorgs.fetch_add(1, Ordering::Relaxed);
+                m.reorged_blocks
+                    .fetch_add(removed.len() as u64, Ordering::Relaxed);
+            }
+            log.info(&format!(
+                "tip: reorg to {} at {}: {} blocks removed, common ancestor {common_number}",
+                hex(&target),
+                self.tip
+                    .as_ref()
+                    .and_then(|t| t.blocks.get(&target))
+                    .map_or(0, |b| b.number),
+                removed.len()
+            ));
+        }
+        // Apply the new branch.
+        for h in path {
+            self.apply_tip_block(h)?;
+            let number = self.tip.as_ref().map_or(0, |t| t.head().1);
+            // Stateless tip checkpoints at the canonical head (a state
+            // overlay is committed only by the checkpoint at the end).
+            if self.dir.is_some()
+                && self.checker.state.is_none()
+                && number.is_multiple_of(self.settings.checkpoint_every)
+                && self.summary.checkpoint != Some(number)
+            {
+                self.summary.checkpoint = Some(self.write_checkpoint(log)?);
+            }
+        }
+        self.publish()?;
+        Ok(Offer::Accepted {
+            head: self.tip.as_ref().ok_or("tip mode")?.head(),
+            removed,
+            refused: false,
+        })
+    }
+    /// Make a checked tip block canonical: execute it (with state), store it
+    /// and move the heads.
+    fn apply_tip_block(&mut self, hash: Hash) -> Result<(), String> {
+        let tip = self.tip.as_mut().ok_or("tip mode")?;
+        let b = tip.blocks.get(&hash).ok_or("tip block")?;
+        let parent_ctx = tip
+            .context_of(&b.parent)
+            .cloned()
+            .ok_or("tip parent context")?;
+        let zone = b.zone.clone();
+        let number = b.number;
+        let c = &mut self.checker;
+        let executed = match c.state.as_mut() {
+            Some(st) => {
+                let (maps, mut parent_state) = st.split();
+                let known = state::KnownView {
+                    orders: &c.orders,
+                    region_rollups: &c.rollups,
+                    maps: Some(maps),
+                };
+                let parent = block::Parent {
+                    chain: &c.chain,
+                    histories: &c.histories,
+                    indexes: &c.indexes,
+                    heads: parent_ctx.heads.map(|h| h.unwrap_or_default()),
+                    known: &known,
+                    controller: &parent_ctx.controller,
+                    now: unix_now(),
+                };
+                let b = tip.blocks.get(&hash).ok_or("tip block")?;
+                Some(
+                    block::execute(&mut c.verifier, &parent, &mut parent_state, &b.checked)
+                        .map_err(|f| format!("tip block {} at {number}: {f}", hex(&hash)))?,
+                )
+            }
+            None => None,
+        };
+        let b = tip.blocks.get(&hash).ok_or("tip block")?;
+        let accepted = if c.collect {
+            Some(c.accepted(&zone, b.checked.order, &b.height, executed.as_ref()))
+        } else {
+            None
+        };
+        if let (Some(st), Some(x)) = (c.state.as_mut(), executed) {
+            st.record(&zone, x.confirmed, x.execution.created_keys)
+                .map_err(|e| format!("tip state record: {}", describe(&e)))?;
+        }
+        let after = b.after.clone();
+        c.heads = after.heads;
+        c.controller = Some(after.controller);
+        let state_after = c.state.as_ref().map(|s| s.state.clone());
+        let b = tip.blocks.get_mut(&hash).ok_or("tip block")?;
+        b.state = state_after;
+        let order = b.checked.order;
+        tip.canonical.push(hash);
+        // Keep the tip bounded: blocks far below the head leave the tree.
+        let floor = number.saturating_sub(4 * crate::forkchoice::ZONE_HORIZON);
+        if tip.canonical.len() as u64 > 4 * crate::forkchoice::ZONE_HORIZON {
+            let old = tip.canonical.remove(0);
+            if let Some(b) = tip.blocks.remove(&old) {
+                tip.base = (old, b.number);
+                tip.base_ctx = b.after;
+                tip.base_state = b.state;
+            }
+            tip.blocks.retain(|_, b| b.number > floor);
+        }
+        if let (Some(store), Some(a)) = (self.store.as_mut(), accepted) {
+            store.stage(a).map_err(io_err("block store"))?;
+        }
+        let s = &mut self.summary;
+        s.highest_passed = Some(number);
+        s.heights += 1;
+        s.run_heights += 1;
+        for c in order as usize..3 {
+            s.records[c] += 1;
+        }
+        if let Some(m) = &self.metrics {
+            m.head.store(number, Ordering::Relaxed);
+            m.blocks.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
+    }
 }

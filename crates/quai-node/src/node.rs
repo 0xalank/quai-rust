@@ -42,6 +42,9 @@ pub struct Options {
     pub to: Option<u64>,
     pub checkpoint_every: u64,
     pub commit_every: u64,
+    /// At the peers' head less the margin, follow the head through gossip
+    /// with go-quai's head choice (tip mode); otherwise poll by number.
+    pub gossip: bool,
 }
 
 /// SIGINT and SIGTERM set `stop`; the code is 130 or 143. A second signal
@@ -179,12 +182,16 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         } else {
             DialPolicy::Loopback
         };
+        // Gossip needs the public profile: listening, go-quai's validators
+        // and relay; publishing stays off.
+        let config = if o.gossip && o.public {
+            NetConfig::public(0)
+        } else {
+            NetConfig::read_only(policy)
+        };
         Arc::new(
-            PublicNode::launch(
-                NetConfig::read_only(policy),
-                libp2p::identity::Keypair::generate_ed25519(),
-            )
-            .map_err(|e| format!("p2p: {e}"))?,
+            PublicNode::launch(config, libp2p::identity::Keypair::generate_ed25519())
+                .map_err(|e| format!("p2p: {e}"))?,
         )
     };
     let mut source = PeerSource::start(
@@ -200,6 +207,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             inflight: 3,
             peers: peer_addrs,
             public: o.public,
+            handoff: o.gossip && o.public,
         },
         *log,
     )?;
@@ -217,9 +225,46 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     runtime.spawn(metrics::sample(metrics.clone(), stop.clone()));
     // Validate on this thread until the source ends, a check fails or a
     // signal arrives.
-    let result = processor.run(&mut source, log);
-    stop.store(true, Ordering::Relaxed);
+    let mut result = processor.run(&mut source, log);
     drop(source);
+    // At the peers' head: follow it through gossip.
+    if result.is_ok()
+        && o.gossip
+        && o.public
+        && processor.summary().end == End::Complete
+        && o.to.is_none()
+        && !stop.load(Ordering::Relaxed)
+    {
+        let stats = Arc::new(crate::tip::GossipStats::default());
+        match crate::tip::subscribe(
+            runtime.handle(),
+            node.clone(),
+            stop.clone(),
+            stats.clone(),
+            *log,
+        ) {
+            Ok(gossip) => {
+                let followed = crate::tip::follow(
+                    &mut processor,
+                    runtime.handle(),
+                    node.clone(),
+                    gossip,
+                    &stop,
+                    log,
+                );
+                match followed {
+                    Ok(t) => log.info(&format!(
+                        "tip: {} offered, {} accepted, {} rejected, {} fetched, {} reorgs ({} blocks, deepest {}), {} refused by the horizon; gossip {} blocks, {} workshares",
+                        t.offered, t.accepted, t.rejected, t.fetched, t.reorgs, t.reorged_blocks, t.deepest, t.refused,
+                        stats.blocks.load(Ordering::Relaxed), stats.workshares.load(Ordering::Relaxed)
+                    )),
+                    Err(e) => result = Err(e),
+                }
+            }
+            Err(e) => result = Err(e),
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
     let summary = match result {
         Ok(()) => processor.finish(log)?,
         Err(e) => {

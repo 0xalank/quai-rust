@@ -386,6 +386,7 @@ pub struct Snapshot {
 pub struct Live {
     current: RwLock<Arc<Snapshot>>,
     events: tokio::sync::broadcast::Sender<Hash>,
+    removed: tokio::sync::broadcast::Sender<Arc<quai_rpc::view::RemovedLogs>>,
 }
 impl Live {
     /// Publish a new head: a store snapshot that holds it and the state
@@ -415,7 +416,10 @@ impl Live {
         let c = self.current.read().unwrap_or_else(|e| e.into_inner());
         (c.head, c.head_hash)
     }
-
+    /// Announce the logs of blocks a reorg removed.
+    pub fn removed(&self, logs: quai_rpc::view::RemovedLogs) {
+        let _ = self.removed.send(Arc::new(logs));
+    }
     pub fn has_state(&self) -> bool {
         let c = self.current.read().unwrap_or_else(|e| e.into_inner());
         c.state.is_some()
@@ -671,6 +675,7 @@ impl ExportView {
         state: Option<Arc<HeadState>>,
     ) -> Result<(Self, Arc<Live>), String> {
         let (events, _) = tokio::sync::broadcast::channel(256);
+        let (removed, _) = tokio::sync::broadcast::channel(256);
         let snap = Arc::new(Snapshot {
             blocks: Arc::new(StoreBlocks {
                 reader,
@@ -684,6 +689,7 @@ impl ExportView {
         let live = Arc::new(Live {
             current: RwLock::new(snap.clone()),
             events,
+            removed,
         });
         Ok((Self::with_snapshot(chain, snap, Some(live.clone()))?, live))
     }
@@ -1321,7 +1327,11 @@ impl ChainView for ExportView {
     fn head_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
         self.live.as_ref().map(|l| l.events.subscribe())
     }
-
+    fn removed_logs(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<Arc<quai_rpc::view::RemovedLogs>>> {
+        self.live.as_ref().map(|l| l.removed.subscribe())
+    }
     fn pinned(&self) -> Option<Arc<dyn ChainView>> {
         self.live.as_ref()?;
         Some(Arc::new(Self {

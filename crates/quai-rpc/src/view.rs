@@ -85,6 +85,16 @@ pub struct ReceiptData {
     pub outbound_etxs: Vec<Transaction>,
 }
 
+/// The logs of a canonical block that a reorg removed (go-quai's
+/// `RemovedLogsEvent`), for filters and subscriptions.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemovedLogs {
+    pub block_hash: Hash,
+    pub block_number: u64,
+    /// (transaction hash, transaction index, log), in block order.
+    pub logs: Vec<(Hash, u64, LogData)>,
+}
+
 /// Why the view cannot answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ViewError {
@@ -224,6 +234,11 @@ pub trait ChainView: Send + Sync + 'static {
     /// New canonical heads, for filters and subscriptions. A view without a
     /// live head has none.
     fn head_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
+        None
+    }
+    /// Logs that reorgs removed from the canonical chain. A view without a
+    /// live head has none.
+    fn removed_logs(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<RemovedLogs>>> {
         None
     }
     /// Accept a signed transaction (`quai_sendRawTransaction`). A view

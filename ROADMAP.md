@@ -90,9 +90,19 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        threads, idle-ish), 15.6 under load 20. Proof-of-work is about 94% of the
        time: about 8.6 ProgPoW light checks per height (block plus
        workshares). Peak memory 208 MB.
-       Next: keep the replay state on disk (it is in memory now), and add a
-       peer block source through `quai_network::public` so that replay is not
-       limited by the Go node's sync speed.
+       Done (`4828e14`): `--state` runs on the lazy World, UTXO, ETX and lockup
+       state in a quai-store database (new version every 1,000 heights);
+       redemption and trim history in `past.redb`, pruned to 1 year / 84 days;
+       a compacted checkpoint every 10,000 heights and at the end (atomic
+       writes, SHA-256, roots checked against the header on `--resume`); only
+       the last two checkpoints are kept. `scripts/mainnet/replay_loop.sh` runs
+       one pass: live export, then `replay --resume --state`. Peak RSS about
+       200 MB, flat with chain length.
+       Scale limits: `past.redb` grows about 2.5 KB per height (about 16 GB
+       over the 1-year window); compaction copies the whole live state in one
+       transaction and needs chunking at mainnet scale.
+       Next: a peer block source (`peer-export`) so that replay is not limited
+       by the Go node's sync speed.
 4. [ ] Fix the first mismatch, then run again. Milestones are the fork heights
        in go-quai `params/protocol_params.go`: KawPow 1,171,500, Singularity
        1,530,500, ShaEquivalentDifficulty 1,755,000, ConversionStability

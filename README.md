@@ -27,9 +27,10 @@ a validating or synchronizing node.
 | `quai-primitives` | Work headers, transactions, Protobuf/RLP codecs, commitments, signatures |
 | `quai-execution` | Intrinsic gas, Qi input checks, ETX queue roots, EVM frames and settlement |
 | `quai-consensus` | ProgPoW/KAWPOW, auxiliary proofs, difficulty and PoEM rules |
-| `quai-network` | Application framing, topics and optional private libp2p transport |
+| `quai-network` | Application framing, topics, optional private libp2p transport and a read-only public mode (`examples/mainnet-probe.rs`) |
 | `quai-store` | Versioned materialized reads and the imported frozen view |
 | `quai-rpc` | Frozen-view JSON-RPC service and profiling example |
+| `quai-node` | Node binary; `quai-node replay` checks and executes mainnet blocks from a QEX1 export (see `ROADMAP.md`) |
 
 See [the protocol notice](crates/quai-primitives/NOTICE.md) for attribution.
 

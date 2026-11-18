@@ -6,7 +6,7 @@ use crate::{
     Hash,
 };
 use k256::{
-    ecdsa::{RecoveryId, Signature as EcdsaSignature, VerifyingKey},
+    ecdsa::Signature as EcdsaSignature,
     elliptic_curve::{sec1::ToEncodedPoint, PrimeField},
     ProjectivePoint, PublicKey, Scalar,
 };
@@ -392,17 +392,19 @@ impl Transaction {
             Kind::External(v) => Ok(v.sender),
             Kind::Qi(_) => Err("Qi has no single ECDSA sender".into()),
             Kind::Quai(v) => {
-                let sig = ecdsa(v)?;
+                ecdsa(v)?;
                 if v.v.len() > 1 {
                     return Err("recovery value exceeds sender domain".into());
                 }
-                let rec = RecoveryId::try_from(v.v.last().copied().unwrap_or(0))
-                    .map_err(|_| "invalid recovery bit")?;
-                let key = VerifyingKey::recover_from_prehash(&self.signing_hash(), &sig, rec)
-                    .map_err(|_| "sender recovery failed")?;
-                Ok(fixed(
-                    &keccak(&key.to_encoded_point(false).as_bytes()[1..])[12..],
-                ))
+                let bit = v.v.last().copied().unwrap_or(0);
+                let key = crate::recover::recover_pubkey(
+                    &self.signing_hash(),
+                    &fixed::<32>(&v.r),
+                    &fixed::<32>(&v.s),
+                    bit,
+                )
+                .ok_or("sender recovery failed")?;
+                Ok(fixed(&keccak(&key)[12..]))
             }
         }
     }

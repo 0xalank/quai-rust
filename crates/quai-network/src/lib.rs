@@ -19,7 +19,10 @@ use std::{
     io::{self, Read, Write},
 };
 pub const STREAM_PROTOCOL: &str = "/quai/1.0.0";
-pub const DHT_PROTOCOL: &str = "/quai";
+/// go-quai `kaddht.ProtocolPrefix("/quai")`: go-libp2p-kad-dht v0.25.2 appends
+/// `/kad/1.0.0`. Both profiles use it, so the private profile's Kademlia can
+/// also talk to a go-quai node.
+pub const DHT_PROTOCOL: &str = "/quai/kad/1.0.0";
 pub const MAX_FRAME_BYTES: usize = 3 << 20;
 #[derive(Debug)]
 pub enum Error {
@@ -89,21 +92,42 @@ pub fn write_envelope(writer: &mut impl Write, envelope: &p::QuaiMessage) -> Res
     decode_envelope(&bytes)?;
     write_frame(writer, &bytes)
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The data types of go-quai gossip topics (`p2p/node/pubsubManager/utils.go`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TopicKind {
+    /// `C_headerType`: `WorkObjectHeaderView`.
     Headers,
+    /// `C_workObjectType`: `WorkObjectBlockView`.
     Blocks,
+    /// `C_workObjectShareType`: `WorkObjectShareView`.
     Workshares,
+    /// `C_auxTemplateType`: `AuxTemplate`.
     AuxTemplate,
+    /// `C_transactionType`. go-quai v0.57.0 defines the name but `NewTopic`
+    /// and `TopicFromString` refuse it, so no node subscribes to it and its
+    /// validator rejects every message: transactions travel in workshares.
+    Transactions,
 }
 impl TopicKind {
-    fn suffix(self) -> &'static str {
+    pub const fn suffix(self) -> &'static str {
         match self {
             Self::Headers => "headers",
             Self::Blocks => "blocks",
             Self::Workshares => "worksharev2",
             Self::AuxTemplate => "auxtemplate",
+            Self::Transactions => "transactions",
         }
+    }
+    pub fn from_suffix(suffix: &str) -> Option<Self> {
+        [
+            Self::Headers,
+            Self::Blocks,
+            Self::Workshares,
+            Self::AuxTemplate,
+            Self::Transactions,
+        ]
+        .into_iter()
+        .find(|k| k.suffix() == suffix)
     }
 }
 pub fn topic(genesis: &Hash, location: &[u8], kind: TopicKind) -> Result<String, Error> {

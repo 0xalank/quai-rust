@@ -568,6 +568,7 @@ fn collect(
                     source,
                     topic,
                     data,
+                    ..
                 } => {
                     *st.gossip_seen.entry(topic.clone()).or_default() += 1;
                     let Some(kind) = topics.get(&topic) else {
@@ -606,6 +607,8 @@ fn collect(
                     }
                     st.kad.push(v);
                 }
+                // The read-only profile has no slots, relays or NAT checks.
+                _ => {}
             }
         }
     })

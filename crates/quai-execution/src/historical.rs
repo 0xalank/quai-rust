@@ -18,15 +18,29 @@ use quai_primitives::{
 };
 use std::collections::BTreeSet;
 const ALLOCATIONS: &[u8] = include_bytes!("../assets/allocations.bin");
+/// Unlock height (8 bytes), address (20), flags (1), amount (32).
 const RECORD: usize = 61;
-fn allocations() -> &'static [u8] {
-    assert_eq!(&ALLOCATIONS[..14], b"QUAI-ALLOCS-1\n");
-    let n = u32::from_be_bytes(ALLOCATIONS[14..18].try_into().unwrap()) as usize;
-    assert_eq!(ALLOCATIONS.len(), 18 + n * RECORD);
-    &ALLOCATIONS[18..]
-}
-fn allocation_height(b: &[u8]) -> u64 {
-    u64::from_be_bytes(b[..8].try_into().unwrap())
+/// The records after the 18-byte header (magic and record count). The build
+/// checks the layout, so a malformed asset cannot reach a block.
+const RECORDS: &[[u8; RECORD]] = {
+    let (header, records) = ALLOCATIONS.split_at(18);
+    let magic = b"QUAI-ALLOCS-1\n";
+    let mut i = 0;
+    while i < magic.len() {
+        assert!(header[i] == magic[i], "allocations.bin magic");
+        i += 1;
+    }
+    let n = u32::from_be_bytes([header[14], header[15], header[16], header[17]]) as usize;
+    let (rows, rest) = records.as_chunks::<RECORD>();
+    assert!(
+        rows.len() == n && rest.is_empty(),
+        "allocations.bin record count"
+    );
+    rows
+};
+fn allocation_height(row: &[u8; RECORD]) -> u64 {
+    let [b0, b1, b2, b3, b4, b5, b6, b7, ..] = *row;
+    u64::from_be_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
 }
 /// Indexed by unlock height, so ordinary blocks examine no allocation records.
 pub fn allocate(
@@ -41,21 +55,11 @@ pub fn allocate(
         return Ok(0);
     }
     let unlock = if height == 1 { 0 } else { height };
-    let b = allocations();
-    let count = b.len() / RECORD;
-    let mut lo = 0;
-    let mut hi = count;
-    while lo < hi {
-        let m = (lo + hi) / 2;
-        if allocation_height(&b[m * RECORD..]) < unlock {
-            lo = m + 1
-        } else {
-            hi = m
-        }
-    }
+    // The rows are sorted by unlock height (test `allocation_rows_are_sorted`).
+    let first = RECORDS.partition_point(|row| allocation_height(row) < unlock);
     let mut staged = world.clone();
     let mut added = 0;
-    for row in b[lo * RECORD..].chunks_exact(RECORD) {
+    for row in RECORDS.iter().skip(first) {
         if allocation_height(row) != unlock {
             break;
         }
@@ -65,7 +69,7 @@ pub fn allocate(
         {
             continue;
         }
-        let address: Address = row[8..28].try_into().unwrap();
+        let address: Address = std::array::from_fn(|i| row[8 + i]);
         if address[0] != 0 {
             return Err(Error::Invalid("allocation scope"));
         }
@@ -203,4 +207,15 @@ pub fn trim(
     }
     *state = staged;
     Ok((trimmed, removed))
+}
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    #[test]
+    fn allocation_rows_are_sorted() {
+        assert_eq!(RECORDS.len(), 54_752);
+        assert!(RECORDS
+            .windows(2)
+            .all(|w| allocation_height(&w[0]) <= allocation_height(&w[1])));
+    }
 }

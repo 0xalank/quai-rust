@@ -109,8 +109,12 @@ pub fn check_input_values(
         if locked(&utxo.lock, context.block_height) {
             return Err("locked UTXO".into());
         }
-        // Transaction decoding already validated and normalized the SEC1 key.
-        let address: [u8; 20] = keccak(&input.public_key[1..])[12..].try_into().unwrap();
+        // Transaction decoding stores every input key as a 65-byte uncompressed
+        // SEC1 point; the address hashes the point without its tag byte.
+        let Some((_, point)) = input.public_key.split_first() else {
+            return Err("invalid input public key".into());
+        };
+        let address = crate::evm::word::low_address(keccak(point));
         if address[1] & 0x80 == 0 {
             return Err("UTXO owner is not in Qi ledger".into());
         }

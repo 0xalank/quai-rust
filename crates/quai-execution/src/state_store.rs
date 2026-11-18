@@ -414,7 +414,7 @@ pub fn compact(
         // account_record: address, nonce, balance, storage size, code hash,
         // storage root, slot count.
         need(value.len() == 164, "account record width")?;
-        let root: Hash = value[124..156].try_into().unwrap();
+        let root: Hash = crate::slice::field(value, 124)?;
         if root != mpt::empty_root() {
             storage.push(root);
         }

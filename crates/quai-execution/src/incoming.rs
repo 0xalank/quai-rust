@@ -3,7 +3,7 @@ use crate::{
     economic_state::{self as economy, CONVERSION_LOCK, LOCK_PERIODS},
     evm::{
         state::World,
-        word::{bytes, from_bytes, Word},
+        word::{bytes, from_bytes, low_u64, Word},
     },
     lockup,
     qi::{OutPoint, Utxo, DENOMINATIONS},
@@ -112,7 +112,7 @@ fn emit_utxos(
         let amount = Word::from_u64(DENOMINATIONS[denomination]);
         let count = remainder.wrapping_div(&amount);
         remainder = remainder.wrapping_rem(&amount);
-        let count = u64::from_be_bytes(bytes(count)[24..].try_into().unwrap());
+        let count = low_u64(count);
         for _ in 0..count {
             if index == u16::MAX || charge_each && *gas < 9000 {
                 if strict {
@@ -140,6 +140,16 @@ fn emit_utxos(
         }
     }
     Ok((total, success))
+}
+/// The owner contract (bytes 1..21) and delegate (bytes 21..41 of the 73-byte
+/// form) of a coinbase ETX that pays into a lockup contract.
+fn coinbase_lockup(data: &[u8]) -> Option<(Address, Address)> {
+    let owner = crate::slice::field(data, 1).ok()?;
+    match data.len() {
+        53 => Some((owner, [0; 20])),
+        73 => Some((owner, crate::slice::field(data, 21).ok()?)),
+        _ => None,
+    }
 }
 fn log(r: &mut IncomingReceipt, to: Address, topic: &[u8], total: Word) {
     r.logs.push(Log {
@@ -281,8 +291,7 @@ fn inner(
                     )?;
                     added = total;
                 }
-            } else if matches!(t.data.len(), 53 | 73) {
-                let owner: Address = t.data[1..21].try_into().unwrap();
+            } else if let Some((owner, delegate)) = coinbase_lockup(&t.data) {
                 if !crate::evm::calls::local(&owner, c.block.vm.location) {
                     return Err(Error::Invalid("coinbase owner scope"));
                 }
@@ -291,11 +300,6 @@ fn inner(
                 {
                     status = 0;
                 } else {
-                    let delegate = if t.data.len() == 73 {
-                        t.data[21..41].try_into().unwrap()
-                    } else {
-                        [0; 20]
-                    };
                     let key = lockup::Key {
                         owner,
                         beneficiary: t.to,
@@ -321,10 +325,7 @@ fn inner(
         r = Some(v);
     } else if t.etx_type == 5 {
         let sender = if !qi {
-            if t.data.len() < 22 {
-                return Err(Error::Invalid("conversion refund data"));
-            }
-            t.data[2..22].try_into().unwrap()
+            crate::slice::field(&t.data, 2).map_err(|_| Error::Invalid("conversion refund data"))?
         } else {
             t.sender
         };

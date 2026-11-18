@@ -472,6 +472,7 @@ type env struct {
 	sharers  []*sharer
 	signer   types.Signer
 	config   obj
+	sync     bool
 	// The start head and UTXO set, and the genesis block's name (or nil).
 	startHead, startUtxos string
 	genesisName           interface{}
@@ -597,6 +598,7 @@ func (e *env) start(headName, utxoSet string, conf core.TxPoolConfig, tracked ..
 		locals = append(locals, hx(l[:]))
 	}
 	e.config["locals"] = locals
+	e.sync = conf.SyncTxWithReturn && len(conf.SharingClientsEndpoints) > 0
 	e.startHead = headName
 	e.startUtxos = utxoSet
 	e.snapshot(obj{"op": "start"})
@@ -630,7 +632,20 @@ func (e *env) ask(method string, params []interface{}) obj {
 			result[k] = v
 		}
 	}
+	if e, ok := result["error"].(map[string]interface{}); ok {
+		if m, ok := e["message"].(string); ok {
+			e["message"] = protoSpace(m)
+		}
+	}
 	return result
+}
+
+// protoSpace undoes protobuf-go's deliberate instability: its errors start
+// with "proto:" and a regular or a non-breaking space, chosen per binary
+// (internal/detrand). go-quai builds differ; the vectors use the regular
+// space.
+func protoSpace(m string) string {
+	return strings.ReplaceAll(m, "proto:\u00a0", "proto: ")
 }
 
 // sender is the sender and nonce of a Quai transaction as tx.Hash() recovers
@@ -710,6 +725,7 @@ func (e *env) submit(method, op string, raw []byte, note string) obj {
 		}
 	}
 	step := obj{"op": op, "raw": hx(raw), "answer": answer, "note": note}
+	e.awaitShared(!failed)
 	tx := new(types.Transaction)
 	if pt := new(types.ProtoTransaction); proto.Unmarshal(raw, pt) == nil && tx.ProtoDecode(pt, loc) == nil && tx.Type() == types.QuaiTxType {
 		step["size"] = uint64(tx.Size())
@@ -742,7 +758,7 @@ func (e *env) remotes(raws [][]byte, note string) {
 		if err == nil {
 			out = append(out, nil)
 		} else {
-			out = append(out, err.Error())
+			out = append(out, protoSpace(err.Error()))
 		}
 		hexes = append(hexes, hx(raws[i]))
 	}
@@ -803,17 +819,20 @@ func (e *env) headFrom(ghost string, gs head, name, utxoSet string, note string)
 
 // ageBeat, ageTx and ageQi move a time back; evict and expireQi wait for the
 // production loops (every 2 ms) to reach a steady state.
+// An aged item is evicted by the next pass of the 2 ms loop, which can
+// come before or after a snapshot: aging steps record no pool. The evict
+// and expire_qi steps record the settled pool.
 func (e *env) ageBeat(k key, seconds int64) {
 	ok := core.OracleAgeBeat(e.pool, k.internal(), time.Duration(seconds)*time.Second)
-	e.snapshot(obj{"op": "age_beat", "account": hx(k.bytes()), "seconds": seconds, "found": ok})
+	e.steps = append(e.steps, obj{"op": "age_beat", "account": hx(k.bytes()), "seconds": seconds, "found": ok})
 }
 func (e *env) ageTx(h common.Hash, seconds int64) {
 	ok := core.OracleAgeTx(e.pool, h, time.Duration(seconds)*time.Second)
-	e.snapshot(obj{"op": "age_tx", "hash": h.Hex(), "seconds": seconds, "found": ok})
+	e.steps = append(e.steps, obj{"op": "age_tx", "hash": h.Hex(), "seconds": seconds, "found": ok})
 }
 func (e *env) ageQi(h common.Hash, seconds int64) {
 	ok := core.OracleAgeQi(e.pool, h, time.Duration(seconds)*time.Second)
-	e.snapshot(obj{"op": "age_qi", "hash": h.Hex(), "seconds": seconds, "found": ok})
+	e.steps = append(e.steps, obj{"op": "age_qi", "hash": h.Hex(), "seconds": seconds, "found": ok})
 }
 func (e *env) evict() {
 	time.Sleep(150 * time.Millisecond)
@@ -834,13 +853,43 @@ func (e *env) rpc(method string, params ...interface{}) obj {
 	return answer
 }
 
-// shared waits briefly for asynchronous sharing requests and adds them to
-// the step.
+// awaitShared waits for the asynchronous sharing requests of a submit: in
+// sync mode each other client gets what the first one got; in async mode
+// each client gets the transaction when the local pool took it.
+func (e *env) awaitShared(accepted bool) {
+	if len(e.sharers) == 0 {
+		return
+	}
+	count := func(s *sharer) int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return len(s.got)
+	}
+	want := 0
+	if e.sync {
+		want = count(e.sharers[0])
+	} else if accepted {
+		want = 1
+	}
+	for i := 0; i < 600; i++ {
+		done := true
+		for _, s := range e.sharers {
+			if count(s) < want {
+				done = false
+			}
+		}
+		if done {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// shared adds the requests the sharing clients received to the step.
 func (e *env) shared(step obj) {
 	if len(e.sharers) == 0 {
 		return
 	}
-	time.Sleep(120 * time.Millisecond)
 	got := []interface{}{}
 	for i, s := range e.sharers {
 		for _, r := range s.take() {
@@ -894,6 +943,10 @@ func (e *env) out() obj {
 
 func main() {
 	log.Global.SetOutput(io.Discard)
+	if len(os.Args) > 2 && os.Args[1] == "live" {
+		live(os.Args[2])
+		return
+	}
 	scenarios := []func() obj{}
 	scenarios = append(scenarios, quaiScenarios()...)
 	scenarios = append(scenarios, qiScenarios()...)
@@ -902,6 +955,6 @@ func main() {
 	for _, s := range scenarios {
 		out = append(out, s())
 	}
-	must(json.NewEncoder(os.Stdout).Encode(obj{"reference_revision": referenceRevision, "location": []int{0, 0}, "chain_id": 9, "rpc_tx_fee_cap": 10000, "scenarios": out, "scope": "Production core.TxPool (core/tx_pool.go, core/tx_list.go) and quaiapi pool handlers behind rpc.Server over a test chain: committed state per head, the UTXO set in the database, work objects with transactions. Runs (runReorg) at explicit steps instead of the 1-second ticker; eviction and Qi expiry by the production loops after aging. Sharing clients are local httptest servers. Fixed-seed keys; no network, no real funds."}))
+	must(json.NewEncoder(os.Stdout).Encode(obj{"reference_revision": referenceRevision, "location": []int{0, 0}, "chain_id": 9, "rpc_tx_fee_cap": 10000, "scenarios": out, "scope": "Production core.TxPool (core/tx_pool.go, core/tx_list.go) and quaiapi pool handlers behind rpc.Server over a test chain: committed state per head, the UTXO set in the database, work objects with transactions. Runs (runReorg) at explicit steps instead of the 1-second ticker; eviction and Qi expiry by the production loops after aging. Sharing clients are local httptest servers. Fixed-seed keys; no network, no real funds. protobuf-go's per-binary non-breaking space after 'proto:' is written as a regular space."}))
 }
 

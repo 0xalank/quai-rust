@@ -20,11 +20,13 @@
 //! after a re-heap, the account order of the pool limiter's last step).
 //! Rust breaks those ties by address or by insertion order.
 pub mod big;
+pub mod journal;
 pub mod list;
 pub mod qi;
 pub mod service;
 pub mod sharing;
 pub mod tx;
+pub mod wire;
 
 use list::{num_slots, Lookup, Lru, PricedList, Tx, TxList};
 use quai_primitives::Hash;
@@ -78,6 +80,9 @@ pub struct Config {
     pub sharing_clients: Vec<String>,
     /// `--rpc.txfeecap` in QUAI (0: no cap).
     pub rpc_tx_fee_cap: f64,
+    /// The journal of local transactions (go-quai: `transactions.rlp` in
+    /// the data directory). None: no journal.
+    pub journal: Option<std::path::PathBuf>,
 }
 const SECOND: u64 = 1_000_000_000;
 impl Default for Config {
@@ -99,6 +104,7 @@ impl Default for Config {
             reorg_frequency: SECOND,
             sharing_clients: vec![],
             rpc_tx_fee_cap: 10000.0,
+            journal: None,
         }
     }
 }
@@ -339,6 +345,10 @@ pub struct Pool {
     priced: PricedList,
     /// The accounts the adds since the last run reported for promotion.
     dirty: Option<BTreeSet<Address>>,
+    /// Local transactions to append to the journal (`journalTx`), when
+    /// journaling.
+    pub journaling: bool,
+    journal_pending: Vec<Tx>,
 }
 
 /// The pool's content for snapshots and the RPC.
@@ -376,6 +386,8 @@ impl Pool {
             all: Lookup::default(),
             priced: PricedList::default(),
             dirty: None,
+            journaling: false,
+            journal_pending: vec![],
             chain: chain.clone(),
             config,
         };
@@ -539,11 +551,12 @@ impl Pool {
                 self.priced.removed(1, &self.all);
             }
             self.all.add(tx.clone(), is_local);
-            self.priced.put(tx, is_local);
+            self.priced.put(tx.clone(), is_local);
+            self.journal_tx(internal, &tx);
             self.beats.insert(internal, now);
             return Ok(old.is_some());
         }
-        let replaced = self.enqueue_tx(tx, is_local, true, now)?;
+        let replaced = self.enqueue_tx(tx.clone(), is_local, true, now)?;
         if local && !self.locals.contains(&internal) {
             self.locals.insert(internal);
             let locals = self.locals.clone();
@@ -556,7 +569,32 @@ impl Pool {
             });
             self.priced.removed(migrated, &self.all);
         }
+        self.journal_tx(internal, &tx);
         Ok(replaced)
+    }
+
+    /// `journalTx`: a local account's transaction goes to the journal.
+    fn journal_tx(&mut self, from: Address, tx: &Tx) {
+        if self.journaling && self.locals.contains(&from) {
+            self.journal_pending.push(tx.clone());
+        }
+    }
+    /// The transactions to append to the journal since the last call.
+    pub fn take_journal(&mut self) -> Vec<Tx> {
+        std::mem::take(&mut self.journal_pending)
+    }
+    /// `local`: the transactions of local accounts, pending then queued.
+    pub fn local(&self) -> Vec<Tx> {
+        let mut out = vec![];
+        for a in &self.locals {
+            if let Some(l) = self.pending.get(a) {
+                out.extend(l.flatten());
+            }
+            if let Some(l) = self.queue.get(a) {
+                out.extend(l.flatten());
+            }
+        }
+        out
     }
 
     /// `enqueueTx`.

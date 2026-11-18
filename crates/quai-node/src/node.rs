@@ -134,7 +134,14 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     let pool = if o.stateless {
         None
     } else {
-        crate::cli::start_pool(&mut view, &o.txpool, runtime.handle(), stop.clone(), *log)?
+        crate::cli::start_pool(
+            &mut view,
+            &o.txpool,
+            &o.datadir,
+            runtime.handle(),
+            stop.clone(),
+            *log,
+        )?
     };
     let view = Arc::new(view);
     let shutdown = {

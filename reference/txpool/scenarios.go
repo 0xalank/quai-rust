@@ -206,6 +206,18 @@ func quaiValidate() obj {
 	e.send([]byte{0x08}, "a truncated varint field")
 	e.send([]byte{0x0a, 0x05, 0x01}, "a truncated length-delimited field")
 	e.send([]byte{}, "empty input")
+	// protobuf-go keeps unknown and mistyped fields as unknown bytes.
+	e.send(append(payment(bob, 1, gwei(1)), 0x98, 0x01, 0x05), "field 19 (parent hash) as a varint: unknown to Go")
+	fieldTag := uint64(1<<29+1) << 3
+	tagBytes := []byte{}
+	for ; fieldTag >= 0x80; fieldTag >>= 7 {
+		tagBytes = append(tagBytes, byte(fieldTag)|0x80)
+	}
+	tagBytes = append(tagBytes, byte(fieldTag), 0x01)
+	e.send(append(payment(bob, 2, gwei(1)), tagBytes...), "field number 2^29+1")
+	e.send(append(payment(bob, 3, gwei(1)), 0xf3, 0x01, 0x08, 0x01, 0xf4, 0x01), "an unknown group")
+	e.send([]byte{0x0a, 0x00}, "the type field as bytes")
+	e.send(append(payment(bob, 4, gwei(1)), 0x0c), "a stray end-group tag")
 	e.sendText("0xzz", "not hex")
 	e.sendText("1234", "no 0x prefix")
 	e.sendText("0x123", "odd length")

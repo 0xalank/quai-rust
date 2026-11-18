@@ -4,6 +4,7 @@
 //! and the pool's loops: a run every second (`ReorgFrequency`), a reset on
 //! every new head, eviction every minute, Qi expiry every 10 minutes and
 //! the pool limiter every 30 seconds.
+use super::journal::{self, Journal};
 use super::list::Lru;
 use super::sharing;
 use super::tx::{Body, PoolTx};
@@ -36,6 +37,7 @@ pub struct Service {
     remote: Mutex<Lru<Hash, Tx>>,
     runtime: Option<tokio::runtime::Handle>,
     log: Option<Log>,
+    journal: Option<Journal>,
 }
 
 /// `checkTxFee`: gas price times gas above the cap (in QUAI) is refused.
@@ -76,7 +78,39 @@ impl Service {
             .map(|u| sharing::Client::new(u).map(Arc::new))
             .collect::<Result<Vec<_>, _>>()?;
         let now = clock();
-        let pool = Pool::new(config.clone(), chain.clone(), now);
+        let mut pool = Pool::new(config.clone(), chain.clone(), now);
+        // NewTxPool: load the journal of local transactions (without
+        // journaling them again), then rewrite it with what the pool kept.
+        let journal = config.journal.as_deref().map(Journal::new);
+        if let Some(j) = &journal {
+            let records = j.read();
+            let local = !config.no_locals;
+            let mut loaded = 0;
+            for batch in records.chunks(journal::LOAD_BATCH) {
+                let txs: Vec<Tx> = batch
+                    .iter()
+                    .filter_map(|r| PoolTx::decode(r, now).ok().map(Arc::new))
+                    .collect();
+                loaded += pool
+                    .add_txs(txs, local, now)
+                    .iter()
+                    .filter(|r| r.is_ok())
+                    .count();
+            }
+            if let Err(e) = j.rotate(&pool.local()) {
+                if let Some(l) = &log {
+                    l.warn(&format!("txpool: journal {}: {e}", j.path().display()));
+                }
+            }
+            if let Some(l) = &log {
+                l.info(&format!(
+                    "txpool: journal {}: {} transactions, {loaded} added",
+                    j.path().display(),
+                    records.len()
+                ));
+            }
+            pool.journaling = true;
+        }
         Ok(Self {
             sync_tx_with_return: config.sync_tx_with_return,
             fee_cap: config.rpc_tx_fee_cap,
@@ -88,7 +122,26 @@ impl Service {
             remote: Mutex::new(Lru::new(MAX_REMOTE_QUEUE)),
             runtime,
             log,
+            journal,
         })
+    }
+    /// Append what the pool journaled since the last call.
+    fn flush_journal(&self, pool: &mut Pool) {
+        let txs = pool.take_journal();
+        if let (Some(j), false) = (&self.journal, txs.is_empty()) {
+            if let Err(e) = j.insert(&txs) {
+                self.warn(&format!("txpool: journal {}: {e}", j.path().display()));
+            }
+        }
+    }
+    /// `journal.rotate(pool.local())`.
+    pub fn rotate_journal(&self) {
+        if let Some(j) = &self.journal {
+            let local = self.pool().local();
+            if let Err(e) = j.rotate(&local) {
+                self.warn(&format!("txpool: journal {}: {e}", j.path().display()));
+            }
+        }
     }
     pub fn now(&self) -> u64 {
         (self.clock)()
@@ -120,7 +173,12 @@ impl Service {
     /// `TxPool.SendTxToSharingClients`.
     fn send_to_sharing_clients(&self, tx: Tx, now: u64) -> Result<(), String> {
         if !self.sync_tx_with_return || self.clients.is_empty() {
-            self.pool().add_local(tx.clone(), now)?;
+            {
+                let mut pool = self.pool();
+                let added = pool.add_local(tx.clone(), now);
+                self.flush_journal(&mut pool);
+                added?;
+            }
             self.forward(&self.clients, &tx);
             return Ok(());
         }
@@ -181,18 +239,25 @@ impl Service {
             keys.iter().filter_map(|k| q.remove(k)).collect()
         };
         let now = self.now();
-        self.pool().add_remotes(txs, now)
+        let mut pool = self.pool();
+        let results = pool.add_remotes(txs, now);
+        self.flush_journal(&mut pool);
+        results
     }
 
     /// One scheduled run.
     pub fn run(&self) {
         let now = self.now();
-        self.pool().run_reorg(None, now);
+        let mut pool = self.pool();
+        pool.run_reorg(None, now);
+        self.flush_journal(&mut pool);
     }
     /// The reset of a new head.
     pub fn reset(&self, old: Option<Arc<BlockData>>, new: Arc<BlockData>) {
         let now = self.now();
-        self.pool().run_reorg(Some((old, new)), now);
+        let mut pool = self.pool();
+        pool.run_reorg(Some((old, new)), now);
+        self.flush_journal(&mut pool);
     }
 
     /// Start the loops on `runtime`. `heads` are new canonical head
@@ -248,6 +313,7 @@ impl Service {
                 s.pool().limit(now);
             }),
         );
+        every(journal::REJOURNAL, Box::new(|s| s.rotate_journal()));
         if let Some(mut heads) = heads {
             let svc = self.clone();
             runtime.spawn(async move {

@@ -581,8 +581,11 @@ fn replay(s: &Value, rt: &tokio::runtime::Runtime, tally: &mut Tally, failures: 
             want.sort_by_key(key);
             check("shared", Value::Array(got), &Value::Array(want));
         }
-        let pool = snapshot(&svc, &step["pool"]);
-        check("pool", pool, &step["pool"]);
+        // Aging steps record no pool (Go's 2 ms loops may act at once).
+        if let Some(want) = step.get("pool") {
+            let pool = snapshot(&svc, want);
+            check("pool", pool, want);
+        }
         let entry = tally
             .entry((family.clone(), op.to_string()))
             .or_insert((0, 0));
@@ -630,4 +633,156 @@ fn txpool_matches_go_oracle() {
         total.0
     );
     let _ = txpool::TX_MAX_SIZE;
+}
+
+/// The chain and alice's queued transactions (nonces 2 to 6) of the
+/// quai-account-queue scenario.
+fn account_queue() -> (Arc<Chain>, Vec<Vec<u8>>) {
+    let v = corpus();
+    let s = v["scenarios"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "quai-account-queue")
+        .unwrap()
+        .clone();
+    let raws = s["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|st| st["op"] == "send")
+        .take(5)
+        .map(|st| raw(&st["raw"]))
+        .collect();
+    (Arc::new(chain(&s)), raws)
+}
+
+/// go-quai's pool limiter (every 30 s) above GlobalQueue: `Cap(len -
+/// AccountQueue)` keeps len - AccountQueue transactions of each account
+/// (none when an account has no more than AccountQueue), then whole
+/// accounts go while the queue is still at or above GlobalQueue. Go runs it
+/// on a 30-second ticker that the oracle cannot time, so this pins the
+/// port's reading of `poolLimiterGoroutine`.
+#[test]
+fn pool_limiter_follows_go() {
+    let (chain, raws) = account_queue();
+    let config = Config {
+        global_queue: 2,
+        account_queue: 3,
+        ..Config::default()
+    };
+    let now = 1_000_000 * 1_000_000_000u64;
+    let svc = Service::new(config, chain, Box::new(move || now), None, None).unwrap();
+    let mut pool = svc.pool();
+    let txs: Vec<_> = raws
+        .iter()
+        .map(|r| Arc::new(PoolTx::decode(r, now).unwrap()))
+        .collect();
+    assert!(pool.add_remotes(txs, now).iter().all(|e| e.is_ok()));
+    assert_eq!(pool.stats(), (0, 5, 0));
+    // 5 > 2: alice keeps 5 - 3 = 2, then 2 is not below 2 and alice goes.
+    pool.limit(now);
+    assert_eq!(pool.stats(), (0, 0, 0));
+    // Below the limit nothing happens.
+    let txs: Vec<_> = raws[..2]
+        .iter()
+        .map(|r| Arc::new(PoolTx::decode(r, now).unwrap()))
+        .collect();
+    pool.add_remotes(txs, now);
+    pool.limit(now);
+    assert_eq!(pool.stats(), (0, 2, 0));
+    assert_eq!(pool.snapshot().slots, 2);
+}
+
+/// `core.Core.AddRemotes`: gossip transactions wait in an LRU by hash and
+/// enter the pool as one `AddRemotes` batch, oldest first; a repeated hash
+/// moves to the newest place.
+#[test]
+fn remote_queue_drains_oldest_first() {
+    let (chain, raws) = account_queue();
+    let now = 1_000_000 * 1_000_000_000u64;
+    let svc = Service::new(Config::default(), chain, Box::new(move || now), None, None).unwrap();
+    let txs: Vec<_> = raws
+        .iter()
+        .map(|r| Arc::new(PoolTx::decode(r, now).unwrap()))
+        .collect();
+    svc.add_remotes(vec![txs[1].clone(), txs[0].clone()]);
+    svc.add_remotes(vec![txs[1].clone()]);
+    let results = svc.drain_remotes();
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(|r| r.is_ok()));
+    assert!(svc.drain_remotes().is_empty());
+    // Both are queued (nonce gap) as remotes.
+    let s = svc.pool().snapshot();
+    assert_eq!((s.remote_count, s.local_count), (2, 0));
+}
+
+/// The transactions of a gossiped workshare view reach the pool decoded as
+/// go-quai decodes them.
+#[test]
+fn workshare_transactions_are_extracted() {
+    use prost::Message;
+    use quai_primitives::schema::block::{
+        ProtoTransaction, ProtoTransactions, ProtoWorkObject, ProtoWorkObjectBody,
+        ProtoWorkObjectShareView,
+    };
+    let (_, raws) = account_queue();
+    let txs = raws
+        .iter()
+        .map(|r| ProtoTransaction::decode(r.as_slice()).unwrap())
+        .collect();
+    let view = ProtoWorkObjectShareView {
+        work_object: Some(ProtoWorkObject {
+            wo_body: Some(ProtoWorkObjectBody {
+                transactions: Some(ProtoTransactions { transactions: txs }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    };
+    let got = quai_node::tip::workshare_transactions(&view.encode_to_vec(), 7);
+    assert_eq!(got.len(), 5);
+    for (tx, r) in got.iter().zip(&raws) {
+        assert_eq!(tx.hash, PoolTx::decode(r, 7).unwrap().hash);
+    }
+    assert!(quai_node::tip::workshare_transactions(&[0xff], 7).is_empty());
+}
+
+/// go-quai's journal: local transactions survive a restart (load, rotate,
+/// append); remote ones do not.
+#[test]
+fn journal_keeps_local_transactions_across_restarts() {
+    let (chain, raws) = account_queue();
+    let dir = std::env::temp_dir().join(format!("quai-txpool-journal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("transactions.journal");
+    let config = Config {
+        journal: Some(path.clone()),
+        ..Config::default()
+    };
+    let now = 1_000_000 * 1_000_000_000u64;
+    let svc = Service::new(
+        config.clone(),
+        chain.clone(),
+        Box::new(move || now),
+        None,
+        None,
+    )
+    .unwrap();
+    // Two locals over RPC, one remote from gossip.
+    assert!(svc.submit(&raws[0]).is_ok());
+    assert!(svc.submit(&raws[1]).is_ok());
+    let remote = Arc::new(PoolTx::decode(&raws[2], now).unwrap());
+    svc.add_remotes(vec![remote]);
+    assert!(svc.drain_remotes()[0].is_ok());
+    drop(svc);
+    let svc = Service::new(config, chain, Box::new(move || now), None, None).unwrap();
+    let s = svc.pool().snapshot();
+    // alice is local after the restart, so all three of her transactions
+    // return as locals: the remote one too was journaled (`journalTx` keys
+    // on the sender being local).
+    assert_eq!(s.local_count, 3);
+    assert_eq!(s.queued.values().map(Vec::len).sum::<usize>(), 3);
+    assert_eq!(svc.pool().local().len(), 3);
+    std::fs::remove_dir_all(&dir).unwrap();
 }

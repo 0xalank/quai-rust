@@ -2816,24 +2816,17 @@
     },
     {
      "answer": {
-      "error": {
-       "code": -32602,
-       "message": "invalid argument 0: json: cannot unmarshal invalid hex string into Go value of type hexutil.Bytes"
-      }
+      "result": "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
      },
-     "method": "quai_sendRawTransaction",
-     "note": "not hex",
-     "op": "rpc",
-     "params": [
-      "0xzz"
-     ],
+     "note": "field 19 (parent hash) as a varint: unknown to Go",
+     "op": "send",
      "pool": {
       "beats": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
        "0x005283457df1758a402ca88b32c1116de66ba534"
       ],
-      "local_count": 7,
+      "local_count": 8,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -2863,11 +2856,289 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "remote_count": 0,
-      "slots": 10
+      "slots": 11
+     },
+     "raw": "0x08001214005283457df1758a402ca88b32c1116de66ba53418012201012888a40132003a010942043b9aca004a0052005a1fb6b68d881ae277c7a1317150d5de433f85b21e98f81cc8e6e17c8808fdf26e622033ad16ddda2cd35272d412fd50f93243622241ef546150f0be572b7c23de5100980105",
+     "size": 105
+    },
+    {
+     "answer": {
+      "error": {
+       "code": -32000,
+       "message": "proto: cannot parse invalid wire-format data"
+      }
+     },
+     "note": "field number 2^29+1",
+     "op": "send",
+     "pool": {
+      "beats": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 8,
+      "locals": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "nonces": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 1,
+       "0x002ab249c6354c969c4cdc574463d40167beed95": 0,
+       "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 0,
+       "0x0070bd20241205b3afb5d12c03cc769707473483": 0
+      },
+      "pending": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
+       ]
+      },
+      "qi": [],
+      "queued": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x0073004db7353e9902bf23c0b6bac8e7c36f08a53568de1760baa9846ea39092",
+        "0x00490052e1263e8a7727a22048e46a639442e4026fb7d1cfa408eecbe066b495",
+        "0x001f00063fabefa6ae9b0322255e1f182f36838ddcd81d599b64200a80028e9e",
+        "0x007e003164bd6bd9a23d178691c15a34c4c59f1cd5446f2d27ebf6ecd7b496d1"
+       ],
+       "0x002ab249c6354c969c4cdc574463d40167beed95": [
+        "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
+       ],
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
+       ]
+      },
+      "remote_count": 0,
+      "slots": 11
+     },
+     "raw": "0x08001214005283457df1758a402ca88b32c1116de66ba53418022201012888a40132003a010942043b9aca004a005201015a20e19f2b6720c0596a1971911b266a35c0d4d688ddde4fda8caf5d96e0fc486f9162201f0bdb02104e943a291fc44b8e05b8a8fe2ea45c3937b51fe6a370df4820191a888080801001"
+    },
+    {
+     "answer": {
+      "result": "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+     },
+     "note": "an unknown group",
+     "op": "send",
+     "pool": {
+      "beats": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
+      "locals": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "nonces": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 1,
+       "0x002ab249c6354c969c4cdc574463d40167beed95": 0,
+       "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 0,
+       "0x0070bd20241205b3afb5d12c03cc769707473483": 0
+      },
+      "pending": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
+       ]
+      },
+      "qi": [],
+      "queued": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x0073004db7353e9902bf23c0b6bac8e7c36f08a53568de1760baa9846ea39092",
+        "0x00490052e1263e8a7727a22048e46a639442e4026fb7d1cfa408eecbe066b495",
+        "0x001f00063fabefa6ae9b0322255e1f182f36838ddcd81d599b64200a80028e9e",
+        "0x007e003164bd6bd9a23d178691c15a34c4c59f1cd5446f2d27ebf6ecd7b496d1"
+       ],
+       "0x002ab249c6354c969c4cdc574463d40167beed95": [
+        "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
+       ],
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
+      "remote_count": 0,
+      "slots": 12
+     },
+     "raw": "0x08001214005283457df1758a402ca88b32c1116de66ba53418032201012888a40132003a010942043b9aca004a0052005a205406f6318cad4cb61e7e07422dfd97d551d831471265126d8df6ad90e52372e462201122cb7fb218aa33cd1391163f8860b57705d1ebd2c6ca19fab76e6f91d49802f3010801f401",
+     "size": 106
+    },
+    {
+     "answer": {
+      "error": {
+       "code": -32000,
+       "message": "missing required field 'Type' in ProtoTransaction"
+      }
+     },
+     "note": "the type field as bytes",
+     "op": "send",
+     "pool": {
+      "beats": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
+      "locals": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "nonces": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 1,
+       "0x002ab249c6354c969c4cdc574463d40167beed95": 0,
+       "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 0,
+       "0x0070bd20241205b3afb5d12c03cc769707473483": 0
+      },
+      "pending": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
+       ]
+      },
+      "qi": [],
+      "queued": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x0073004db7353e9902bf23c0b6bac8e7c36f08a53568de1760baa9846ea39092",
+        "0x00490052e1263e8a7727a22048e46a639442e4026fb7d1cfa408eecbe066b495",
+        "0x001f00063fabefa6ae9b0322255e1f182f36838ddcd81d599b64200a80028e9e",
+        "0x007e003164bd6bd9a23d178691c15a34c4c59f1cd5446f2d27ebf6ecd7b496d1"
+       ],
+       "0x002ab249c6354c969c4cdc574463d40167beed95": [
+        "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
+       ],
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
+      "remote_count": 0,
+      "slots": 12
+     },
+     "raw": "0x0a00"
+    },
+    {
+     "answer": {
+      "error": {
+       "code": -32000,
+       "message": "proto: cannot parse invalid wire-format data"
+      }
+     },
+     "note": "a stray end-group tag",
+     "op": "send",
+     "pool": {
+      "beats": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
+      "locals": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "nonces": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 1,
+       "0x002ab249c6354c969c4cdc574463d40167beed95": 0,
+       "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 0,
+       "0x0070bd20241205b3afb5d12c03cc769707473483": 0
+      },
+      "pending": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
+       ]
+      },
+      "qi": [],
+      "queued": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x0073004db7353e9902bf23c0b6bac8e7c36f08a53568de1760baa9846ea39092",
+        "0x00490052e1263e8a7727a22048e46a639442e4026fb7d1cfa408eecbe066b495",
+        "0x001f00063fabefa6ae9b0322255e1f182f36838ddcd81d599b64200a80028e9e",
+        "0x007e003164bd6bd9a23d178691c15a34c4c59f1cd5446f2d27ebf6ecd7b496d1"
+       ],
+       "0x002ab249c6354c969c4cdc574463d40167beed95": [
+        "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
+       ],
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
+      "remote_count": 0,
+      "slots": 12
+     },
+     "raw": "0x08001214005283457df1758a402ca88b32c1116de66ba53418042201012888a40132003a010942043b9aca004a0052005a202d7894a5ee308554a49abc4947ea4f043a38eedfd3e1723401acf4ea5566454962204a5557345bebb777d114f6dcbb8e23d8156bc371e0870030a1c55a6b6ef77e9e0c"
+    },
+    {
+     "answer": {
+      "error": {
+       "code": -32602,
+       "message": "invalid argument 0: json: cannot unmarshal invalid hex string into Go value of type hexutil.Bytes"
+      }
+     },
+     "method": "quai_sendRawTransaction",
+     "note": "not hex",
+     "op": "rpc",
+     "params": [
+      "0xzz"
+     ],
+     "pool": {
+      "beats": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
+      "locals": [
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
+       "0x002ab249c6354c969c4cdc574463d40167beed95",
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "nonces": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 1,
+       "0x002ab249c6354c969c4cdc574463d40167beed95": 0,
+       "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 0,
+       "0x0070bd20241205b3afb5d12c03cc769707473483": 0
+      },
+      "pending": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
+       ]
+      },
+      "qi": [],
+      "queued": {
+       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
+        "0x0073004db7353e9902bf23c0b6bac8e7c36f08a53568de1760baa9846ea39092",
+        "0x00490052e1263e8a7727a22048e46a639442e4026fb7d1cfa408eecbe066b495",
+        "0x001f00063fabefa6ae9b0322255e1f182f36838ddcd81d599b64200a80028e9e",
+        "0x007e003164bd6bd9a23d178691c15a34c4c59f1cd5446f2d27ebf6ecd7b496d1"
+       ],
+       "0x002ab249c6354c969c4cdc574463d40167beed95": [
+        "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
+       ],
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
+      "remote_count": 0,
+      "slots": 12
      }
     },
     {
@@ -2889,7 +3160,7 @@
        "0x002ab249c6354c969c4cdc574463d40167beed95",
        "0x005283457df1758a402ca88b32c1116de66ba534"
       ],
-      "local_count": 7,
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -2919,11 +3190,13 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
        ]
       },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -2945,7 +3218,7 @@
        "0x002ab249c6354c969c4cdc574463d40167beed95",
        "0x005283457df1758a402ca88b32c1116de66ba534"
       ],
-      "local_count": 7,
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -2975,11 +3248,13 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
        ]
       },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3001,7 +3276,7 @@
        "0x002ab249c6354c969c4cdc574463d40167beed95",
        "0x005283457df1758a402ca88b32c1116de66ba534"
       ],
-      "local_count": 7,
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3031,11 +3306,13 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
        ]
       },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3053,7 +3330,7 @@
        "0x002ab249c6354c969c4cdc574463d40167beed95",
        "0x005283457df1758a402ca88b32c1116de66ba534"
       ],
-      "local_count": 7,
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3083,11 +3360,13 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
        ]
       },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      },
      "raw": "0x08001214005283457df1758a402ca88b32c1116de66ba53418002201012888a40132003a010942043b9aca004a0052005a20ec40fa79c93e2ea70cc60e2a24786a8b8d3a0ff41270171daffafa812ecd27a662205196d00f86062eb712141f169fd0d7eddb2db1b7291621d302771673fd510de1",
      "size": 106
@@ -3107,7 +3386,7 @@
        "0x002ab249c6354c969c4cdc574463d40167beed95",
        "0x005283457df1758a402ca88b32c1116de66ba534"
       ],
-      "local_count": 7,
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3137,19 +3416,23 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
        ]
       },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      },
      "raw": "0xff"
     },
     {
      "op": "run",
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3159,7 +3442,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3174,13 +3457,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3194,8 +3482,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3205,7 +3495,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3220,18 +3510,23 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
      "answer": {
-      "result": "0x1"
+      "result": "0x2"
      },
      "method": "quai_getTransactionCount",
      "op": "rpc",
@@ -3240,8 +3535,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3251,7 +3548,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3266,13 +3563,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3286,8 +3588,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3297,7 +3601,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3312,13 +3616,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3332,8 +3641,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3343,7 +3654,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3358,13 +3669,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3378,8 +3694,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3389,7 +3707,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3404,13 +3722,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3424,8 +3747,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3435,7 +3760,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3450,13 +3775,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3470,8 +3800,10 @@
       "pending"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3481,7 +3813,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3496,13 +3828,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3515,8 +3852,10 @@
       "0xdead000000000000000000000000000000000000000000000000000000000000"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3526,7 +3865,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3541,13 +3880,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3578,8 +3922,10 @@
       "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3589,7 +3935,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3604,13 +3950,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3626,8 +3977,10 @@
       "0x001b0052363e30352713a54ebfed134864709bdaf91dce795f6c041822891a5e"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3637,7 +3990,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3652,29 +4005,36 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
      "answer": {
       "result": {
-       "pending": "0x7",
+       "pending": "0x8",
        "qi": "0x0",
-       "queued": "0x0"
+       "queued": "0x1"
       }
      },
      "method": "txpool_status",
      "op": "rpc",
      "params": [],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3684,7 +4044,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3699,13 +4059,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3862,18 +4227,61 @@
           "type": "0x0",
           "v": "0x0",
           "value": "0x1"
+         },
+         "1": {
+          "accessList": [],
+          "blockHash": null,
+          "blockNumber": null,
+          "chainId": "0x9",
+          "from": "0x005283457df1758A402ca88B32c1116de66bA534",
+          "gas": "0x5208",
+          "gasPrice": "0x3b9aca00",
+          "hash": "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26",
+          "input": "0x",
+          "nonce": "0x1",
+          "r": "0xb6b68d881ae277c7a1317150d5de433f85b21e98f81cc8e6e17c8808fdf26e",
+          "s": "0x33ad16ddda2cd35272d412fd50f93243622241ef546150f0be572b7c23de5100",
+          "to": "0x005283457df1758A402ca88B32c1116de66bA534",
+          "transactionIndex": null,
+          "type": "0x0",
+          "v": "0x0",
+          "value": "0x1"
          }
         }
        },
-       "queued": {}
+       "queued": {
+        "0x005283457df1758A402ca88B32c1116de66bA534": {
+         "3": {
+          "accessList": [],
+          "blockHash": null,
+          "blockNumber": null,
+          "chainId": "0x9",
+          "from": "0x005283457df1758A402ca88B32c1116de66bA534",
+          "gas": "0x5208",
+          "gasPrice": "0x3b9aca00",
+          "hash": "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d",
+          "input": "0x",
+          "nonce": "0x3",
+          "r": "0x5406f6318cad4cb61e7e07422dfd97d551d831471265126d8df6ad90e52372e4",
+          "s": "0x1122cb7fb218aa33cd1391163f8860b57705d1ebd2c6ca19fab76e6f91d49802",
+          "to": "0x005283457df1758A402ca88B32c1116de66bA534",
+          "transactionIndex": null,
+          "type": "0x0",
+          "v": "0x0",
+          "value": "0x1"
+         }
+        }
+       }
       }
      },
      "method": "txpool_content",
      "op": "rpc",
      "params": [],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3883,7 +4291,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3898,13 +4306,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -3922,18 +4335,25 @@
          "0": "0x005283457df1758A402ca88B32c1116de66bA534: 1 wei + 21000 gas \u00d7 1000000000 wei"
         },
         "0x005283457df1758A402ca88B32c1116de66bA534": {
-         "0": "0x005283457df1758A402ca88B32c1116de66bA534: 1 wei + 21000 gas \u00d7 1000000000 wei"
+         "0": "0x005283457df1758A402ca88B32c1116de66bA534: 1 wei + 21000 gas \u00d7 1000000000 wei",
+         "1": "0x005283457df1758A402ca88B32c1116de66bA534: 1 wei + 21000 gas \u00d7 1000000000 wei"
         }
        },
-       "queued": {}
+       "queued": {
+        "0x005283457df1758A402ca88B32c1116de66bA534": {
+         "3": "0x005283457df1758A402ca88B32c1116de66bA534: 1 wei + 21000 gas \u00d7 1000000000 wei"
+        }
+       }
       }
      },
      "method": "txpool_inspect",
      "op": "rpc",
      "params": [],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -3943,7 +4363,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -3958,13 +4378,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -4089,8 +4514,10 @@
       "0x001a2686be31271F5c7c590e0F0666A52Ee32345"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -4100,7 +4527,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -4115,13 +4542,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     },
     {
@@ -4137,8 +4569,10 @@
       "0x00c3bcA5Ae0711d42C5B562dFBBA1514cE3e5267"
      ],
      "pool": {
-      "beats": [],
-      "local_count": 7,
+      "beats": [
+       "0x005283457df1758a402ca88b32c1116de66ba534"
+      ],
+      "local_count": 9,
       "locals": [
        "0x001a2686be31271f5c7c590e0f0666a52ee32345",
        "0x002ab249c6354c969c4cdc574463d40167beed95",
@@ -4148,7 +4582,7 @@
        "0x001a2686be31271f5c7c590e0f0666a52ee32345": 5,
        "0x002ab249c6354c969c4cdc574463d40167beed95": 1,
        "0x0046f8d1d71f1f97ca765a7f1bb13cb64b0b791b": 5,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 1,
+       "0x005283457df1758a402ca88b32c1116de66ba534": 2,
        "0x0070bd20241205b3afb5d12c03cc769707473483": 0
       },
       "pending": {
@@ -4163,13 +4597,18 @@
         "0x00640058804c1d81ca476a409dc91b7732bff732d0ac6fa0d98edd650965e617"
        ],
        "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811"
+        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
+        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
        ]
       },
       "qi": [],
-      "queued": {},
+      "queued": {
+       "0x005283457df1758a402ca88b32c1116de66ba534": [
+        "0x0055005a8715385baf67460dd95e7611b3f648e928fab617f6a9e7b371a7692d"
+       ]
+      },
       "remote_count": 0,
-      "slots": 10
+      "slots": 12
      }
     }
    ],
@@ -11000,43 +11439,6 @@
      "account": "0x001a2686be31271f5c7c590e0f0666a52ee32345",
      "found": true,
      "op": "age_beat",
-     "pool": {
-      "beats": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345"
-      ],
-      "local_count": 5,
-      "locals": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
-       "0x005283457df1758a402ca88b32c1116de66ba534"
-      ],
-      "nonces": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": 1,
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 0,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 2
-      },
-      "pending": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x005f0004668db1987b044232c4d65ceaf91c02b080b4e238a68567f595b17985"
-       ],
-       "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
-        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
-       ]
-      },
-      "qi": [],
-      "queued": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x000a007ff2e2458b83b77ae0af08da20c5bac696798a49a35eabe91d1776c912"
-       ],
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
-        "0x004e00758641580097a79d325d3adc0c1f6132df6ddb6c7fc4875f34dc63c73d"
-       ]
-      },
-      "remote_count": 0,
-      "slots": 5
-     },
      "seconds": 299
     },
     {
@@ -11083,43 +11485,6 @@
      "account": "0x001a2686be31271f5c7c590e0f0666a52ee32345",
      "found": true,
      "op": "age_beat",
-     "pool": {
-      "beats": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345"
-      ],
-      "local_count": 5,
-      "locals": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
-       "0x005283457df1758a402ca88b32c1116de66ba534"
-      ],
-      "nonces": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": 1,
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 0,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 2
-      },
-      "pending": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x005f0004668db1987b044232c4d65ceaf91c02b080b4e238a68567f595b17985"
-       ],
-       "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
-        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
-       ]
-      },
-      "qi": [],
-      "queued": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x000a007ff2e2458b83b77ae0af08da20c5bac696798a49a35eabe91d1776c912"
-       ],
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": [
-        "0x004e00758641580097a79d325d3adc0c1f6132df6ddb6c7fc4875f34dc63c73d"
-       ]
-      },
-      "remote_count": 0,
-      "slots": 5
-     },
      "seconds": 301
     },
     {
@@ -11162,78 +11527,12 @@
      "found": true,
      "hash": "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
      "op": "age_tx",
-     "pool": {
-      "beats": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c"
-      ],
-      "local_count": 4,
-      "locals": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
-       "0x005283457df1758a402ca88b32c1116de66ba534"
-      ],
-      "nonces": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": 1,
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 0,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 2
-      },
-      "pending": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x005f0004668db1987b044232c4d65ceaf91c02b080b4e238a68567f595b17985"
-       ],
-       "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
-        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
-       ]
-      },
-      "qi": [],
-      "queued": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x000a007ff2e2458b83b77ae0af08da20c5bac696798a49a35eabe91d1776c912"
-       ]
-      },
-      "remote_count": 0,
-      "slots": 4
-     },
      "seconds": 301
     },
     {
      "found": true,
      "hash": "0x000a007ff2e2458b83b77ae0af08da20c5bac696798a49a35eabe91d1776c912",
      "op": "age_tx",
-     "pool": {
-      "beats": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c"
-      ],
-      "local_count": 4,
-      "locals": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
-       "0x005283457df1758a402ca88b32c1116de66ba534"
-      ],
-      "nonces": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": 1,
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 0,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 2
-      },
-      "pending": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x005f0004668db1987b044232c4d65ceaf91c02b080b4e238a68567f595b17985"
-       ],
-       "0x005283457df1758a402ca88b32c1116de66ba534": [
-        "0x00540027fb8197ba60683a66b69e73622467d2f041f69f2d095e367761bf7811",
-        "0x00370028761a575160d5f98a3ea66ecf6e2397ce54c051320be4658c4257eb26"
-       ]
-      },
-      "qi": [],
-      "queued": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x000a007ff2e2458b83b77ae0af08da20c5bac696798a49a35eabe91d1776c912"
-       ]
-      },
-      "remote_count": 0,
-      "slots": 4
-     },
      "seconds": 301
     },
     {
@@ -11272,35 +11571,6 @@
      "account": "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
      "found": true,
      "op": "age_beat",
-     "pool": {
-      "beats": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c"
-      ],
-      "local_count": 2,
-      "locals": [
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c",
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345",
-       "0x005283457df1758a402ca88b32c1116de66ba534"
-      ],
-      "nonces": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": 1,
-       "0x001a2686be31271f5c7c590e0f0666a52ee32345": 0,
-       "0x005283457df1758a402ca88b32c1116de66ba534": 0
-      },
-      "pending": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x005f0004668db1987b044232c4d65ceaf91c02b080b4e238a68567f595b17985"
-       ]
-      },
-      "qi": [],
-      "queued": {
-       "0x000131848650634b35ef5dcef0c666dc1c2f2a1c": [
-        "0x000a007ff2e2458b83b77ae0af08da20c5bac696798a49a35eabe91d1776c912"
-       ]
-      },
-      "remote_count": 0,
-      "slots": 2
-     },
      "seconds": 400
     },
     {
@@ -13675,100 +13945,24 @@
      "found": true,
      "hash": "0x90d490efa60ff5f809315ceac4d8ccc5ec16e626e2e4b05891d533edd1f4f665",
      "op": "age_qi",
-     "pool": {
-      "beats": [],
-      "local_count": 0,
-      "locals": [],
-      "nonces": {},
-      "pending": {},
-      "qi": [
-       "0x90d490efa60ff5f809315ceac4d8ccc5ec16e626e2e4b05891d533edd1f4f665",
-       "0x90c190b82fd7d89549034bf3f7cf6a0d14f0aaacc7bc6e95c10c23aee7e94b60",
-       "0x90d490879dc94eae0706b7225180f9c671ab12bfd3975db6e84887e71fc76ed1",
-       "0x909990f87016b32e8ae7e12af17ccb9a71359e3833eb309e01aaa5061444095d",
-       "0x90cb90b58f6e6f53b3662626372f17abfa70c689562ff3f8f232f57ef6c2d9ea",
-       "0x90da90f6e5a6a4dc4028bce26244151a4081e071407bf718fb0e4000764ebbdf",
-       "0x90d790978bddd43007a92e2d12ecc2d186206d78f2fa9534a900517f60a47c51"
-      ],
-      "queued": {},
-      "remote_count": 0,
-      "slots": 0
-     },
      "seconds": 1801
     },
     {
      "found": true,
      "hash": "0x90c190b82fd7d89549034bf3f7cf6a0d14f0aaacc7bc6e95c10c23aee7e94b60",
      "op": "age_qi",
-     "pool": {
-      "beats": [],
-      "local_count": 0,
-      "locals": [],
-      "nonces": {},
-      "pending": {},
-      "qi": [
-       "0x90d490efa60ff5f809315ceac4d8ccc5ec16e626e2e4b05891d533edd1f4f665",
-       "0x90c190b82fd7d89549034bf3f7cf6a0d14f0aaacc7bc6e95c10c23aee7e94b60",
-       "0x90d490879dc94eae0706b7225180f9c671ab12bfd3975db6e84887e71fc76ed1",
-       "0x909990f87016b32e8ae7e12af17ccb9a71359e3833eb309e01aaa5061444095d",
-       "0x90cb90b58f6e6f53b3662626372f17abfa70c689562ff3f8f232f57ef6c2d9ea",
-       "0x90da90f6e5a6a4dc4028bce26244151a4081e071407bf718fb0e4000764ebbdf",
-       "0x90d790978bddd43007a92e2d12ecc2d186206d78f2fa9534a900517f60a47c51"
-      ],
-      "queued": {},
-      "remote_count": 0,
-      "slots": 0
-     },
      "seconds": 1801
     },
     {
      "found": true,
      "hash": "0x90d490879dc94eae0706b7225180f9c671ab12bfd3975db6e84887e71fc76ed1",
      "op": "age_qi",
-     "pool": {
-      "beats": [],
-      "local_count": 0,
-      "locals": [],
-      "nonces": {},
-      "pending": {},
-      "qi": [
-       "0x90d490efa60ff5f809315ceac4d8ccc5ec16e626e2e4b05891d533edd1f4f665",
-       "0x90c190b82fd7d89549034bf3f7cf6a0d14f0aaacc7bc6e95c10c23aee7e94b60",
-       "0x90d490879dc94eae0706b7225180f9c671ab12bfd3975db6e84887e71fc76ed1",
-       "0x909990f87016b32e8ae7e12af17ccb9a71359e3833eb309e01aaa5061444095d",
-       "0x90cb90b58f6e6f53b3662626372f17abfa70c689562ff3f8f232f57ef6c2d9ea",
-       "0x90da90f6e5a6a4dc4028bce26244151a4081e071407bf718fb0e4000764ebbdf",
-       "0x90d790978bddd43007a92e2d12ecc2d186206d78f2fa9534a900517f60a47c51"
-      ],
-      "queued": {},
-      "remote_count": 0,
-      "slots": 0
-     },
      "seconds": 1801
     },
     {
      "found": true,
      "hash": "0x909990f87016b32e8ae7e12af17ccb9a71359e3833eb309e01aaa5061444095d",
      "op": "age_qi",
-     "pool": {
-      "beats": [],
-      "local_count": 0,
-      "locals": [],
-      "nonces": {},
-      "pending": {},
-      "qi": [
-       "0x90d490efa60ff5f809315ceac4d8ccc5ec16e626e2e4b05891d533edd1f4f665",
-       "0x90c190b82fd7d89549034bf3f7cf6a0d14f0aaacc7bc6e95c10c23aee7e94b60",
-       "0x90d490879dc94eae0706b7225180f9c671ab12bfd3975db6e84887e71fc76ed1",
-       "0x909990f87016b32e8ae7e12af17ccb9a71359e3833eb309e01aaa5061444095d",
-       "0x90cb90b58f6e6f53b3662626372f17abfa70c689562ff3f8f232f57ef6c2d9ea",
-       "0x90da90f6e5a6a4dc4028bce26244151a4081e071407bf718fb0e4000764ebbdf",
-       "0x90d790978bddd43007a92e2d12ecc2d186206d78f2fa9534a900517f60a47c51"
-      ],
-      "queued": {},
-      "remote_count": 0,
-      "slots": 0
-     },
      "seconds": 1801
     },
     {
@@ -15265,5 +15459,5 @@
    }
   }
  ],
- "scope": "Production core.TxPool (core/tx_pool.go, core/tx_list.go) and quaiapi pool handlers behind rpc.Server over a test chain: committed state per head, the UTXO set in the database, work objects with transactions. Runs (runReorg) at explicit steps instead of the 1-second ticker; eviction and Qi expiry by the production loops after aging. Sharing clients are local httptest servers. Fixed-seed keys; no network, no real funds."
+ "scope": "Production core.TxPool (core/tx_pool.go, core/tx_list.go) and quaiapi pool handlers behind rpc.Server over a test chain: committed state per head, the UTXO set in the database, work objects with transactions. Runs (runReorg) at explicit steps instead of the 1-second ticker; eviction and Qi expiry by the production loops after aging. Sharing clients are local httptest servers. Fixed-seed keys; no network, no real funds. protobuf-go's per-binary non-breaking space after 'proto:' is written as a regular space."
 }

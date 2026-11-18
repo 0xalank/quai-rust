@@ -257,7 +257,9 @@ impl PoolTx {
     /// `proto.Unmarshal` and `Transaction.ProtoDecode` of an RPC or gossip
     /// transaction; `time` is `tx.Time()`.
     pub fn decode(raw: &[u8], time: u64) -> Result<Self, String> {
-        let p = w::Transaction::decode(raw).map_err(|_| WIRE_ERROR.to_string())?;
+        // Fields protobuf-go would keep as unknown are dropped first.
+        let raw = super::wire::clean(raw, super::wire::TRANSACTION).ok_or(WIRE_ERROR)?;
+        let p = w::Transaction::decode(raw.as_slice()).map_err(|_| WIRE_ERROR.to_string())?;
         Self::from_wire(&p, time)
     }
     /// A block transaction (already decoded by the block code).

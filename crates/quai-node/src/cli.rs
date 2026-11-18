@@ -518,11 +518,13 @@ fn replay_signals(log: Log) -> Option<Signals> {
     Some((runtime, stop, code))
 }
 
-/// The pool's configuration from the options.
-pub fn pool_config(o: &TxpoolOptions) -> crate::txpool::Config {
+/// The pool's configuration from the options; the journal of local
+/// transactions lives in `<datadir>/txpool/`.
+pub fn pool_config(o: &TxpoolOptions, datadir: &std::path::Path) -> crate::txpool::Config {
     crate::txpool::Config {
         sharing_clients: o.sharing_clients.clone(),
         sync_tx_with_return: o.sync_tx_with_return,
+        journal: Some(datadir.join("txpool").join("transactions.journal")),
         ..crate::txpool::Config::default()
     }
 }
@@ -543,6 +545,7 @@ pub fn rpc_config(listen: String) -> quai_rpc::Config {
 pub fn start_pool(
     view: &mut crate::rpc_view::ExportView,
     o: &TxpoolOptions,
+    datadir: &std::path::Path,
     runtime: &tokio::runtime::Handle,
     stop: Arc<AtomicBool>,
     log: Log,
@@ -557,7 +560,7 @@ pub fn start_pool(
         return Ok(None);
     }
     let chain = Arc::new(crate::rpc_view::ViewChain::new(view.share())?);
-    let config = pool_config(o);
+    let config = pool_config(o, datadir);
     let frequency = Duration::from_nanos(config.reorg_frequency);
     let svc = Arc::new(crate::txpool::service::Service::new(
         config,
@@ -581,7 +584,12 @@ pub fn start_pool(
     Ok(Some(svc))
 }
 /// `quai-node rpc`: serve `view` (and its transaction pool) until SIGINT.
-fn serve_rpc(mut view: crate::rpc_view::ExportView, r: RpcArgs, log: Log) -> Result<(), String> {
+fn serve_rpc(
+    mut view: crate::rpc_view::ExportView,
+    r: RpcArgs,
+    datadir: &std::path::Path,
+    log: Log,
+) -> Result<(), String> {
     let config = rpc_config(r.listen);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.workers)
@@ -589,7 +597,14 @@ fn serve_rpc(mut view: crate::rpc_view::ExportView, r: RpcArgs, log: Log) -> Res
         .build()
         .map_err(|e| format!("runtime: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
-    start_pool(&mut view, &r.txpool, runtime.handle(), stop.clone(), log)?;
+    start_pool(
+        &mut view,
+        &r.txpool,
+        datadir,
+        runtime.handle(),
+        stop.clone(),
+        log,
+    )?;
     let mode = config.mode.clone();
     let listen = config.listen.clone();
     let app = quai_rpc::App::native(config, Arc::new(view))?;
@@ -654,7 +669,7 @@ pub fn main_with(args: &[String]) -> i32 {
                     return 2;
                 }
             };
-            match serve_rpc(view, r, log) {
+            match serve_rpc(view, r, &args.datadir, log) {
                 Ok(()) => 0,
                 Err(e) => {
                     log.error(&format!("rpc: {e}"));

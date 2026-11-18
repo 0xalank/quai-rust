@@ -26,6 +26,7 @@ files = {
     'cmd/quai-txpool-vectors/scenarios.go': ref / 'scenarios.go',
     'core/txpool_oracle_export.go': ref / 'core-export.go',
     'core/types/txpool_oracle_export.go': ref / 'types-export.go',
+    'cmd/quai-txpool-vectors/live.go': ref / 'live.go',
 }
 env = {**os.environ, 'GOPROXY': 'off', 'GOTOOLCHAIN': 'local'}
 with tempfile.TemporaryDirectory(prefix='quai-txpool-') as directory:

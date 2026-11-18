@@ -17,6 +17,8 @@
 #   QUAI_NODE_DATADIR  quai-node data directory (default: $QUAI_MAINNET_DIR/quai-node)
 #   REPLAY_JOBS        proof-of-work threads (default: 3)
 #   CARGO_BUILD_JOBS   build jobs (default: 3)
+#   GO_QUAI_SRC        pinned go-quai checkout for export.sh (its default is
+#                      ../go-quai next to this repository; set it in a worktree)
 set -u
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)

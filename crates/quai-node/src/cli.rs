@@ -1,7 +1,9 @@
-//! Command line: global options, the `replay` command and room for `run`.
+//! Command line: global options, the `replay` and `rpc` commands and room
+//! for `run`.
 use crate::log::{Level, Log};
 use crate::replay::{self, End};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const USAGE: &str = "\
@@ -10,6 +12,8 @@ Usage: quai-node [GLOBAL OPTIONS] <COMMAND> [OPTIONS]
 Commands:
   replay    Check go-quai blocks exported in the QEX1 format with the Rust
             consensus code; with --state, also execute them
+  rpc       Serve JSON-RPC from an export and the latest replay checkpoint
+            of the data directory (blocks, receipts, logs, state, calls)
   run       Run a node (not available yet)
   help      Print this help
 
@@ -30,6 +34,14 @@ Replay options:
   --commit-every <N>    Zone heights between state commits (default: 1000)
   --no-report           Do not write <datadir>/replay/last.json
 
+RPC options:
+  --export <DIR>        The export the replay checked (required)
+  --listen <ADDR>       Listen address (default: 127.0.0.1:8547)
+
+The RPC serves zone blocks from genesis to the latest state checkpoint in
+<datadir>/replay/<chain>/state/, with go-quai v0.57.0's JSON. The tag latest
+is the checkpoint block. It keeps only that state, as a pruned go-quai node would.
+
 Checkpoints go to <datadir>/replay/<chain>/{state,headers}/ every
 --checkpoint-every heights and at the end. A run without --resume refuses a
 directory that already holds checkpoints.
@@ -42,6 +54,12 @@ pub enum Command {
     Help,
     Run,
     Replay(ReplayArgs),
+    Rpc(RpcArgs),
+}
+#[derive(Debug, PartialEq, Eq)]
+pub struct RpcArgs {
+    pub export: PathBuf,
+    pub listen: String,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReplayArgs {
@@ -86,6 +104,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     let mut resume = false;
     let mut checkpoint_every = None;
     let mut commit_every = None;
+    let mut listen = None;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -103,6 +122,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--progress"
                 | "--checkpoint-every"
                 | "--commit-every"
+                | "--listen"
         );
         let value = if takes_value {
             match inline {
@@ -130,6 +150,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     Level::parse(&v).ok_or_else(|| format!("--log-level: unknown level {v:?}"))?;
             }
             "--export" => export = Some(PathBuf::from(value.unwrap())),
+            "--listen" => listen = value,
             "--to" => to = Some(number("--to", &value.unwrap())?),
             "--jobs" => {
                 let n: usize = number("--jobs", &value.unwrap())?;
@@ -175,8 +196,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             .map(|h| PathBuf::from(h).join(".quai-node"))
             .ok_or("--datadir is required when HOME is not set")?,
     };
-    let replay_only = export.is_some()
-        || to.is_some()
+    let replay_only = to.is_some()
         || jobs.is_some()
         || !report
         || state
@@ -187,7 +207,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         None | Some("help") => Command::Help,
         Some("run") => Command::Run,
         Some("replay") => Command::Replay(ReplayArgs {
-            export: export.ok_or("replay needs --export <DIR>")?,
+            export: export.take().ok_or("replay needs --export <DIR>")?,
             to,
             jobs: jobs.unwrap_or_else(default_jobs),
             progress,
@@ -197,10 +217,20 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             checkpoint_every: checkpoint_every.unwrap_or(10_000),
             commit_every: commit_every.unwrap_or(1_000),
         }),
+        Some("rpc") => Command::Rpc(RpcArgs {
+            export: export.take().ok_or("rpc needs --export <DIR>")?,
+            listen: listen.take().unwrap_or_else(|| "127.0.0.1:8547".into()),
+        }),
         Some(c) => return Err(format!("unknown command {c:?}")),
     };
     if replay_only && !matches!(command, Command::Replay(_)) {
-        return Err("--export, --to, --jobs, --state, --resume, --checkpoint-every, --commit-every and --no-report belong to replay".into());
+        return Err("--to, --jobs, --state, --resume, --checkpoint-every, --commit-every and --no-report belong to replay".into());
+    }
+    if export.is_some() && !matches!(command, Command::Replay(_)) {
+        return Err("--export belongs to replay and rpc".into());
+    }
+    if listen.is_some() {
+        return Err("--listen belongs to rpc".into());
     }
     Ok(Args {
         datadir,
@@ -225,8 +255,30 @@ pub fn main_with(args: &[String]) -> i32 {
             0
         }
         Command::Run => {
-            log.error("run is not available yet: the node has no validated state, network or RPC. Use replay.");
+            log.error("run is not available yet: the node has no network or live head. Use replay, then rpc.");
             2
+        }
+        Command::Rpc(r) => {
+            let view = match crate::rpc_view::ExportView::open(&r.export, &args.datadir, &log) {
+                Ok(v) => v,
+                Err(e) => {
+                    log.error(&format!("rpc setup: {e}"));
+                    return 2;
+                }
+            };
+            let config = quai_rpc::Config {
+                mode: "native".into(),
+                listen: r.listen,
+                timeout_ms: 30_000,
+                ..quai_rpc::Config::default()
+            };
+            match quai_rpc::App::native(config, Arc::new(view)).and_then(quai_rpc::serve_blocking) {
+                Ok(()) => 0,
+                Err(e) => {
+                    log.error(&format!("rpc: {e}"));
+                    1
+                }
+            }
         }
         Command::Replay(r) => {
             let opts = replay::Options {
@@ -320,6 +372,27 @@ mod tests {
         assert!(parse(&args(&["replay", "--export", "/x", "--jobs", "0"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--bogus"])).is_err());
         assert!(parse(&args(&["run", "--export", "/x"])).is_err());
+        assert_eq!(
+            parse(&args(&["--datadir", "/d", "rpc", "--export", "/x"]))
+                .unwrap()
+                .command,
+            Command::Rpc(RpcArgs {
+                export: "/x".into(),
+                listen: "127.0.0.1:8547".into(),
+            })
+        );
+        assert_eq!(
+            parse(&args(&["rpc", "--export=/x", "--listen", "0.0.0.0:1"]))
+                .unwrap()
+                .command,
+            Command::Rpc(RpcArgs {
+                export: "/x".into(),
+                listen: "0.0.0.0:1".into(),
+            })
+        );
+        assert!(parse(&args(&["rpc"])).is_err());
+        assert!(parse(&args(&["rpc", "--export", "/x", "--state"])).is_err());
+        assert!(parse(&args(&["replay", "--export", "/x", "--listen", "a"])).is_err());
         assert!(parse(&args(&["--log-level", "loud", "run"])).is_err());
         assert!(parse(&args(&["sync"])).is_err());
     }

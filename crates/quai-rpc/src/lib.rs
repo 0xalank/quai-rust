@@ -19,6 +19,8 @@ use tokio::sync::Semaphore;
 mod fresh;
 #[cfg(feature = "reference-gateway")]
 pub mod ingest;
+pub mod native;
+pub mod view;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -69,8 +71,19 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<(), String> {
-        if !["fixture", "gateway", "hybrid", "snapshot"].contains(&self.mode.as_str()) {
-            return Err("mode must be fixture, gateway, hybrid or snapshot".into());
+        if !["fixture", "gateway", "hybrid", "snapshot", "native"].contains(&self.mode.as_str()) {
+            return Err("mode must be fixture, gateway, hybrid, snapshot or native".into());
+        }
+        if self.mode == "native"
+            && (self.snapshot.is_some()
+                || self.upstream.is_some()
+                || self.follow
+                || self.native_canonical_reads)
+        {
+            return Err(
+                "native mode answers from its chain view only: no snapshot, upstream or follower"
+                    .into(),
+            );
         }
         #[cfg(not(feature = "reference-gateway"))]
         if ["gateway", "hybrid"].contains(&self.mode.as_str())
@@ -149,6 +162,8 @@ pub struct App {
     #[cfg(feature = "reference-gateway")]
     client: reqwest::Client,
     store: Option<quai_store::Store>,
+    /// The validated chain data of `--mode native`.
+    view: Option<Arc<dyn view::ChainView>>,
     ingestion: std::sync::RwLock<Value>,
     native_hits: AtomicU64,
     native_receipt_hits: AtomicU64,
@@ -206,6 +221,22 @@ fn encode(id: &Value, outcome: Outcome) -> Vec<u8> {
 
 impl App {
     pub fn new(config: Config) -> Result<Arc<Self>, String> {
+        if config.mode == "native" {
+            return Err(
+                "native mode needs a chain view: run `quai-node rpc --export DIR` (App::native)"
+                    .into(),
+            );
+        }
+        Self::build(config, None)
+    }
+    /// `--mode native` over a node's chain view.
+    pub fn native(config: Config, view: Arc<dyn view::ChainView>) -> Result<Arc<Self>, String> {
+        if config.mode != "native" {
+            return Err("App::native needs --mode native".into());
+        }
+        Self::build(config, Some(view))
+    }
+    fn build(config: Config, view: Option<Arc<dyn view::ChainView>>) -> Result<Arc<Self>, String> {
         config.validate()?;
         #[cfg(feature = "reference-gateway")]
         let client = reqwest::Client::builder()
@@ -234,6 +265,7 @@ impl App {
             #[cfg(feature = "reference-gateway")]
             client,
             store,
+            view,
             ingestion: std::sync::RwLock::new(json!({"enabled":config.follow,"state":"starting"})),
             native_hits: AtomicU64::new(0),
             native_receipt_hits: AtomicU64::new(0),
@@ -482,6 +514,14 @@ impl App {
             match tokio::time::timeout(Duration::from_millis(self.config.timeout_ms), async {
                 if self.config.mode == "fixture" {
                     self.fixture(method, params).await
+                } else if let Some(view) = &self.view {
+                    match native::handle(view.clone(), method, params).await {
+                        Ok(value) => {
+                            self.native_hits.fetch_add(1, Ordering::Relaxed);
+                            Outcome::Result(value)
+                        }
+                        Err(e) => Outcome::Error(e.to_value()),
+                    }
                 } else {
                     if !is_read_method(method) {
                         error(-32601, "method not available in read-only gateway")
@@ -645,14 +685,40 @@ async fn rpc_handler(State(app): State<Arc<App>>, headers: HeaderMap, body: Byte
 async fn health(State(app): State<Arc<App>>) -> Json<Value> {
     Json(
         json!({"service":"quai-rust","version":VERSION,"mode":app.config.mode,
-        "chain_verified":false,"runtime_profile":if cfg!(feature="reference-gateway") {"reference"}else{"standalone-rust"},"go_runtime_dependency":cfg!(feature="reference-gateway"),"chain_view":if app.config.mode=="snapshot" {"frozen-unverified-import"}else{"reference-fixture"},"config":app.config,
+        "chain_verified":false,"native_methods":if app.view.is_some() {native::METHODS.len()} else {0},"runtime_profile":if cfg!(feature="reference-gateway") {"reference"}else{"standalone-rust"},"go_runtime_dependency":cfg!(feature="reference-gateway"),"chain_view":match app.config.mode.as_str() {"snapshot"=>"frozen-unverified-import","native"=>"native-replayed-export",_=>"reference-fixture"},"config":app.config,
         "native_hits":app.native_hits.load(Ordering::Relaxed),"reload_failures":app.reload_failures.load(Ordering::Relaxed),"upstream_calls":app.upstream_calls.load(Ordering::Relaxed),
-        "read_view":if app.config.mode == "snapshot" {"frozen"} else {"upstream"},
+        "read_view":match app.config.mode.as_str() {"snapshot"=>"frozen","native"=>"native",_=>"upstream"},
         "canonical_reads":{"enabled":app.config.native_canonical_reads,"native_receipts":app.native_receipt_hits.load(Ordering::Relaxed),"native_logs":app.native_log_hits.load(Ordering::Relaxed),"freshness_http_calls":app.freshness_http_calls.load(Ordering::Relaxed),"freshness_rpc_calls":app.freshness_http_calls.load(Ordering::Relaxed)*4,
         "fallbacks":{"unsupported":app.canonical_misses[0].load(Ordering::Relaxed),"coverage":app.canonical_misses[1].load(Ordering::Relaxed),"order":app.canonical_misses[2].load(Ordering::Relaxed),"budget":app.canonical_misses[3].load(Ordering::Relaxed),"head_mismatch":app.canonical_stale.load(Ordering::Relaxed),"unavailable":app.canonical_unavailable.load(Ordering::Relaxed)},"identity_rejections":app.canonical_identity_rejections.load(Ordering::Relaxed)},
         "ingestion":app.ingestion_status().clone(),
         "store":app.store.as_ref().map(quai_store::Store::info)}),
     )
+}
+
+/// Serve `app` on its configured address until Ctrl-C, on a runtime with
+/// `config.workers` threads. Prints the same ready line as `quai-rpc`.
+pub fn serve_blocking(app: Arc<App>) -> Result<(), String> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(app.config.workers)
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    runtime.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(&app.config.listen)
+            .await
+            .map_err(|e| format!("listen {}: {e}", app.config.listen))?;
+        let address = listener.local_addr().map_err(|e| e.to_string())?;
+        println!(
+            "{}",
+            json!({"ready":true,"address":address.to_string(),"mode":app.config.mode,"version":VERSION})
+        );
+        axum::serve(listener, router(app))
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await
+            .map_err(|e| e.to_string())
+    })
 }
 
 pub fn router(app: Arc<App>) -> Router {

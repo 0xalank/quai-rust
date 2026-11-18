@@ -265,6 +265,38 @@ Gate: Quais.js and Pelagus work against the Rust node.
 
 1. [ ] RPC on validated state: balances, UTXOs, `call`, `estimateGas`,
        receipts, logs, filters, WebSocket.
+       Done (`b69422e`, `4b2cb40`, `1c6ef5a`): `quai_rpc::view::ChainView`
+       (head, blocks by number and hash, uncle classes, total entropy,
+       transaction positions, stored receipts, account state at a block,
+       UTXOs by outpoint, address and range, read-only calls; hooks for head
+       events and a transaction pool) and `--mode native` with go-quai's JSON
+       for 30 `quai_` read methods, argument errors included.
+       `quai-node rpc --export DIR [--listen ADDR]` serves a QEX1 export and
+       the latest state checkpoint of `--datadir`
+       (`crates/quai-node/src/rpc_view.rs`, `rpc_call.rs`): it rechecks
+       every zone block hash and parent link to the checkpoint block and the
+       checkpoint roots against the head header; order from the export's
+       records, total entropy from the child (natively for the head), uncle
+       classes from their proof-of-work. "latest" is the checkpoint; state at
+       other blocks only where the head's tries serve it, else go-quai's
+       pruned-node answer (`missing trie node <root> (path )`). Go golden
+       fixtures (`scripts/gen_native_rpc_vectors.py`,
+       `fixtures/native-rpc/`) and an offline test on zone 0-8
+       (`crates/quai-node/tests/native_rpc.rs`, 253/253 as recorded). Live,
+       Go export and checkpoint 27,406: 617/625 fixture answers equal to Go,
+       8 documented differences, 0 failed; 1,000 random heights 4,770/4,770
+       equal (`scripts/compare_native_rpc.py`).
+       Left: filters (`newFilter`, `getFilterChanges` and the others),
+       WebSocket subscriptions and `quai_gasPrice` need the live head
+       (Phase 2.3); `sendRawTransaction` and the pending nonce need step 2.
+       go-quai runs calls with access-list checks off (`vm.Config{Debug:
+       true}`); `quai_execution` has no such mode, so a call that touches an
+       unlisted account or slot pays cold gas or fails with "invalid access
+       list" in Rust, and `quai_estimateGas` refuses contract calls without
+       an access list (it needs an access-list tracer). Not served: Qi and
+       conversion estimates, `quai_getLockedBalance`, `quai_getProof`, the
+       `eth_` namespace. A peer export has no receipts: receipts are `null`
+       and logs an error.
 2. [ ] Tx pool and `sendRawTransaction`.
 3. [ ] Fuzz every decoder. Remove `.unwrap()` from code that reads peer data
        (457 calls in non-test code on 2026-11-17).
@@ -362,4 +394,5 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 2.2 | Public P2P mode (`ab2a7ab`, merge `24b994a`): relay client, DCUtR, AutoNAT; `/quai/kad/1.0.0` in both profiles; Go GossipSub parameters and message ID; go-quai validators before accept or relay; genesis check per slot, Go scores and bans, a working rate limit, per-IP limit; publish off by default. Live 5 min: 44 peers, 2 relay reservations, reached through a relay circuit, 859/859 gossip accepted, 0 rejected. Coordinator rerun on merged main: 344/344 workspace in 65 suites, 43/43 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1.2, 1.3 | Rolling replay (`0d9c640`, `5efbbb5`, `e051bc7`): pruned segments in the QEX1 manifest, `peer-export prune` and `status`, `scripts/mainnet/rolling_replay.sh`. On clones of the long replay (checkpoint 670,000): replay 680,000–710,000 PASS across zone 700,000 on blocks downloaded after the prune, 710,000–715,000 PASS after a second prune; 19/19 quai-node and 6/6 peer-export tests. Merge `83e5d64`; coordinator rerun on merged main: 347/347 workspace in 65 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 3.3 | `quai-execution`, `quai-rpc`: non-test unwrap 127 to 0, expect 9 to 6, counted by `scripts/count_panics.py` (`4357880`, `0c7e159`, `add3bd3`, `7fdf0bd`); none was reachable from input. Deep call chains (about 700 frames at 50,000,000 gas) overflowed a 2 MiB stack and aborted the process; they now run again on a 128 MiB stack (`6d4d695`); Go vector `deep-calls` aborts `a69aa7a`. 347/347 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,398 s). Merge `f8a18b9`; coordinator rerun on merged main: 350/350 workspace in 66 suites, 45/45 `quai-network --features native-transport`, fmt clean |
-| 2026-11-18 | Phase 1.4 | Fork audit (`fork-audit`; table in step 4): every v0.57.0 fork gate above zone 790,000 / prime 170,000. Fixed with Go vectors on both sides: opETX memory gas from SecurityHardening (`0bd0abe`; 7 of 15 new vectors failed before), the hash of a ProgPoW header at prime terminus 1,301,100 (`ce6f8e9`; 48 vectors). New Go vectors where Rust already matched: MaxGrindIncrease and MaxCodeSize (`faf33a9`), conversion transactions across the kick-in and both holds (`6c5db59`), incoming ETX gas before SecurityHardening (`5f80e11`), lockup reward years (`0e1036c`). Open: prime controllers (controllers branch), reorg horizon (Phase 2.3), partial AuxPow decode, long Qi addresses before Polaris. 350/350 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,410 s) |
+| 2026-11-18 | Phase 1.4 | Fork audit (`fork-audit`; table in step 4): every v0.57.0 fork gate above zone 790,000 / prime 170,000. Fixed with Go vectors on both sides: opETX memory gas from SecurityHardening (`0bd0abe`; 7 of 15 new vectors failed before), the hash of a ProgPoW header at prime terminus 1,301,100 (`ce6f8e9`; 48 vectors). New Go vectors where Rust already matched: MaxGrindIncrease and MaxCodeSize (`faf33a9`), conversion transactions across the kick-in and both holds (`6c5db59`), incoming ETX gas before SecurityHardening (`5f80e11`), lockup reward years (`0e1036c`). Open: prime controllers (controllers branch), reorg horizon (Phase 2.3), partial AuxPow decode, long Qi addresses before Polaris. 350/350 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,410 s). Merge `6b27112`; coordinator rerun on merged main: 350/350 workspace in 66 suites, 45/45 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 3.1 | Native RPC on replayed state (`b69422e`, `4b2cb40`, `1c6ef5a`, and the commit of this row): `ChainView`, `--mode native` (30 read methods, go-quai JSON and errors), `quai-node rpc`. Replay of the Go export 0-27,406 with `--state` PASS (1,358 s) as the view's state. Live against go-quai v0.57.0: fixture 617/625 equal, 8 documented differences, 0 failed; the 600 equal vectors asked again live 600/600; 1,000 random heights 4,770/4,770. Offline zone 0-8 test 253/253. 358/358 workspace tests in 67 suites (23.6 min), fmt clean, clippy without errors |

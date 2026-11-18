@@ -2575,11 +2575,13 @@ dependencies = [
  "quai-consensus",
  "quai-execution",
  "quai-primitives",
+ "quai-rpc",
  "quai-store",
  "redb",
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -2602,6 +2604,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
+ "quai-primitives",
  "quai-store",
  "reqwest",
  "serde",

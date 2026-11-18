@@ -9,7 +9,7 @@ fn parse_args() -> Result<Config, String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
-            println!("quai-rpc [--mode fixture|gateway|hybrid|snapshot] [--snapshot FILE] [--native-canonical-reads true] [--follow true --poll-ms 1000 --window-blocks 128] [--upstream http://127.0.0.1:8545] [--listen 127.0.0.1:8547]\n  --workers 2 --batch-concurrency 1 --encoding value|raw\n  --max-inflight 128 --max-batch 128 --max-body-bytes 1048576\n  --max-response-bytes 10485760 --timeout-ms 5000");
+            println!("quai-rpc [--mode fixture|gateway|hybrid|snapshot] (native mode: quai-node rpc) [--snapshot FILE] [--native-canonical-reads true] [--follow true --poll-ms 1000 --window-blocks 128] [--upstream http://127.0.0.1:8545] [--listen 127.0.0.1:8547]\n  --workers 2 --batch-concurrency 1 --encoding value|raw\n  --max-inflight 128 --max-batch 128 --max-body-bytes 1048576\n  --max-response-bytes 10485760 --timeout-ms 5000");
             std::process::exit(0);
         }
         let value = args

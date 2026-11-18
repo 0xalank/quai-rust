@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "generator_sha256": "cb8777eb883c709a9891923c5c03d9170b5ba96d28f8462199bd7169cd447a13",
+  "generator_sha256": "8923872c8e9c203f7f1e18cce1ef0b1d2fc859de7bf6bfcdb2cc67a109fd5c61",
   "driver_sha256": "c468468d70c8b52ea9d85c3849f6b24a3611f72ae1b37fda94ee9ccf80056927",
-  "vectors_sha256": "036e2f563ebb6e5d8fcf7aaac30cac7ce8c2b5501163dc730f52a7faabf1790d",
+  "vectors_sha256": "ba74c2a2872ba2c8f5335958b70a2f564e88e7bd9eabbde4a26a3066beb66680",
   "sources": {
     "common/big.go": "51adfacf59cc8707e028aa8bc728a508811239ac6f88a01da33b1dea5208c0e5",
     "core/state/access_list.go": "81f92871845093c75f6b465aa6f4e7a7fcee430913e0f88e890aa600c6348e72",
@@ -88,7 +88,7 @@
       "LICENSE": "bfa9bf72a72ca009fd62a8f84fca3dca67e51d93af96352723646599898b6cf5"
     }
   },
-  "scope": "Bounded isolated interpreter frames with account/storage roots, gas/refund/logs and trace hashes. No calls/creation/precompiles/value-transfer/transaction-fees or full block validity.",
+  "scope": "Isolated interpreter frames with account/storage roots, gas/refund/logs and trace hashes, including frames past former native step, memory, log, input and warm-slot caps. No calls/creation/precompiles/value-transfer/transaction-fees or full block validity.",
   "go_version": "go version go1.24.5 darwin/arm64",
   "public_network": false
 }

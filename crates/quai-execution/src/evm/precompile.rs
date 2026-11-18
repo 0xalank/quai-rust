@@ -1,8 +1,5 @@
 //! Native Ethereum-compatible precompiles used by Quai, with shard translation.
-use super::{
-    word::{self},
-    CapabilityError, Fault,
-};
+use super::{CapabilityError, Fault};
 use num_bigint::BigUint;
 use quai_primitives::transaction::{keccak, Address};
 use sha2::{Digest, Sha256};
@@ -55,6 +52,39 @@ fn modexp_gas(input: &[u8]) -> u64 {
     let words = (length + BigUint::from(7u8)) / BigUint::from(8u8);
     let gas = &words * &words * adjusted.max(BigUint::from(1u8)) / BigUint::from(3u8);
     small(&gas).unwrap_or(u64::MAX).max(200)
+}
+/// go-quai `getData`: `size` bytes from `start`, zero-padded past the end.
+fn get_data(input: &[u8], start: u64, size: u64) -> Vec<u8> {
+    let length = input.len() as u64;
+    let start = start.min(length);
+    let end = start.saturating_add(size).min(length);
+    let mut out = input[start as usize..end as usize].to_vec();
+    out.resize(size as usize, 0);
+    out
+}
+/// go-quai core/vm/contracts.go `bigModExp.Run`. Each length is the low
+/// 64 bits of its 32-byte field (Go `big.Int.Uint64`). The gas check in `run`
+/// has already passed, so EIP-2565 pricing bounds every length that is read:
+/// base and modulus need `ceil(len / 8)² / 3` gas, and a nonzero base or
+/// modulus makes a long exponent cost `8 × (len - 32) / 3` gas.
+fn modexp(input: &[u8]) -> Vec<u8> {
+    let length = |i: u64| u64::from_be_bytes(get_data(input, i * 32 + 24, 8).try_into().unwrap());
+    let (b, e, m) = (length(0), length(1), length(2));
+    if b == 0 && m == 0 {
+        return vec![];
+    }
+    let tail = input.get(96..).unwrap_or_default();
+    let base = BigUint::from_bytes_be(&get_data(tail, 0, b));
+    let exp = BigUint::from_bytes_be(&get_data(tail, b, e));
+    let modu = BigUint::from_bytes_be(&get_data(tail, b.wrapping_add(e), m));
+    let mut out = vec![0; m as usize];
+    if modu != BigUint::default() {
+        let value = base.modpow(&exp, &modu).to_bytes_be();
+        let n = value.len().min(out.len());
+        let start = out.len() - n;
+        out[start..].copy_from_slice(&value[value.len() - n..]);
+    }
+    out
 }
 pub fn required_gas(id: u8, input: &[u8]) -> u64 {
     let words = (input.len() as u64).div_ceil(32);
@@ -135,9 +165,8 @@ pub fn run(
     input: &[u8],
     gas: u64,
 ) -> Result<Result<(Vec<u8>, u64), Fault>, CapabilityError> {
-    if input.len() > 1 << 20 {
-        return Err(CapabilityError::Limit("precompile input"));
-    }
+    // No input cap: go-quai `RunPrecompiledContract` only checks gas. The input
+    // comes from paid memory or transaction data.
     let cost = required_gas(id, input);
     if cost > gas {
         return Ok(Err(Fault::OutOfGas));
@@ -151,30 +180,7 @@ pub fn run(
             Ok(out)
         }
         4 => Ok(input.to_vec()),
-        5 => {
-            let lens = (0..3)
-                .map(|i| word::uint(word::from_bytes(&data(input, i * 32, 32))))
-                .collect::<Option<Vec<_>>>()
-                .ok_or(CapabilityError::Limit("modexp lengths"))?;
-            if lens[0] == 0 && lens[2] == 0 {
-                Ok(vec![])
-            } else {
-                if lens.iter().any(|n| *n > 1 << 20) || lens.iter().sum::<u64>() > 1 << 20 {
-                    return Err(CapabilityError::Limit("modexp operands"));
-                }
-                let (b, e, m) = (lens[0] as usize, lens[1] as usize, lens[2] as usize);
-                let base = BigUint::from_bytes_be(&data(input, 96, b));
-                let exp = BigUint::from_bytes_be(&data(input, 96 + b, e));
-                let modu = BigUint::from_bytes_be(&data(input, 96 + b + e, m));
-                let mut out = vec![0; m];
-                if modu != BigUint::default() {
-                    let value = base.modpow(&exp, &modu).to_bytes_be();
-                    let n = value.len().min(m);
-                    out[m - n..].copy_from_slice(&value[value.len() - n..]);
-                }
-                Ok(out)
-            }
-        }
+        5 => Ok(modexp(input)),
         6 => (|| {
             let b = data(input, 0, 128);
             Ok(encode_g1(g1(&b[..64])? + g1(&b[64..])?))

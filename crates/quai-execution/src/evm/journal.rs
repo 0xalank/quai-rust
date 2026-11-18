@@ -16,7 +16,8 @@ use std::{
 };
 static OWNERS: AtomicU64 = AtomicU64::new(1);
 
-const MAX_UNDO: usize = 1_000_000;
+// The undo log has no length cap. Go's state journal (core/state/journal.go)
+// grows with every change too; gas bounds the number of changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Revision {
     owner: u64,
@@ -44,7 +45,6 @@ struct Checkpoint {
     undo: usize,
     logs: usize,
     etxs: usize,
-    log_bytes: usize,
     refund: u64,
     deleted: std::sync::Arc<BTreeMap<crate::lockup::Key, crate::lockup::Lockup>>,
     deleted_hashes: usize,
@@ -65,7 +65,6 @@ pub struct Journal {
     pub(crate) access_list: Vec<AccessTuple>,
     pub(crate) refund: u64,
     pub(crate) logs: Vec<Log>,
-    pub(crate) log_bytes: usize,
     pub(crate) trace_hash: Hash,
     pub(crate) trace_steps: usize,
     pub(crate) trace_bytes: usize,
@@ -106,7 +105,6 @@ impl Journal {
             block_hashes: BTreeMap::new(),
             prime_number: None,
             initial_sizes,
-            log_bytes: 0,
             trace_hash: [0; 32],
             trace_steps: 0,
             trace_bytes: 0,
@@ -157,7 +155,6 @@ impl Journal {
             undo: self.undo.len(),
             logs: self.logs.len(),
             etxs: self.etxs.len(),
-            log_bytes: self.log_bytes,
             refund: self.refund,
             deleted: self.deleted.clone(),
             deleted_hashes: self.deleted_hashes.len(),
@@ -184,7 +181,6 @@ impl Journal {
         let offset = checkpoint.undo;
         let logs = checkpoint.logs;
         let etxs = checkpoint.etxs;
-        let log_bytes = checkpoint.log_bytes;
         let refund = checkpoint.refund;
         let deleted = checkpoint.deleted.clone();
         let deleted_hashes = checkpoint.deleted_hashes;
@@ -252,7 +248,6 @@ impl Journal {
         }
         self.logs.truncate(logs);
         self.etxs.truncate(etxs);
-        self.log_bytes = log_bytes;
         self.refund = refund;
         self.deleted = deleted;
         self.deleted_hashes.truncate(deleted_hashes);
@@ -262,9 +257,6 @@ impl Journal {
     fn record(&mut self, change: Undo) -> Result<(), CapabilityError> {
         if self.revisions.is_empty() {
             return Err(CapabilityError::Context("mutation outside revision"));
-        }
-        if self.undo.len() == MAX_UNDO {
-            return Err(CapabilityError::Limit("transaction journal"));
         }
         self.undo.push(change);
         Ok(())

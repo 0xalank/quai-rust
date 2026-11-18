@@ -375,3 +375,44 @@ impl State {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebuilt_state_keeps_the_starting_rate_and_stops_at_the_kick_in() {
+        let k = FORKS.controller_kick_in;
+        let s = State::before_kick_in([1; 32], k - 1, Some([2; 32])).unwrap();
+        assert_eq!(s.head(), ([1; 32], k - 1));
+        for n in [k - 1, k - 1 - WINDOW, k - RATES as u64] {
+            assert_eq!(
+                s.rate_at(n).unwrap(),
+                Uint::from_u128(ECONOMICS.exchange_rate)
+            );
+        }
+        assert!(matches!(
+            s.rate_at(k - 1 - RATES as u64),
+            Err(Error::Unavailable(_))
+        ));
+        assert!(matches!(s.rate_at(k), Err(Error::Unavailable(_))));
+        assert_eq!(s.parent_window().map(|w| w.block()), Some([2; 32]));
+        assert!(s.inbound().is_none());
+        // The kick-in block's inbound ETXs and a stored set are needed after
+        // it, so a state at or after the kick-in cannot be rebuilt.
+        assert!(State::before_kick_in([1; 32], k, Some([2; 32])).is_err());
+        assert!(State::before_kick_in([1; 32], 5, None).is_err());
+        let g = State::before_kick_in([1; 32], 0, None).unwrap();
+        assert_eq!(g.parts().rates.len(), 1);
+        // Parts round-trip, and inconsistent parts are refused.
+        let p = s.parts();
+        let back = State::from_parts(p.clone()).unwrap();
+        assert_eq!(back.head(), s.head());
+        let mut bad = p.clone();
+        bad.first += 1;
+        assert!(State::from_parts(bad).is_err());
+        let mut bad = p;
+        bad.head = [9; 32];
+        assert!(State::from_parts(bad).is_err());
+    }
+}

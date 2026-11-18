@@ -1,9 +1,9 @@
 {
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "vectors_sha256": "2caccf2898990efb06823a356c42109d9c26f4e3faa19106e1428f5d08c64a01",
-  "driver_sha256": "80b061bc89f4f4a4df96990c382b1d39066532eedf9c8937709e00ab708d878c",
+  "vectors_sha256": "f479a5c8e43fc554ccea3a865bbbb7dc9a38f2794a155f9f541b00bd7a156b3f",
+  "driver_sha256": "556ca30c00b1ccf51151e49d76b49b1f99d6ef49843ca10cd63f28718d264794",
   "oracle_sources": {
-    "reference/stateful/main.go": "7fed9005e696b31489bed05bc3db824730b517aa7c9285f9d841d28db55876e1",
+    "reference/stateful/main.go": "d815329d3fca8dd85c8621a55595e3f05ffe0a6eff28b4e2ee4d8bdd9ec8735e",
     "reference/stateful/trace.go": "2018be7a893288332a3487593883904737d4e660b09ad9fa76f1c1481e866dfc"
   },
   "go_sources": {

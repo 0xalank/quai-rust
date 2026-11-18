@@ -678,6 +678,72 @@ func main() {
 		vectors = append(vectors, run(testcase{id: "bounds-modexp-zero-lengths-huge-exponent", target: &target, input: huge, listed: true, precompile: true, gas: 1000000}, loc))
 	}
 
+	// opETX memory across SecurityHardeningForkBlock (core/vm/interpreter.go:77-82).
+	// Before the fork, memoryETX sizes memory by the sum of the data and
+	// access-list ranges, and opETX charges no memory gas. From the fork,
+	// memoryETXFixed takes the larger range and pureMemoryGascost charges it.
+	// Each program then records the opETX result, MSIZE and GAS at 4096, so a
+	// later expansion pays for the words that opETX added without gas.
+	{
+		loc := common.Location{0, 0}
+		remote := addr(common.Location{0, 1}, 8)
+		pw := func(v *big.Int) []byte {
+			b := v.Bytes()
+			if len(b) == 0 {
+				b = []byte{0}
+			}
+			return append([]byte{0x5f + byte(len(b))}, b...)
+		}
+		// opETX operands, pushed last to first: access-list size and offset,
+		// data size and offset, fee cap, tip, gas limit, value, to, temp.
+		etx := func(value, limit uint64, dataOff, dataLen, listOff, listLen *big.Int) []byte {
+			return join(pw(listLen), pw(listOff), pw(dataLen), pw(dataOff), p(0), p(0), p(limit), p(value), pushAddr(remote), p(0), []byte{0xf6})
+		}
+		observe := join([]byte{0x59}, p(4096), []byte{0x52}, p(4128), []byte{0x52, 0x5a}, p(4160), []byte{0x52}, p(96), p(4096), []byte{0xf3})
+		word := make([]byte, 32)
+		for i := range word {
+			word[i] = byte(i + 1)
+		}
+		// One nonzero data word at 0 and the empty access list 0xc0 at 32.
+		prefix := join(append([]byte{0x7f}, word...), p(0), []byte{0x52}, p(0xc0), p(32), []byte{0x53})
+		keys := []common.Hash{}
+		for i := 0; i < 64; i++ {
+			keys = append(keys, common.BigToHash(u(uint64(i))))
+		}
+		list, e := rlp.EncodeToBytes(types.AccessList{{Address: addr(loc, 2), StorageKeys: keys}})
+		must(e)
+		// The access list (2,142 bytes) from calldata to 256.
+		copied := join([]byte{0x36}, p(0), p(256), []byte{0x37})
+		half := new(big.Int).Lsh(u(1), 63)
+		n := func(v uint64) *big.Int { return u(v) }
+		for _, prime := range []uint64{2316999, 2317000} {
+			for _, c := range []testcase{
+				// Data [0, 2048) and the list [32, 33): 2,081 bytes before the fork, 2,048 from it.
+				{id: "etx-memory-data-2048-limit-100000", root: join(prefix, etx(13, 100000, n(0), n(2048), n(32), n(1)), observe), gas: 1000000},
+				// Gas limit 21,000 does not pay for the data from the fork.
+				{id: "etx-memory-data-2048-limit-21000", root: join(prefix, etx(13, 21000, n(0), n(2048), n(32), n(1)), observe), gas: 1000000},
+				// 262,144 bytes of data and a value above the balance: opETX returns 0.
+				// The memory is free before the fork and costs 155,642 gas from it.
+				{id: "etx-memory-data-262144-gas-100000", root: join(prefix, etx(2000000, 100000, n(0), n(262144), n(32), n(1)), observe), gas: 100000},
+				{id: "etx-memory-data-262144-gas-1000000", root: join(prefix, etx(2000000, 100000, n(0), n(262144), n(32), n(1)), observe), gas: 1000000},
+				// Two ranges of 2^63 bytes: the sum overflows uint64 before the fork;
+				// from it the larger range is above the memory gas ceiling.
+				{id: "etx-memory-overflow", root: join(etx(13, 100000, n(0), half, n(0), half), observe), gas: 1000000},
+				// The access list is the larger range and has 64 keys.
+				{id: "etx-memory-list-2142-limit-200000", root: join(copied, etx(13, 200000, n(0), n(4), n(256), n(uint64(len(list)))), observe), input: list, gas: 1000000},
+				{id: "etx-memory-list-2142-limit-21000", root: join(copied, etx(13, 21000, n(0), n(4), n(256), n(uint64(len(list)))), observe), input: list, gas: 1000000},
+			} {
+				c.id = fmt.Sprintf("%s-prime-%d", c.id, prime)
+				c.listed = true
+				c.prime = prime
+				vectors = append(vectors, run(c, loc))
+			}
+		}
+		// From the fork only: a range above 0x1FFFFFFFE0 bytes is out of gas.
+		// Before the fork go-quai would allocate it (128 GiB) without gas.
+		vectors = append(vectors, run(testcase{id: "etx-memory-ceiling-prime-2317000", root: join(prefix, etx(13, 100000, n(0), n(0x2000000000), n(32), n(1)), observe), listed: true, gas: 1000000, prime: 2317000}, loc))
+	}
+
 	chain := *params.TestChainConfig
 	chain.ChainID = u(1337)
 	genesis := []interface{}{}

@@ -22,6 +22,9 @@ export rewrites only the last, incomplete segment. That segment can get a new
 `<last>` in its name; the exporter deletes the old file after the manifest no
 longer lists it. A reader takes the file names from the manifest only.
 
+A peer export can be pruned (see [Pruned segments](#pruned-segments)): the
+manifest still lists a pruned segment, but its file is gone.
+
 ## Segment file
 
 A segment starts with the 5-byte magic `QEX1\n`. Records follow until end of
@@ -162,7 +165,46 @@ An export that passes both has these properties:
 `records` is the number of records in the segment; `last_zone` is the last
 zone height of the export; `exported_utc` is the time of the last manifest
 write. The exporter writes the manifest to `manifest.json.tmp` and renames it,
-after each segment.
+after each segment (and `peer-export prune` after it prunes).
 
 The reader checks `format`, `reference_revision`, the segment hashes and that
 segment ranges are contiguous from 0.
+
+## Pruned segments
+
+A long replay does not need the segments behind its checkpoints, and a full
+mainnet export (about 65 GB) does not fit next to the replay on the reference
+machine. `peer-export prune DIR --below ZONE` deletes the files of the
+complete segments that end below `ZONE` and marks them in the manifest:
+
+```json
+{"file": "segments/0000000000-0000099999.qex", "first_zone": 0, "last_zone": 99999, "records": 174087, "sha256": "…", "pruned": true}
+```
+
+- A pruned entry keeps its range, record count and hash, so segment ranges
+  stay contiguous from 0 and `last_zone` is unchanged. `"pruned"` is written
+  only when it is `true`; an entry without it is kept.
+- Only a prefix of the segments can be pruned, and never the last segment.
+  `prune` also keeps the newest complete segment: a resumed export reads its
+  chain tips from that segment's last zone height. A zone block names its
+  prime and region parents, and the exporter checked those links when it
+  wrote the block.
+- The manifest is written before the files are deleted. An interrupted prune
+  leaves files of pruned segments, which the next prune or export deletes;
+  never a listed segment without its file. The `sources/` file of a pruned
+  segment stays.
+- A replay that resumes from a checkpoint at zone `h` reads only the segments
+  from the one that holds `h`. The rolling replay
+  (`scripts/mainnet/rolling_replay.sh`) passes the oldest checkpoint that the
+  replay keeps as `ZONE`, so a fallback to that checkpoint still finds its
+  segment.
+
+Readers never open a pruned segment. The Rust reader
+(`crates/quai-node/src/qex.rs`) fails with an error that names the segment
+and the first kept zone height when a replay must read one. `peer-export`
+resumes and extends a pruned export, and `peer-export verify` checks the kept
+segments, with the chain rules from the first kept zone block on (its own
+parent links stand for the pruned blocks). `peer-export compare` needs every
+segment. Go exports (`"receipts": true`) are not pruned. A reader that does
+not know the field fails on the missing file, so an older reader cannot
+misread a pruned export; the segment format stays QEX1.

@@ -81,11 +81,11 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        (protobuf) plus receipts, in order from genesis. The header fields carry
        the expected state, UTXO, ETX and receipt roots.
        `scripts/mainnet/export.sh` (default: stop node, APFS clone, restart,
-       export from the clone; `--live` clones without a stop). Risk: an export
-       takes about 6.5 KB per zone height, so a full mainnet export does not fit
-       next to the node on this disk. Before that point, stream segments into
-       replay and delete them, compress them (zstd gives 3.8x; needs QEX2), or
-       move the data to another volume.
+       export from the clone; `--live` clones without a stop). An export takes
+       about 6.5 KB per zone height (about 65 GB for mainnet), so a full
+       export does not fit next to the node on this disk. The rolling replay
+       (step 3) deletes the segments behind the replay. Not done, and not
+       needed for that: zstd (3.8x; needs QEX2) or another volume.
 3. [x] Rust `replay` command: start at mainnet genesis with the official
        allocations and compare every root. Stop at the first mismatch and print
        it. `quai-node replay --export DIR [--state] [--to N] [--jobs N]`; one
@@ -113,6 +113,28 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        3.7/s for the Go node's own sync. A public export to zone 686,009
        (4.1 GB, 1,192,401 records, 6.79M transactions) is in
        `~/quai-data/mainnet-v0.57.0/peer-export-public` and passes `verify`.
+       Rolling replay done (`e051bc7`): `scripts/mainnet/rolling_replay.sh`
+       follows the head with bounded disk. Each pass prunes, extends the
+       peer export from public peers to the latest checkpoint plus
+       `ROLLING_AHEAD` (default 100,000), runs `replay --state --resume` to
+       the end of the export, prunes again and appends one line to
+       `results/rolling-replay/history.jsonl`. At the peers' head it polls
+       every 10 minutes. `peer-export prune --below <oldest kept checkpoint>`
+       deletes the segment files that no kept checkpoint needs; the manifest
+       keeps them with `"pruned": true` (docs/mainnet-export-format.md).
+       Both readers skip pruned segments; the exporter takes its chain tips
+       from the newest complete segment, which prune keeps. Disk use: the
+       replay data directory plus about 3 segments (650 MB each). Guards as
+       `go_node.sh`: no download on an iPhone hotspot, stop below 30 GiB
+       free, a STOP file (the replay stops at its next checkpoint), stop on
+       the first replay failure. End-to-end on clones of the long replay
+       (checkpoint 670,000) and `peer-export-1250k`: prune 7.5 GiB to
+       4.0 GiB in 0.07 s; replay 680,000 to 710,000 PASS across zone 700,000
+       on blocks downloaded after the prune; the rebuilt segment
+       700,000–799,999 is byte-identical to the one-pass export; after a
+       second prune the replay resumes at 710,000 and passes 715,000, and
+       reads only segment 700,000–799,999. Not done: zstd segments (not
+       needed for bounded disk).
 4. [ ] Fix the first mismatch, then run again. Milestones are the fork heights
        in go-quai `params/protocol_params.go`: KawPow 1,171,500, Singularity
        1,530,500, ShaEquivalentDifficulty 1,755,000, ConversionStability
@@ -281,3 +303,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1 | Long replay PASS to zone 686,009, the end of `peer-export-public`, every root equal: 506,009 heights from checkpoint 180,000 in 10,347 s (48.9 blocks/s; 67% of the time waits for proof-of-work), 5,193,990 workshares. Continued on `peer-export-1250k` from checkpoint 700,000 (log: `replay-public-1250k.err`) |
 | 2026-11-18 | Phase 3.3 | `Lockup::decode` matches Go; test `record_layout_matches_go` (`7206f8c`). Clippy `approx_constant`: Go's `ln2 = 0.6931` kept on purpose (`e3747da`) |
 | 2026-11-18 | Phase 2.2 | Public P2P mode (`ab2a7ab`, merge `24b994a`): relay client, DCUtR, AutoNAT; `/quai/kad/1.0.0` in both profiles; Go GossipSub parameters and message ID; go-quai validators before accept or relay; genesis check per slot, Go scores and bans, a working rate limit, per-IP limit; publish off by default. Live 5 min: 44 peers, 2 relay reservations, reached through a relay circuit, 859/859 gossip accepted, 0 rejected. Coordinator rerun on merged main: 344/344 workspace in 65 suites, 43/43 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 1.2, 1.3 | Rolling replay (`0d9c640`, `5efbbb5`, `e051bc7`): pruned segments in the QEX1 manifest, `peer-export prune` and `status`, `scripts/mainnet/rolling_replay.sh`. On clones of the long replay (checkpoint 670,000): replay 680,000–710,000 PASS across zone 700,000 on blocks downloaded after the prune, 710,000–715,000 PASS after a second prune; 19/19 quai-node and 6/6 peer-export tests |

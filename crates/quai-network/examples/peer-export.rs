@@ -7,6 +7,9 @@
 //!   peer-export compare OURS OTHER     compare two exports record by record,
 //!                                      ignoring only the receipts field
 //!   peer-export verify DIR             check an export again from its files
+//!   peer-export prune DIR --below ZONE delete the files of complete segments
+//!                                      that end below ZONE (rolling replay)
+//!   peer-export status DIR             print the manifest summary as JSON
 //!
 //! Export options:
 //!   --out DIR          output (default $QUAI_MAINNET_DIR/peer-export, with
@@ -29,6 +32,16 @@
 //! segment and the manifest; the next run resumes from it. The exporter
 //! refuses a directory that holds an export with receipts (a Go export).
 //! `sources/<segment>.json` records which peer supplied each block range.
+//! When the export already reaches `--to`, or the peers have no block above
+//! it, the export prints an `up_to_date` event and exits with status 0.
+//!
+//! `prune` keeps a long replay within the disk: a replay that resumes from a
+//! checkpoint at or above ZONE never reads a segment that ends below ZONE.
+//! Pass the oldest checkpoint that the replay keeps
+//! (scripts/mainnet/rolling_replay.sh). The manifest keeps the entry with
+//! `"pruned": true`. The newest complete segment and the last segment are
+//! always kept: a resumed export reads its chain tips from the newest complete
+//! segment and rewrites a partial last segment.
 //!
 //! Read-only, as `quai_network::public` enforces: dial out only, no inbound
 //! requests served, no gossip published. Public peers are not used when the
@@ -78,6 +91,9 @@ const USAGE: &str = "\
 Usage: peer-export [export] [OPTIONS]     write or resume a QEX1 export from go-quai peers
        peer-export compare OURS OTHER     compare two exports record by record (receipts ignored)
        peer-export verify DIR             check an export again from its files
+       peer-export prune DIR --below ZONE delete the files of complete segments that end
+                                          below ZONE; keep the newest complete and the last
+       peer-export status DIR             print the manifest summary as one JSON line
 
 Export options:
   --out DIR          output (default $QUAI_MAINNET_DIR/peer-export,
@@ -93,7 +109,8 @@ Export options:
   --max-seconds N    stop after N seconds
 A file named STOP in the output directory stops the export at the next check;
 a stopped export resumes on the next run. ALLOW_METERED=1 allows public peers
-on an iPhone hotspot gateway (172.20.10.x).
+on an iPhone hotspot gateway (172.20.10.x). An export that already reaches
+--to, or that the peers cannot extend, prints an up_to_date event (status 0).
 ";
 
 /// `params.ProgpowColosseumGenesisHash`.
@@ -515,6 +532,23 @@ impl Checker {
         }
         Ok(())
     }
+    /// Start the rules at a zone block after a pruned prefix: the block's own
+    /// parent links (zone parent, prime and region parents) stand for the
+    /// pruned blocks. Every later record is then checked as usual.
+    fn anchor(&mut self, zone: &Block) {
+        let tip = |number: u64, hash: Hash| {
+            Some(Tip {
+                number: number.saturating_sub(1),
+                hash,
+            })
+        };
+        self.last = [
+            tip(zone.numbers[0], zone.dom_parents[0]),
+            tip(zone.numbers[1], zone.dom_parents[1]),
+            tip(zone.number, zone.parent),
+        ];
+        self.next_zone = zone.number;
+    }
     /// Go `checkTip`: the next zone block links to the export, and the next
     /// prime and region blocks are zone [0 0] blocks above it.
     fn tip(&self, child: &Block, next: [&Block; 2]) -> Result<(), String> {
@@ -557,6 +591,29 @@ impl Checker {
     }
 }
 
+/// The chain tips after one zone height (`records` in prime, region, zone
+/// order): its own records, and for prime and region without a record, the
+/// parents that its zone block names. The export checked those links
+/// (`Checker::dominant_parents`) when it wrote the block.
+fn tips_after(records: &[Block]) -> [Option<Tip>; 3] {
+    let mut tips = [None; 3];
+    if let Some(zone) = records.last().filter(|b| b.ctx == ZONE) {
+        for (c, tip) in tips.iter_mut().take(2).enumerate() {
+            *tip = Some(Tip {
+                number: zone.numbers[c].wrapping_sub(1),
+                hash: zone.dom_parents[c],
+            });
+        }
+    }
+    for r in records {
+        tips[r.ctx] = Some(Tip {
+            number: r.number,
+            hash: r.hash,
+        });
+    }
+    tips
+}
+
 // ---------------------------------------------------------------------------
 // Export directory: manifest, segments, resume (as the Go exporter).
 
@@ -567,6 +624,14 @@ struct SegmentInfo {
     last: u64,
     records: u64,
     sha256: String,
+    /// `"pruned": true`: the file was deleted after the replay checkpointed
+    /// past the segment. The entry keeps its range, count and hash.
+    pruned: bool,
+}
+impl SegmentInfo {
+    fn complete(&self, span: u64) -> bool {
+        self.last - self.first + 1 == span
+    }
 }
 #[derive(Clone, Debug)]
 struct Manifest {
@@ -580,8 +645,10 @@ fn segment_name(first: u64, last: u64) -> String {
 fn sources_name(first: u64, last: u64) -> String {
     format!("sources/{first:010}-{last:010}.json")
 }
-/// Go `readManifest` and `checkManifest`.
-fn read_manifest(dir: &Path) -> Res<Option<Manifest>> {
+/// Go `readManifest` and `checkManifest`, plus pruned entries: only a prefix
+/// of the segments can be pruned, never the last. `span` is the segment span
+/// (`SEGMENT_SPAN`; tests use a smaller one).
+fn read_manifest(dir: &Path, span: u64) -> Res<Option<Manifest>> {
     let path = dir.join("manifest.json");
     let bytes = match fs::read(&path) {
         Ok(b) => b,
@@ -611,6 +678,7 @@ fn read_manifest(dir: &Path) -> Res<Option<Manifest>> {
     }
     let mut segments = vec![];
     let mut next = 0;
+    let mut kept = false;
     for (i, seg) in list.iter().enumerate() {
         let info = SegmentInfo {
             file: seg["file"].as_str().unwrap_or("").to_string(),
@@ -618,18 +686,32 @@ fn read_manifest(dir: &Path) -> Res<Option<Manifest>> {
             last: seg["last_zone"].as_u64().ok_or("segment last_zone")?,
             records: seg["records"].as_u64().ok_or("segment records")?,
             sha256: seg["sha256"].as_str().unwrap_or("").to_string(),
+            pruned: match &seg["pruned"] {
+                Value::Null => false,
+                Value::Bool(b) => *b,
+                _ => return Err("segment pruned is not a boolean".into()),
+            },
         };
-        let span = info.last.wrapping_sub(info.first).wrapping_add(1);
+        let width = info.last.wrapping_sub(info.first).wrapping_add(1);
+        let last = i + 1 == list.len();
         if info.file != segment_name(info.first, info.last)
             || info.first != next
             || info.last < info.first
-            || span > SEGMENT_SPAN
-            || (span < SEGMENT_SPAN && i + 1 != list.len())
-            || info.records < span
+            || width > span
+            || (width < span && !last)
+            || info.records < width
             || info.sha256.len() != 64
         {
             return Err(format!("manifest segment {} is not valid", info.file).into());
         }
+        if info.pruned && (kept || last) {
+            return Err(format!(
+                "manifest segment {} is pruned, but only segments before every kept segment can be pruned, and never the last",
+                info.file
+            )
+            .into());
+        }
+        kept |= !info.pruned;
         next = info.last + 1;
         segments.push(info);
     }
@@ -660,10 +742,16 @@ fn write_manifest(dir: &Path, segments: &[SegmentInfo]) -> io::Result<()> {
         "genesis_hash": hex(&GENESIS),
         "receipts": false,
         "last_zone": last,
-        "segments": segments.iter().map(|s| json!({
-            "file": s.file, "first_zone": s.first, "last_zone": s.last,
-            "records": s.records, "sha256": s.sha256,
-        })).collect::<Vec<_>>(),
+        "segments": segments.iter().map(|s| {
+            let mut v = json!({
+                "file": s.file, "first_zone": s.first, "last_zone": s.last,
+                "records": s.records, "sha256": s.sha256,
+            });
+            if s.pruned {
+                v["pruned"] = json!(true);
+            }
+            v
+        }).collect::<Vec<_>>(),
         "exported_utc": now_utc(),
     });
     let mut bytes = serde_json::to_vec_pretty(&manifest)?;
@@ -688,9 +776,14 @@ fn file_sha256(path: &Path) -> io::Result<String> {
     Ok(hex(&hasher.finalize())[2..].to_string())
 }
 /// Go `removeUnlisted`: delete `.pending` files and segments the manifest
-/// does not list (and their source files).
+/// does not list (and their source files). The file of a pruned segment is
+/// deleted too (left by an interrupted prune); its source file is kept.
 fn remove_unlisted(dir: &Path, listed: &[SegmentInfo]) -> io::Result<()> {
-    let keep: HashSet<String> = listed.iter().map(|s| s.file.clone()).collect();
+    let keep: HashSet<String> = listed
+        .iter()
+        .filter(|s| !s.pruned)
+        .map(|s| s.file.clone())
+        .collect();
     let keep_sources: HashSet<String> = listed
         .iter()
         .map(|s| sources_name(s.first, s.last))
@@ -772,7 +865,8 @@ impl SegmentReader {
     }
 }
 /// The records of all segments of a manifest, in order. Each segment's
-/// SHA-256 is checked before its records are read.
+/// SHA-256 is checked before its records are read; a pruned segment is an
+/// error.
 struct ExportStream {
     dir: PathBuf,
     segments: Vec<SegmentInfo>,
@@ -794,6 +888,9 @@ impl ExportStream {
                 let Some(info) = self.segments.get(self.index) else {
                     return Ok(None);
                 };
+                if info.pruned {
+                    return Err(format!("{} is pruned: its file was deleted", info.file).into());
+                }
                 let path = self.dir.join(&info.file);
                 if file_sha256(&path)? != info.sha256 {
                     return Err(format!("{}: sha256 does not match the manifest", info.file).into());
@@ -866,6 +963,7 @@ impl SegmentWriter {
             last,
             records: self.records,
             sha256: hex(&self.sha.finalize())[2..].to_string(),
+            pruned: false,
         })
     }
 }
@@ -929,23 +1027,36 @@ impl Provenance {
 struct Export {
     dir: PathBuf,
     _lock: File,
+    /// Complete segments, pruned ones included (they stay listed).
     segments: Vec<SegmentInfo>,
     current: Option<SegmentWriter>,
     provenance: Provenance,
     checker: Checker,
     end: u64,
+    /// Bytes of the segment files on disk (pruned segments have none).
     bytes: u64,
+    span: u64,
+}
+/// Take the export directory's lock (one writer: an export or a prune).
+fn lock_dir(dir: &Path) -> Res<File> {
+    let lock = File::open(dir)?;
+    lock.try_lock()
+        .map_err(|e| format!("another export is writing {}: {e}", dir.display()))?;
+    Ok(lock)
 }
 impl Export {
-    /// Open or resume. Complete segments are kept after their hash is
-    /// checked. A partial last segment is checked record by record and
-    /// copied into the new pending segment (the export rewrites it).
     fn open(dir: &Path) -> Res<Self> {
+        Self::open_with(dir, SEGMENT_SPAN)
+    }
+    /// Open or resume. Complete segments are kept after their hash is
+    /// checked; pruned segments stay listed and are not read. A partial last
+    /// segment is checked record by record and copied into the new pending
+    /// segment (the export rewrites it). The chain tips come from the newest
+    /// complete segment, which a prune never deletes.
+    fn open_with(dir: &Path, span: u64) -> Res<Self> {
         fs::create_dir_all(dir.join("segments"))?;
-        let lock = File::open(dir)?;
-        lock.try_lock()
-            .map_err(|e| format!("another export is writing {}: {e}", dir.display()))?;
-        let old = read_manifest(dir)?;
+        let lock = lock_dir(dir)?;
+        let old = read_manifest(dir, span)?;
         if old.as_ref().is_some_and(|m| m.receipts) {
             return Err(format!(
                 "{} holds an export with receipts (a Go export); peer exports go to another directory",
@@ -964,42 +1075,63 @@ impl Export {
             checker: Checker::default(),
             end: u64::MAX,
             bytes: 0,
+            span,
         };
         let Some(old) = old else {
             return Ok(e);
         };
         let mut partial = None;
         for s in old.segments {
+            if s.pruned {
+                // No file: a replay checkpointed past it. It stays listed.
+                e.segments.push(s);
+                continue;
+            }
             let path = dir.join(&s.file);
             if file_sha256(&path)? != s.sha256 {
                 return Err(format!("{}: sha256 does not match the manifest", s.file).into());
             }
-            if s.last - s.first + 1 == SEGMENT_SPAN {
+            if s.complete(span) {
                 e.bytes += fs::metadata(&path)?.len();
                 e.segments.push(s);
             } else {
                 partial = Some(s);
             }
         }
-        // Chain state at the end of the kept segments: their last records.
-        let mut tips: [Option<Tip>; 3] = [None; 3];
-        for s in e.segments.iter().rev() {
-            if tips.iter().all(Option::is_some) {
-                break;
-            }
-            let mut found: [Option<Tip>; 3] = [None; 3];
-            let mut r = SegmentReader::open(&dir.join(&s.file))?;
-            while let Some(rec) = r.next()? {
-                found[rec.ctx] = Some(Tip {
-                    number: rec.number,
-                    hash: rec.hash,
-                });
-            }
-            for c in 0..3 {
-                tips[c] = tips[c].or(found[c]);
-            }
-        }
+        // Chain state at the end of the complete segments, from the last zone
+        // height of the newest one. That segment is enough, and a prune
+        // always keeps it.
         if let Some(last) = e.segments.last() {
+            if last.pruned {
+                return Err(format!(
+                    "cannot resume: the chain tips are read from the newest complete segment {}, which is pruned",
+                    last.file
+                )
+                .into());
+            }
+            let mut r = SegmentReader::open(&dir.join(&last.file))?;
+            let mut height: Vec<RawRecord> = vec![];
+            while let Some(rec) = r.next()? {
+                if height.last().is_some_and(|p| p.ctx == ZONE) {
+                    height.clear();
+                }
+                height.push(rec);
+            }
+            let mut blocks = vec![];
+            for rec in height {
+                let block = decode_block(rec.block, rec.ctx).map_err(|err| {
+                    format!("{}: {} {}: {err}", last.file, NAMES[rec.ctx], rec.number)
+                })?;
+                if block.hash != rec.hash || block.number != rec.number {
+                    return Err(format!(
+                        "{}: record {} does not match its block",
+                        last.file, rec.number
+                    )
+                    .into());
+                }
+                blocks.push(block);
+            }
+            let tips = tips_after(&blocks);
             if tips.iter().any(Option::is_none) || tips[ZONE].map(|t| t.number) != Some(last.last) {
                 return Err(
                     format!("{} does not end with zone height {}", last.file, last.last).into(),
@@ -1050,7 +1182,7 @@ impl Export {
         let z = self.checker.next_zone - 1;
         if self.current.is_none() {
             let first = z;
-            let planned = (first + SEGMENT_SPAN - 1).min(self.end);
+            let planned = (first + self.span - 1).min(self.end);
             self.current = Some(SegmentWriter::create(&self.dir, first, planned)?);
         }
         let seg = self.current.as_mut().ok_or("no segment")?;
@@ -1062,7 +1194,7 @@ impl Export {
             }
         }
         self.bytes += seg.bytes - before;
-        if z + 1 - seg.first == SEGMENT_SPAN {
+        if z + 1 - seg.first == self.span {
             self.finish_segment(z)?;
         }
         Ok(())
@@ -1850,6 +1982,16 @@ async fn start_public(pool: Arc<Pool>) -> Res<Arc<ReadOnlyPeer>> {
 
 async fn run_export(args: Args) -> Res<()> {
     let started = Instant::now();
+    // An export that already reaches --to needs no peers (and no rehash).
+    if let (Some(to), Some(m)) = (args.to, read_manifest(&args.out, SEGMENT_SPAN)?) {
+        if to <= m.last_zone && !m.receipts {
+            emit(
+                json!({"event":"up_to_date","out":args.out.display().to_string(),"last_zone":m.last_zone,"to":to,
+                "reason":"the export already reaches --to"}),
+            );
+            return Ok(());
+        }
+    }
     let mut export = Export::open(&args.out)?;
     let stop_file = args.out.join("STOP");
     if stop_file.exists() {
@@ -1857,9 +1999,11 @@ async fn run_export(args: Args) -> Res<()> {
     }
     let resume_at = export.next_zone();
     let tips = export.checker.last;
+    let pruned = export.segments.iter().filter(|s| s.pruned).count();
     emit(
         json!({"event":"start","out":args.out.display().to_string(),"resume_at":resume_at,
-        "kept_segments":export.segments.len(),"local":args.local,"public":args.public,
+        "kept_segments":export.segments.len() - pruned,"pruned_segments":pruned,
+        "local":args.local,"public":args.public,
         "inflight":args.inflight,"margin":args.margin,"max_peers":args.max_peers}),
     );
     let sched = Arc::new(Mutex::new(Sched {
@@ -1935,11 +2079,18 @@ async fn run_export(args: Args) -> Res<()> {
         .ok_or("peers too short")?;
     let end = args.to.unwrap_or(u64::MAX).min(top.saturating_sub(1));
     if end < resume_at {
-        return Err(format!(
-            "nothing to export: the export ends at {}, the peers allow up to {end}",
-            resume_at.saturating_sub(1)
-        )
-        .into());
+        // At the peers' head (less --margin): nothing to add yet. The
+        // manifest still lists the old partial segment; drop its copy.
+        pool.stop.store(true, Ordering::Relaxed);
+        if let Some(seg) = export.current.take() {
+            let _ = fs::remove_file(&seg.pending);
+        }
+        emit(
+            json!({"event":"up_to_date","out":args.out.display().to_string(),"last_zone":resume_at.saturating_sub(1),
+            "to":args.to,"peers_allow":top.saturating_sub(1),
+            "reason":"the peers have no block above the export (less --margin)"}),
+        );
+        return Ok(());
     }
     export.end = end;
     {
@@ -2194,12 +2345,14 @@ async fn run_export(args: Args) -> Res<()> {
 // ---------------------------------------------------------------------------
 // compare and verify.
 
-fn load(dir: &Path) -> Res<Manifest> {
-    read_manifest(dir)?.ok_or_else(|| format!("{} has no manifest.json", dir.display()).into())
+fn load(dir: &Path, span: u64) -> Res<Manifest> {
+    read_manifest(dir, span)?
+        .ok_or_else(|| format!("{} has no manifest.json", dir.display()).into())
 }
 /// Record-by-record comparison up to the shorter export; receipts ignored.
+/// Both exports must hold every segment from genesis.
 fn compare(ours: &Path, other: &Path) -> Res<bool> {
-    let (a, b) = (load(ours)?, load(other)?);
+    let (a, b) = (load(ours, SEGMENT_SPAN)?, load(other, SEGMENT_SPAN)?);
     let last = a.last_zone.min(b.last_zone);
     let (mut ra, mut rb) = (
         ExportStream::new(ours, a.segments),
@@ -2232,12 +2385,16 @@ fn compare(ours: &Path, other: &Path) -> Res<bool> {
     Ok(true)
 }
 /// Check an export again from its files: manifest, hashes, and every record
-/// with the same rules as the export (Go `-verify`).
-fn verify(dir: &Path) -> Res<()> {
-    let m = load(dir)?;
+/// with the same rules as the export (Go `-verify`). After a pruned prefix
+/// the chain rules start at the first kept zone block, whose own parent links
+/// stand for the pruned blocks.
+fn verify(dir: &Path, span: u64) -> Res<()> {
+    let m = load(dir, span)?;
     let started = Instant::now();
     let mut checker = Checker::default();
-    for s in &m.segments {
+    let pruned = m.segments.iter().filter(|s| s.pruned).count();
+    let from_zone = m.segments.get(pruned).map_or(0, |s| s.first);
+    for s in m.segments.iter().filter(|s| !s.pruned) {
         let mut stream = ExportStream::new(dir, vec![s.clone()]);
         let mut height: Vec<Block> = vec![];
         let mut records = 0;
@@ -2256,6 +2413,9 @@ fn verify(dir: &Path) -> Res<()> {
             }
             records += 1;
             let zone = block.ctx == ZONE;
+            if zone && checker.last[ZONE].is_none() && block.number > 0 {
+                checker.anchor(&block);
+            }
             height.push(block);
             if zone {
                 checker
@@ -2272,9 +2432,78 @@ fn verify(dir: &Path) -> Res<()> {
         );
     }
     emit(
-        json!({"event":"verified","last_zone":m.last_zone,"records":checker.records,"transactions":checker.txs,"receipts":m.receipts}),
+        json!({"event":"verified","from_zone":from_zone,"last_zone":m.last_zone,"pruned_segments":pruned,
+        "records":checker.records,"transactions":checker.txs,"receipts":m.receipts}),
     );
     Ok(())
+}
+
+/// The segments that `prune` deletes: complete segments that end below
+/// `below`, except the newest complete segment, from which a resumed export
+/// reads its chain tips. The last segment is that segment or the partial
+/// one, so it is kept too. Only a prefix of the segments qualifies.
+fn prunable(segments: &[SegmentInfo], below: u64, span: u64) -> Vec<usize> {
+    let newest = segments.iter().rposition(|s| s.complete(span));
+    segments
+        .iter()
+        .enumerate()
+        .filter(|(i, s)| !s.pruned && s.complete(span) && s.last < below && Some(*i) != newest)
+        .map(|(i, _)| i)
+        .collect()
+}
+/// `prune DIR --below ZONE`: mark the prunable segments `"pruned": true` in
+/// the manifest, then delete their files. A replay that resumes from a
+/// checkpoint at or above ZONE never reads them. The manifest is written
+/// first, so an interruption leaves only files that the next prune or export
+/// deletes, never a listed segment without its file.
+fn prune(dir: &Path, below: u64, span: u64) -> Res<Value> {
+    let _lock = lock_dir(dir)?;
+    let mut m = load(dir, span)?;
+    if m.receipts {
+        return Err(format!(
+            "{} holds an export with receipts (a Go export); prune only peer exports",
+            dir.display()
+        )
+        .into());
+    }
+    let chosen = prunable(&m.segments, below, span);
+    for &i in &chosen {
+        m.segments[i].pruned = true;
+    }
+    if !chosen.is_empty() {
+        write_manifest(dir, &m.segments)?;
+    }
+    // Files of segments pruned now, and of segments pruned by an
+    // interrupted earlier run.
+    let size = |s: &SegmentInfo| fs::metadata(dir.join(&s.file)).map_or(0, |md| md.len());
+    let freed: u64 = m.segments.iter().filter(|s| s.pruned).map(size).sum();
+    remove_unlisted(dir, &m.segments)?;
+    sync_dir(&dir.join("segments"))?;
+    let kept: Vec<&SegmentInfo> = m.segments.iter().filter(|s| !s.pruned).collect();
+    Ok(json!({
+        "event": "pruned", "below": below,
+        "pruned_now": chosen.iter().map(|&i| m.segments[i].file.clone()).collect::<Vec<_>>(),
+        "freed_bytes": freed,
+        "pruned_segments": m.segments.len() - kept.len(),
+        "kept": kept.iter().map(|s| s.file.clone()).collect::<Vec<_>>(),
+        "kept_bytes": kept.iter().map(|s| size(s)).sum::<u64>(),
+        "first_kept_zone": kept.first().map(|s| s.first),
+        "last_zone": m.last_zone,
+    }))
+}
+/// `status DIR`: the manifest summary as one JSON line (for scripts).
+fn status(dir: &Path) -> Res<Value> {
+    let m = load(dir, SEGMENT_SPAN)?;
+    let kept: Vec<&SegmentInfo> = m.segments.iter().filter(|s| !s.pruned).collect();
+    let bytes: u64 = kept
+        .iter()
+        .map(|s| fs::metadata(dir.join(&s.file)).map_or(0, |md| md.len()))
+        .sum();
+    Ok(json!({
+        "event": "status", "last_zone": m.last_zone, "receipts": m.receipts,
+        "segments": m.segments.len(), "pruned_segments": m.segments.len() - kept.len(),
+        "first_kept_zone": kept.first().map(|s| s.first), "kept_bytes": bytes,
+    }))
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -2298,7 +2527,28 @@ async fn main() -> Res<()> {
         Some("verify") => {
             args.next();
             let dir = args.next().ok_or("usage: peer-export verify DIR")?;
-            verify(Path::new(&dir))
+            verify(Path::new(&dir), SEGMENT_SPAN)
+        }
+        Some("prune") => {
+            args.next();
+            let usage = "usage: peer-export prune DIR --below ZONE";
+            let (Some(dir), Some("--below"), Some(zone), None) = (
+                args.next(),
+                args.next().as_deref(),
+                args.next(),
+                args.next(),
+            ) else {
+                return Err(usage.into());
+            };
+            let below = zone.parse().map_err(|_| usage)?;
+            prune(Path::new(&dir), below, SEGMENT_SPAN).map(emit)
+        }
+        Some("status") => {
+            args.next();
+            let (Some(dir), None) = (args.next(), args.next()) else {
+                return Err("usage: peer-export status DIR".into());
+            };
+            status(Path::new(&dir)).map(emit)
         }
         Some("export") => {
             args.next();
@@ -2322,7 +2572,7 @@ mod tests {
 
     fn fixture() -> Vec<RawRecord> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mainnet/qex1-0-8");
-        let m = load(&dir).unwrap();
+        let m = load(&dir, SEGMENT_SPAN).unwrap();
         let mut s = ExportStream::new(&dir, m.segments);
         let mut out = vec![];
         while let Some(r) = s.next().unwrap() {
@@ -2469,7 +2719,7 @@ mod tests {
         }
         e.close().unwrap();
         drop(e);
-        let m = read_manifest(&dir).unwrap().unwrap();
+        let m = read_manifest(&dir, SEGMENT_SPAN).unwrap().unwrap();
         assert_eq!((m.last_zone, m.segments.len(), m.receipts), (4, 1, false));
         // A stale pending file is removed on open.
         fs::write(dir.join("segments/0000000000-0000000099.qex.pending"), b"x").unwrap();
@@ -2488,13 +2738,13 @@ mod tests {
         }
         e.close().unwrap();
         drop(e);
-        let m = read_manifest(&dir).unwrap().unwrap();
+        let m = read_manifest(&dir, SEGMENT_SPAN).unwrap().unwrap();
         assert_eq!(m.segments[0].file, "segments/0000000000-0000000008.qex");
         assert!(!dir.join("segments/0000000000-0000000004.qex").exists());
         assert!(!dir.join("sources/0000000000-0000000004.json").exists());
         let sources = fs::read_to_string(dir.join("sources/0000000000-0000000008.json")).unwrap();
         assert!(sources.contains("test:a") && sources.contains("test:b"));
-        verify(&dir).unwrap();
+        verify(&dir, SEGMENT_SPAN).unwrap();
         // The same records as the Go fixture, without receipts.
         let fixture_dir =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mainnet/qex1-0-8");
@@ -2508,7 +2758,213 @@ mod tests {
         let err = Export::open(&go).err().unwrap().to_string();
         assert!(err.contains("receipts"), "{err}");
         assert!(go.join("segments/0000000000-0000000008.qex").exists());
+        let err = prune(&go, u64::MAX, SEGMENT_SPAN).unwrap_err().to_string();
+        assert!(err.contains("receipts"), "{err}");
+        // An export that already reaches --to stops before it needs a peer.
+        let args = parse_export(
+            ["--out", dir.to_str().unwrap(), "--to", "8"]
+                .map(String::from)
+                .into_iter(),
+        )
+        .unwrap();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(run_export(args))
+            .unwrap();
+        let s = status(&dir).unwrap();
+        assert_eq!(
+            (&s["last_zone"], &s["segments"], &s["pruned_segments"]),
+            (&json!(8), &json!(1), &json!(0))
+        );
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&go);
+    }
+
+    fn info(first: u64, last: u64, pruned: bool) -> SegmentInfo {
+        SegmentInfo {
+            file: segment_name(first, last),
+            first,
+            last,
+            records: last - first + 1,
+            sha256: "00".repeat(32),
+            pruned,
+        }
+    }
+
+    #[test]
+    fn prune_rule_keeps_the_newest_complete_and_the_last_segment() {
+        let s = SEGMENT_SPAN;
+        let complete = |i: u64, pruned: bool| info(i * s, (i + 1) * s - 1, pruned);
+        // Four complete segments and a partial one.
+        let mut segs: Vec<SegmentInfo> = (0..4).map(|i| complete(i, false)).collect();
+        segs.push(info(4 * s, 4 * s + 9, false));
+        let none: Vec<usize> = vec![];
+        assert_eq!(prunable(&segs, 0, s), none);
+        // A checkpoint inside segment 0 keeps it; one at its end + 1 does not.
+        assert_eq!(prunable(&segs, s - 1, s), none);
+        assert_eq!(prunable(&segs, s, s), [0]);
+        assert_eq!(prunable(&segs, 2 * s + 5, s), [0, 1]);
+        // Segment 3 is the newest complete segment, 4 the partial one.
+        assert_eq!(prunable(&segs, u64::MAX, s), [0, 1, 2]);
+        // Segments pruned before are not chosen again.
+        segs[0].pruned = true;
+        assert_eq!(prunable(&segs, u64::MAX, s), [1, 2]);
+        // Without a partial segment, the last (newest complete) one is kept.
+        segs.pop();
+        assert_eq!(prunable(&segs, u64::MAX, s), [1, 2]);
+        assert_eq!(prunable(&[complete(0, false)], u64::MAX, s), none);
+        assert_eq!(prunable(&[info(0, 7, false)], u64::MAX, s), none);
+
+        // The manifest round trip: "pruned" is written only when true.
+        let dir = tempdir("manifest-pruned");
+        let mut segs: Vec<SegmentInfo> = (0..3).map(|i| complete(i, i < 2)).collect();
+        segs.push(info(3 * s, 3 * s + 4, false));
+        write_manifest(&dir, &segs).unwrap();
+        let text = fs::read_to_string(dir.join("manifest.json")).unwrap();
+        assert_eq!(text.matches("\"pruned\": true").count(), 2);
+        assert!(!text.contains("\"pruned\": false"));
+        let m = read_manifest(&dir, s).unwrap().unwrap();
+        assert_eq!(m.segments, segs);
+        assert_eq!(m.last_zone, 3 * s + 4);
+        // Only a prefix can be pruned, never the last segment.
+        let mut gap = segs.clone();
+        gap[0].pruned = false;
+        let mut last = segs.clone();
+        last[3].pruned = true;
+        last[2].pruned = true;
+        for bad in [gap, last] {
+            write_manifest(&dir, &bad).unwrap();
+            let e = read_manifest(&dir, s).unwrap_err().to_string();
+            assert!(e.contains("pruned"), "{e}");
+        }
+        let mut v: Value = serde_json::from_str(&text).unwrap();
+        v["segments"][0]["pruned"] = json!("yes");
+        fs::write(dir.join("manifest.json"), v.to_string()).unwrap();
+        assert!(read_manifest(&dir, s).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pruned_export_resumes_extends_and_verifies() {
+        // Segments of 3 zone heights over the 9 mainnet fixture heights.
+        const SPAN: u64 = 3;
+        let records = fixture();
+        let hs = heights(&records);
+        // The tips that a resume takes from the last height of a segment are
+        // the last exported records of each context.
+        let mut c = Checker::default();
+        for h in &hs {
+            c.height(&h.iter().collect::<Vec<_>>()).unwrap();
+            assert_eq!(tips_after(h), c.last);
+        }
+        let dir = tempdir("pruned");
+        let write = |e: &mut Export, range: std::ops::Range<usize>| {
+            for h in &hs[range] {
+                e.write_height(
+                    &h.iter().collect::<Vec<_>>(),
+                    &vec!["test".to_string(); h.len()],
+                )
+                .unwrap();
+            }
+        };
+        let files = |m: &Manifest| -> Vec<(String, bool)> {
+            m.segments
+                .iter()
+                .map(|s| (s.file.clone(), s.pruned))
+                .collect()
+        };
+        let mut e = Export::open_with(&dir, SPAN).unwrap();
+        e.end = 8;
+        write(&mut e, 0..8);
+        e.close().unwrap();
+        drop(e);
+        let m = read_manifest(&dir, SPAN).unwrap().unwrap();
+        assert_eq!(
+            files(&m),
+            [
+                (segment_name(0, 2), false),
+                (segment_name(3, 5), false),
+                (segment_name(6, 7), false)
+            ]
+        );
+        // A replay checkpointed at 7: 0-2 goes. 3-5 is the newest complete
+        // segment and 6-7 the partial one: both stay.
+        let v = prune(&dir, 7, SPAN).unwrap();
+        assert_eq!(v["pruned_now"], json!([segment_name(0, 2)]));
+        assert!(v["freed_bytes"].as_u64().unwrap() > 0);
+        assert_eq!(v["first_kept_zone"], json!(3));
+        assert!(!dir.join(segment_name(0, 2)).exists());
+        assert!(dir.join(sources_name(0, 2)).exists());
+        // Pruning again, even with no floor, changes nothing.
+        let v = prune(&dir, u64::MAX, SPAN).unwrap();
+        assert_eq!(v["pruned_now"], json!([]));
+        assert_eq!(v["freed_bytes"], json!(0));
+        // A file left at the pruned path (an interrupted prune) is deleted on
+        // open and never read: the resume hashes and reads only 3-5 and 6-7.
+        fs::write(dir.join(segment_name(0, 2)), b"left over").unwrap();
+        // An export whose newest complete segment is pruned cannot resume.
+        let lost = tempdir("pruned-tips");
+        fs::create_dir_all(lost.join("segments")).unwrap();
+        fs::copy(dir.join(segment_name(6, 7)), lost.join(segment_name(6, 7))).unwrap();
+        let mut segs = read_manifest(&dir, SPAN).unwrap().unwrap().segments;
+        segs[1].pruned = true;
+        write_manifest(&lost, &segs).unwrap();
+        let err = Export::open_with(&lost, SPAN).err().unwrap().to_string();
+        assert!(
+            err.contains("cannot resume") && err.contains(&segment_name(3, 5)),
+            "{err}"
+        );
+        // Resume the pruned export and extend it by one height.
+        let mut e = Export::open_with(&dir, SPAN).unwrap();
+        assert!(!dir.join(segment_name(0, 2)).exists());
+        assert_eq!(e.next_zone(), 8);
+        e.end = 8;
+        write(&mut e, 8..9);
+        e.close().unwrap();
+        drop(e);
+        let m = read_manifest(&dir, SPAN).unwrap().unwrap();
+        assert_eq!(m.last_zone, 8);
+        assert_eq!(
+            files(&m),
+            [
+                (segment_name(0, 2), true),
+                (segment_name(3, 5), false),
+                (segment_name(6, 8), false)
+            ]
+        );
+        // verify checks every kept record, from the first kept block on.
+        verify(&dir, SPAN).unwrap();
+        // The kept records are the fixture's records for heights 3..=8.
+        let kept: Vec<SegmentInfo> = m.segments.iter().filter(|s| !s.pruned).cloned().collect();
+        let mut stream = ExportStream::new(&dir, kept);
+        let mut got = vec![];
+        while let Some(r) = stream.next().unwrap() {
+            got.push((r.ctx, r.number, r.hash, r.block));
+        }
+        let want: Vec<_> = hs[3..]
+            .iter()
+            .flatten()
+            .map(|b| (b.ctx, b.number, b.hash, b.raw.clone()))
+            .collect();
+        assert_eq!(got, want);
+        // A pruned segment cannot be streamed (compare needs every segment).
+        let mut stream = ExportStream::new(&dir, m.segments.clone());
+        assert!(stream.next().err().unwrap().to_string().contains("pruned"));
+        // Now 6-8 is the newest complete segment, so 3-5 can go, and the
+        // export still resumes at 9 with the zone tip of height 8.
+        let v = prune(&dir, 9, SPAN).unwrap();
+        assert_eq!(v["pruned_now"], json!([segment_name(3, 5)]));
+        let e = Export::open_with(&dir, SPAN).unwrap();
+        assert_eq!(e.next_zone(), 9);
+        assert_eq!(
+            e.checker.last[ZONE].map(|t| t.hash),
+            Some(hs[8].last().unwrap().hash)
+        );
+        drop(e);
+        verify(&dir, SPAN).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&lost);
     }
 }

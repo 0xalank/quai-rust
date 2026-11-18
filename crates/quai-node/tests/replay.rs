@@ -300,6 +300,106 @@ fn container_and_link_faults_are_reported_with_the_last_good_height() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A container-only export: genesis plus zone records 1..=`last` with
+/// made-up block bytes. The reader frames records without decoding blocks,
+/// so this is enough for reader tests with more than one segment (a segment
+/// holds 100,000 zone heights).
+fn synthetic_export(dir: &Path, environment: &str, genesis: Hash, last: u64) {
+    let mut w = ExportWriter::new(dir, environment, genesis, false);
+    w.push(
+        &[Context::Prime, Context::Region, Context::Zone].map(|c| RawRecord {
+            context: c,
+            number: 0,
+            hash: genesis,
+            block: vec![0],
+            receipts: vec![],
+        }),
+    )
+    .unwrap();
+    for z in 1..=last {
+        let mut hash = [0u8; 32];
+        hash[..8].copy_from_slice(&z.to_be_bytes());
+        w.push(&[RawRecord {
+            context: Context::Zone,
+            number: z,
+            hash,
+            block: z.to_be_bytes().to_vec(),
+            receipts: vec![],
+        }])
+        .unwrap();
+    }
+    w.finish().unwrap();
+}
+/// Mark the first `n` segments pruned and delete their files, as
+/// `peer-export prune` does.
+fn prune_first(dir: &Path, n: usize) {
+    let path = dir.join("manifest.json");
+    let mut m: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    for s in m["segments"].as_array_mut().unwrap().iter_mut().take(n) {
+        s["pruned"] = true.into();
+        std::fs::remove_file(dir.join(s["file"].as_str().unwrap())).unwrap();
+    }
+    std::fs::write(&path, serde_json::to_vec_pretty(&m).unwrap()).unwrap();
+}
+
+#[test]
+fn a_pruned_segment_is_never_read() {
+    use quai_node::qex::{segment_name, ExportReader, Manifest};
+    use std::sync::Mutex;
+    let dir = scratch("pruned-reader");
+    synthetic_export(&dir, "local", [5; 32], 100_004);
+    prune_first(&dir, 1);
+    // Bytes at the pruned path are not the segment; the reader never opens them.
+    std::fs::write(dir.join(segment_name(0, 99_999)), b"not a segment").unwrap();
+    let m = Manifest::load(&dir).unwrap();
+    assert_eq!(m.first_kept_zone(), 100_000);
+    // From the first kept height on, only the kept segment is opened.
+    let opened = Arc::new(Mutex::new(vec![]));
+    let log = opened.clone();
+    let mut r = ExportReader::starting_at(&dir, m.clone(), 100_000, None);
+    r.on_segment(Box::new(move |s| log.lock().unwrap().push(s.file.clone())));
+    let mut heights = vec![];
+    while let Some(h) = r.next_height().unwrap() {
+        heights.push(h.zone_height);
+    }
+    assert_eq!(heights, (100_000..=100_004).collect::<Vec<_>>());
+    assert_eq!(*opened.lock().unwrap(), [segment_name(100_000, 100_004)]);
+    // A read that needs the pruned segment fails and names it.
+    for start in [0, 99_999] {
+        let mut r = ExportReader::starting_at(&dir, m.clone(), start, None);
+        let e = r.next_height().unwrap_err().0;
+        assert!(
+            e.contains(&segment_name(0, 99_999))
+                && e.contains("is pruned")
+                && e.contains("from zone 100000"),
+            "{e}"
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_replay_that_needs_a_pruned_segment_fails_and_names_it() {
+    // The colosseum genesis, so that the replay setup accepts the manifest;
+    // the reader stops before any block is decoded.
+    let genesis = quai_node::spec::Chain::for_environment("colosseum")
+        .unwrap()
+        .genesis_hash();
+    let dir = scratch("pruned-replay");
+    synthetic_export(&dir, "colosseum", genesis, 100_004);
+    prune_first(&dir, 1);
+    let s = replay(&dir, None);
+    assert_eq!(s.end, End::Failed);
+    assert_eq!(s.highest_passed, None);
+    let f = s.failure.unwrap();
+    assert_eq!(
+        (f.context.as_str(), f.check.as_str()),
+        ("export", "QEX1 container")
+    );
+    assert!(f.actual.contains("is pruned"), "{}", f.actual);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Real mainnet heights 0..=8 from the go-quai v0.57.0 exporter
 /// (fixtures/mainnet/qex1-0-8, cut with the qex-slice example).
 fn mainnet_slice() -> PathBuf {

@@ -1,6 +1,8 @@
 //! QEX1 reader: go-quai blocks exported in import order (docs/mainnet-export-format.md).
 //! The reader checks the container only: manifest, segment hashes, record
 //! framing and record order. Block contents are checked by the replay.
+//! A segment marked `"pruned": true` has no file: the reader never opens it
+//! and fails with an error that names it if a replay must read it.
 use quai_primitives::{decode_hex, Hash, REFERENCE_REVISION};
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -65,6 +67,9 @@ pub struct SegmentInfo {
     pub last_zone: u64,
     pub records: u64,
     pub sha256: Hash,
+    /// The file was deleted after a replay checkpointed past the segment
+    /// (`"pruned": true`). The entry keeps its range, count and hash.
+    pub pruned: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -95,6 +100,8 @@ struct RawSegment {
     last_zone: u64,
     records: u64,
     sha256: String,
+    #[serde(default)]
+    pruned: bool,
 }
 fn hash32(value: &str, what: &str) -> Result<Hash, ExportError> {
     let bytes = decode_hex(value).map_err(|e| ExportError(format!("{what}: {e}")))?;
@@ -136,7 +143,15 @@ impl Manifest {
         let count = raw.segments.len();
         let mut segments = Vec::with_capacity(count);
         let mut next = 0u64;
+        let mut kept = false;
         for (i, s) in raw.segments.into_iter().enumerate() {
+            if s.pruned && (kept || i + 1 == count) {
+                return err(format!(
+                    "segment {} is pruned, but only segments before every kept segment can be pruned, and never the last",
+                    s.file
+                ));
+            }
+            kept |= !s.pruned;
             if s.first_zone != next {
                 return err(format!(
                     "segment {} starts at zone {}, want {next} (segments must be contiguous from 0)",
@@ -175,6 +190,7 @@ impl Manifest {
                 last_zone: s.last_zone,
                 records: s.records,
                 sha256,
+                pruned: s.pruned,
             });
         }
         if next - 1 != raw.last_zone {
@@ -193,6 +209,14 @@ impl Manifest {
             segments,
             exported_utc: raw.exported_utc,
         })
+    }
+    /// The first zone height whose segment file is kept. A replay that
+    /// starts below it would need a pruned segment.
+    pub fn first_kept_zone(&self) -> u64 {
+        self.segments
+            .iter()
+            .find(|s| !s.pruned)
+            .map_or(self.last_zone + 1, |s| s.first_zone)
     }
 }
 
@@ -334,7 +358,8 @@ impl Height {
 
 type SegmentHook = Box<dyn FnMut(&SegmentInfo) + Send>;
 /// Streams zone heights from the segments of a verified manifest. Each
-/// segment's SHA-256 is checked before any of its records is returned.
+/// segment's SHA-256 is checked before any of its records is returned. A
+/// pruned segment is never opened: a read that needs one is an error.
 pub struct ExportReader {
     dir: PathBuf,
     manifest: Manifest,
@@ -388,6 +413,15 @@ impl ExportReader {
     }
     fn open_segment(&mut self) -> Result<(), ExportError> {
         let info = self.manifest.segments[self.segment].clone();
+        if info.pruned {
+            return err(format!(
+                "segment {} (zone {}..={}) is pruned: its file was deleted after a replay checkpointed past it. This export serves replays from zone {} on",
+                info.file,
+                info.first_zone,
+                info.last_zone,
+                self.manifest.first_kept_zone()
+            ));
+        }
         if let Some(f) = self.on_segment.as_mut() {
             f(&info);
         }
@@ -612,6 +646,7 @@ impl ExportWriter {
             last_zone: last,
             records: count,
             sha256: Sha256::digest(&buf).into(),
+            pruned: false,
         });
         Ok(())
     }
@@ -715,5 +750,68 @@ mod tests {
         let mut v: serde_json::Value = serde_json::from_slice(&ok).unwrap();
         v["slice"] = serde_json::json!([0, 1]);
         assert!(Manifest::parse(&serde_json::to_vec(&v).unwrap()).is_err());
+    }
+    fn pruned(first: u64, last: u64) -> serde_json::Value {
+        let mut s = seg(first, last);
+        s["pruned"] = true.into();
+        s
+    }
+    #[test]
+    fn manifest_accepts_only_a_pruned_prefix() {
+        // Entries without the field are kept; a pruned prefix keeps its
+        // metadata and still counts for contiguity and last_zone.
+        let ok = manifest(
+            serde_json::json!([
+                pruned(0, 99_999),
+                pruned(100_000, 199_999),
+                seg(200_000, 299_999),
+                seg(300_000, 300_004)
+            ]),
+            300_004,
+        );
+        let m = Manifest::parse(&ok).unwrap();
+        let flags: Vec<bool> = m.segments.iter().map(|s| s.pruned).collect();
+        assert_eq!(flags, [true, true, false, false]);
+        assert_eq!(m.segments[0].records, 100_000);
+        assert_eq!(m.first_kept_zone(), 200_000);
+        let plain = manifest(serde_json::json!([seg(0, 4)]), 4);
+        assert_eq!(Manifest::parse(&plain).unwrap().first_kept_zone(), 0);
+        // Explicit false is a kept segment.
+        let mut s = seg(0, 99_999);
+        s["pruned"] = false.into();
+        let m = Manifest::parse(&manifest(
+            serde_json::json!([s, seg(100_000, 100_001)]),
+            100_001,
+        ))
+        .unwrap();
+        assert!(!m.segments[0].pruned);
+        // A pruned segment after a kept one, or a pruned last segment, is refused.
+        for bad in [
+            manifest(
+                serde_json::json!([
+                    seg(0, 99_999),
+                    pruned(100_000, 199_999),
+                    seg(200_000, 200_001)
+                ]),
+                200_001,
+            ),
+            manifest(
+                serde_json::json!([pruned(0, 99_999), pruned(100_000, 199_999)]),
+                199_999,
+            ),
+            manifest(serde_json::json!([pruned(0, 4)]), 4),
+        ] {
+            let e = Manifest::parse(&bad).unwrap_err().0;
+            assert!(e.contains("pruned"), "{e}");
+        }
+        // The other checks still apply to pruned entries.
+        let mut s = pruned(0, 99_999);
+        s["sha256"] = "00".into();
+        let bad = manifest(serde_json::json!([s, seg(100_000, 100_001)]), 100_001);
+        assert!(Manifest::parse(&bad).unwrap_err().0.contains("sha256"));
+        let mut s = pruned(0, 99_999);
+        s["pruned"] = "yes".into();
+        let bad = manifest(serde_json::json!([s, seg(100_000, 100_001)]), 100_001);
+        assert!(Manifest::parse(&bad).is_err());
     }
 }

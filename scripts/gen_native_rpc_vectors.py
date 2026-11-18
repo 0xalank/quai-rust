@@ -4,6 +4,7 @@ RPC mode (`quai-node rpc`, crates/quai-rpc/src/native).
 
     scripts/gen_native_rpc_vectors.py --head 8 --out fixtures/native-rpc/zone-0-8.json
     scripts/gen_native_rpc_vectors.py --head 27406 --out fixtures/native-rpc/zone-0-27406.json
+    scripts/gen_native_rpc_vectors.py --calls --head 27406 --out fixtures/native-rpc/calls-0-27406.json
 
 The Go node must serve zone [0 0] at --go (default http://127.0.0.1:9200,
 read-only methods only) and must have synced past --head. --head is the head
@@ -16,11 +17,20 @@ compares:
                 Go's answer comes from `go_params`, the same request with the
                 explicit head, because the Go node's own head is higher;
   "difference"  a documented difference; `rust` holds the Rust answer and
-                `note` says why.
-Only object member order is ignored when comparing.
+                `note` says why;
+  "derived"     Go answers only for its own head: `go` holds the answer Go
+                gives at --head, derived from a Go answer named in `note`.
+Only object member order is ignored when comparing. go-quai returns the
+access list of quai_createAccessList in Go map order (random); it is sorted
+by address and key before it is recorded or compared.
+
+--calls records the call methods only (quai_call, quai_estimateGas,
+quai_createAccessList, quai_gasPrice) for a range without contract code:
+transfers, new accounts, precompiles and access lists.
 """
 import argparse
 import json
+import re
 import urllib.request
 
 # --- keccak-256 and EIP-55 checksums (no third-party packages) -------------
@@ -82,6 +92,26 @@ WRITE = {'quai_sendRawTransaction', 'quai_submitBlock', 'quai_receiveMinedHeader
          'quai_submitScryptBlock', 'quai_submitKawpowBlock'}
 
 
+POINTER = re.compile(r'\b0x[0-9a-f]{6,16}\b')
+
+
+def sort_access_list(answer):
+    """Make two go-quai answers deterministic: createAccessList tuples come in
+    Go map order, and "failed to apply transaction" prints a types.Message
+    whose pointers change from run to run (each becomes 0xc000000000)."""
+    r = answer.get('result')
+    if isinstance(r, dict) and isinstance(r.get('accessList'), list):
+        for t in r['accessList']:
+            t['storageKeys'] = sorted(t['storageKeys'])
+        r['accessList'].sort(key=lambda t: t['address'].lower())
+    e = answer.get('error')
+    if isinstance(e, dict) and str(e.get('message', '')).startswith('failed to apply transaction: {'):
+        m = e['message']
+        end = m.rfind('} err: ')
+        e['message'] = POINTER.sub('0xc000000000', m[:end]) + m[end:]
+    return answer
+
+
 class Go:
     def __init__(self, url):
         self.url = url
@@ -93,7 +123,7 @@ class Go:
         req = urllib.request.Request(self.url, data=body.encode(),
                                      headers={'content-type': 'application/json'})
         answer = json.loads(urllib.request.urlopen(req, timeout=120).read())
-        return {k: answer[k] for k in ('result', 'error') if k in answer}
+        return sort_access_list({k: answer[k] for k in ('result', 'error') if k in answer})
 
     def result(self, method, params):
         a = self.raw(method, params)
@@ -351,18 +381,116 @@ def build(go, head):
     return vectors
 
 
+def build_calls(go, head):
+    """Calls, estimates and access lists at the head, and the gas price."""
+    vectors = []
+    H = hex(head)
+
+    def add(method, params, compare='equal', go_params=None, note=None):
+        v = {'method': method, 'params': params, 'compare': compare,
+             'go': go.raw(method, go_params if go_params is not None else params)}
+        if go_params is not None:
+            v['go_params'] = go_params
+        if note:
+            v['note'] = note
+        vectors.append(v)
+
+    alloc = ['0x0000024c83970aea9451a6170e4048d5786745ad',
+             '0x0000044757587287d5ef86e5020f32913058c6c4',
+             '0x0000055114f34a0baa741dd2a77a89638b83a821']
+    a, b, c = (checksum(x) for x in alloc)
+    coinbase = go.result('quai_getBlockByNumber', [H, False])['woHeader']['primaryCoinbase']
+    fresh = checksum('0x00001111222233334444555566667777888899aa')
+    qi = checksum('0x0080' + '4c83970aea9451a6170e4048d5786745ad01')
+    other = checksum('0x1000024c83970aea9451a6170e4048d5786745ad')
+    pre = lambda n: '0x' + '00' * 19 + f'{n:02x}'
+    ecrec = '0x' + '11' * 32 + '00' * 31 + '1c' + '22' * 32 + '33' * 32
+    modexp = '0x' + f'{1:064x}' + f'{1:064x}' + f'{1:064x}' + '03' + '05' + '07'
+    bn_add = '0x' + '00' * 128
+    bn_bad = '0x' + 'ff' * 64
+    pairing_empty = '0x'
+    pairing_bad = '0x' + '00' * 100
+    blake_bad = '0x' + '00' * 212
+    blake_flag = '0x' + '0000000c' + '00' * 208 + '02'
+    blake_ok = '0x' + '0000000c' + '00' * 208 + '01'
+    requests = [
+        {'from': a, 'to': b, 'value': '0x1'},
+        {'from': a, 'to': fresh, 'value': '0x1'},
+        {'from': a, 'to': fresh},
+        {'from': a, 'to': b, 'data': '0x0011'},
+        {'from': a, 'to': b, 'value': '0x1', 'accessList': [
+            {'address': b, 'storageKeys': []},
+            {'address': fresh, 'storageKeys': ['0x' + '00' * 31 + '01']}]},
+        {'from': a, 'to': b, 'accessList': [{'address': a, 'storageKeys': []},
+                                            {'address': pre(1), 'storageKeys': []}]},
+        {'from': a, 'to': coinbase, 'value': '0x2'},
+        {'from': b, 'to': a, 'value': '0x10'},
+        {'from': c, 'to': a, 'value': '0x1'},
+        {'from': a, 'to': a, 'value': '0x1'},
+        {'from': a, 'to': b, 'gas': '0x5208', 'value': '0x1'},
+        {'from': a, 'to': fresh, 'gas': '0x5208', 'value': '0x1'},
+        {'from': a, 'to': fresh, 'gas': '0xa000', 'value': '0x1'},
+        {'from': a, 'to': b, 'gas': '0x5200'},
+        {'from': a, 'to': b, 'gasPrice': '0x3b9aca00', 'value': '0x1'},
+        {'from': a, 'data': '0x600060005360016000f3'},
+        {'from': a, 'to': other, 'value': '0x1'},
+        {'from': a, 'to': qi, 'value': '0x1'},
+        {'to': b},
+        {'from': a, 'to': pre(1), 'data': ecrec},
+        {'from': a, 'to': pre(1), 'data': '0x1234'},
+        {'from': a, 'to': pre(2), 'data': '0x68656c6c6f'},
+        {'from': a, 'to': pre(3), 'data': '0x68656c6c6f'},
+        {'from': a, 'to': pre(4), 'data': '0x68656c6c6f'},
+        {'from': a, 'to': pre(5), 'data': modexp},
+        {'from': a, 'to': pre(6), 'data': bn_add},
+        {'from': a, 'to': pre(6), 'data': bn_bad},
+        {'from': a, 'to': pre(7), 'data': bn_bad},
+        {'from': a, 'to': pre(8), 'data': pairing_empty},
+        {'from': a, 'to': pre(8), 'data': pairing_bad},
+        {'from': a, 'to': pre(9), 'data': blake_bad},
+        {'from': a, 'to': pre(9), 'data': blake_flag},
+        {'from': a, 'to': pre(9), 'data': blake_ok},
+        {'from': a, 'to': pre(2), 'data': '0x68656c6c6f', 'gas': '0x5300'},
+        {'from': a, 'to': '0x000000000000000000000000000000000000000a', 'data': '0x'},
+    ]
+    for method in ('quai_call', 'quai_estimateGas', 'quai_createAccessList'):
+        for r in requests:
+            if method == 'quai_estimateGas' and r.get('to') == qi:
+                continue  # a conversion estimate: not served natively
+            add(method, [r, H])
+        add(method, [{'from': a, 'to': b, 'value': '0x1'}, 'latest'], compare='head',
+            go_params=[{'from': a, 'to': b, 'value': '0x1'}, H])
+    add('quai_estimateGas', [{'from': a, 'to': pre(2), 'data': '0x01'}], compare='head',
+        go_params=[{'from': a, 'to': pre(2), 'data': '0x01'}, H])
+    add('quai_createAccessList', [{'from': a, 'to': pre(4), 'data': '0x01'}], compare='head',
+        go_params=[{'from': a, 'to': pre(4), 'data': '0x01'}, H])
+    # quai_gasPrice is CalcBaseFee(head) * 120 / 100, and header validation
+    # makes CalcBaseFee(head) the base fee of block head + 1.
+    child = go.result('quai_getBlockByNumber', [hex(head + 1), False])
+    fee = int(child['header']['baseFeePerGas'], 16)
+    vectors.append({'method': 'quai_gasPrice', 'params': [], 'compare': 'derived',
+                    'go': {'result': hex(fee * 120 // 100)},
+                    'note': f'baseFeePerGas of block {head + 1} * 120 / 100 '
+                            '(quai_getBlockByNumber of the Go node)'})
+    add('quai_gasPrice', [1])
+    return vectors
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--go', default='http://127.0.0.1:9200')
     ap.add_argument('--head', type=int, required=True)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--calls', action='store_true',
+                    help='record only the call methods (quai_call, quai_estimateGas, '
+                         'quai_createAccessList, quai_gasPrice)')
     args = ap.parse_args()
     go = Go(args.go)
     if go.result('quai_chainId', []) != '0x9':
         raise SystemExit('not a mainnet node')
-    if int(go.result('quai_blockNumber', []), 16) < args.head:
+    if int(go.result('quai_blockNumber', []), 16) < args.head + (1 if args.calls else 0):
         raise SystemExit('the Go node is below --head')
-    vectors = build(go, args.head)
+    vectors = build_calls(go, args.head) if args.calls else build(go, args.head)
     doc = {
         'source': 'go-quai v0.57.0 (33db82f2891b267ba898ca38bd2dd8bf75cbb072), zone [0 0], '
                   'HTTP JSON-RPC, RPC version v1',

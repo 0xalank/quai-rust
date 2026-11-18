@@ -82,8 +82,19 @@ pub struct Journal {
     pub(crate) block_hashes: BTreeMap<u64, Hash>,
     pub(crate) addresses: BTreeSet<Address>,
     pub(crate) slots: BTreeSet<(Address, Hash)>,
+    /// The RPC call mode (`evm::message`). Consensus execution never sets it.
+    pub(crate) debug: Option<Box<super::message::Debug>>,
 }
 impl Journal {
+    /// Go `StateDB.AddressInAccessList`: true for every address in the
+    /// RPC call mode (`bypassAccessListCheck`).
+    pub(crate) fn address_listed(&self, a: &Address) -> bool {
+        self.debug.is_some() || self.addresses.contains(a)
+    }
+    /// Go `StateDB.SlotInAccessList`, slot part.
+    pub(crate) fn slot_listed(&self, a: Address, k: Hash) -> bool {
+        self.debug.is_some() || self.slots.contains(&(a, k))
+    }
     pub fn new(world: World) -> Result<Self, CapabilityError> {
         world.validate().map_err(|error| {
             CapabilityError::state(error, CapabilityError::Limit("world snapshot"))
@@ -121,6 +132,7 @@ impl Journal {
             transient: BTreeMap::new(),
             addresses: BTreeSet::new(),
             slots: BTreeSet::new(),
+            debug: None,
         })
     }
     pub fn world(&self) -> &World {

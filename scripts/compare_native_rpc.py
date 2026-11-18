@@ -18,9 +18,13 @@ number (full) and by hash, headers, and up to two transactions per block
 """
 import argparse
 import json
+import re
 import sys
 import urllib.request
 from decimal import Decimal
+
+
+POINTER = re.compile(r'\b0x[0-9a-f]{6,16}\b')
 
 
 def post(url, method, params):
@@ -29,7 +33,20 @@ def post(url, method, params):
                                  headers={'content-type': 'application/json'})
     raw = urllib.request.urlopen(req, timeout=120).read()
     answer = json.loads(raw, parse_float=Decimal)
-    return {k: answer[k] for k in ('result', 'error') if k in answer}
+    answer = {k: answer[k] for k in ('result', 'error') if k in answer}
+    # go-quai returns createAccessList tuples in Go map order (random), and
+    # "failed to apply transaction" prints pointers that change per run.
+    r = answer.get('result')
+    if isinstance(r, dict) and isinstance(r.get('accessList'), list):
+        for t in r['accessList']:
+            t['storageKeys'] = sorted(t['storageKeys'])
+        r['accessList'].sort(key=lambda t: t['address'].lower())
+    e = answer.get('error')
+    if isinstance(e, dict) and str(e.get('message', '')).startswith('failed to apply transaction: {'):
+        m = e['message']
+        end = m.rfind('} err: ')
+        e['message'] = POINTER.sub('0xc000000000', m[:end]) + m[end:]
+    return answer
 
 
 def same(a, b):

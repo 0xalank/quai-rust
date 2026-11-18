@@ -3,9 +3,10 @@
 //! A `ChainView` holds validated chain data: canonical blocks with their
 //! derived fields (order, total entropy, uncle classes), the stored receipts,
 //! a transaction index, the account and UTXO state of the blocks whose state
-//! it keeps, and a read-only execution entry for `quai_call` and
-//! `quai_estimateGas`. The native handlers (`native.rs`) turn these values
-//! into the JSON that go-quai v0.57.0 writes for the same block.
+//! it keeps, and a read-only execution entry for `quai_call`,
+//! `quai_estimateGas` and `quai_createAccessList`. The native handlers
+//! (`native/mod.rs`) turn these values into the JSON that go-quai v0.57.0
+//! writes for the same block.
 //!
 //! The first implementation is `quai_node::rpc_view::ExportView`: a QEX1
 //! export plus the state of one replay checkpoint. A live node implements the
@@ -141,6 +142,12 @@ pub struct CallRequest {
     pub value: U256,
     pub data: Vec<u8>,
     pub access_list: Vec<AccessTuple>,
+    /// Trace the call as one round of go-quai's `AccessList`
+    /// (internal/quaiapi/api.go): a `vm.AccessListTracer` seeded with
+    /// `access_list`, which leaves out the sender, the recipient (for a
+    /// creation the address it creates) and the precompiles unless they have
+    /// storage keys. The message runs with `access_list` as given.
+    pub trace_access_list: bool,
 }
 
 /// `core.ExecutionResult` of a message call.
@@ -152,6 +159,17 @@ pub struct CallResult {
     pub error: Option<String>,
     pub reverted: bool,
     pub return_data: Vec<u8>,
+    /// With `CallRequest::trace_access_list`: the traced lists.
+    pub access_list: Option<TracedAccessList>,
+}
+
+/// One round of go-quai's access-list tracing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TracedAccessList {
+    /// The tracer's seed: `access_list` after the exclusions.
+    pub before: Vec<AccessTuple>,
+    /// The tracer's list after the call.
+    pub after: Vec<AccessTuple>,
 }
 
 /// Why a call did not run.
@@ -211,9 +229,17 @@ pub trait ChainView: Send + Sync + 'static {
         start: u32,
         end: u32,
     ) -> Result<Vec<OutpointData>, ViewError>;
-    /// Run a message on the state after `block`, as `DoCall` does, and
-    /// discard every change.
+    /// Run a message on the state after `block`, as `DoCall` does: with
+    /// go-quai's `vm.Config{Debug: true}`, so access-list checks are off
+    /// and every account and slot is warm. Discard every change.
     fn call(&self, block: &BlockData, request: &CallRequest) -> Result<CallResult, CallError>;
+    /// go-quai `HeaderChain.CalcBaseFee(block)`: the minimum base fee of the
+    /// block after `block`, which `quai_gasPrice` raises by 20%. The default
+    /// computes it from the block and its prime terminus
+    /// (`native::fees::calc_base_fee`).
+    fn calc_base_fee(&self, block: &BlockData) -> Result<U256, ViewError> {
+        crate::native::fees::calc_base_fee(self, block)
+    }
 
     /// New canonical heads, for filters and subscriptions. A view without a
     /// live head has none.

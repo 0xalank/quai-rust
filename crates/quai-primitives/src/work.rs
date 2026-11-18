@@ -306,6 +306,21 @@ impl WorkObject {
             .map(|h| h.value.as_slice().try_into().unwrap())
             .collect()
     }
+    /// Canonically padded interlink hashes, in committed order. `decode`
+    /// pads each one to 32 bytes and always sets the list.
+    pub fn interlink_hashes(&self) -> Vec<Hash> {
+        self.wire
+            .wo_body
+            .as_ref()
+            .and_then(|b| b.interlink_hashes.as_ref())
+            .map(|l| {
+                l.hashes
+                    .iter()
+                    .filter_map(|h| h.value.as_slice().try_into().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
     pub fn transaction_root(&self) -> Result<Hash, String> {
         transactions_root(&self.transactions)
     }

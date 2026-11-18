@@ -14,6 +14,7 @@ quai-primitives = { path = "../quai-primitives" }
 quai-consensus = { path = "../quai-consensus" }
 quai-execution = { path = "../quai-execution" }
 quai-store = { path = "../quai-store" }
+quai-rpc = { path = "../quai-rpc" }
 crypto-bigint = { version = "=0.5.5", default-features = false }
 prost = "=0.14.4"
 redb = "=4.5.0"

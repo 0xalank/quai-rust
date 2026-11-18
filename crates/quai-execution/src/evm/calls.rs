@@ -1,7 +1,11 @@
 //! Shared-state CALL/CALLCODE/DELEGATECALL/STATICCALL lifecycle.
 use super::{
-    journal::Journal, run_code, state::World, state_gas, word::Word, CapabilityError, Context,
-    Fault, Outcome,
+    journal::Journal,
+    run_code,
+    state::{Account, World},
+    state_gas,
+    word::{low_address, Word},
+    CapabilityError, Context, Fault, Outcome,
 };
 use quai_primitives::spec::FORKS;
 use quai_primitives::transaction::{AccessTuple, Address};
@@ -15,10 +19,12 @@ pub enum Kind {
 pub fn local(a: &Address, location: [u8; 2]) -> bool {
     a[0] == (location[0] << 4 | location[1]) && a[1] & 128 == 0
 }
+/// Go `StateDB.Empty` for an account that exists.
+pub(crate) fn empty_account(v: &Account) -> bool {
+    v.nonce == 0 && v.code.is_empty() && v.balance == Word::ZERO && v.storage_size == Word::ZERO
+}
 pub(crate) fn empty(s: &Journal, a: &Address) -> Result<bool, CapabilityError> {
-    Ok(s.world().account(a)?.is_none_or(|v| {
-        v.nonce == 0 && v.code.is_empty() && v.balance == Word::ZERO && v.storage_size == Word::ZERO
-    }))
+    Ok(s.world().account(a)?.is_none_or(|v| empty_account(&v)))
 }
 pub(crate) fn result(s: &Journal, gas: u64, error: Option<Fault>) -> Outcome {
     Outcome {
@@ -276,12 +282,12 @@ pub fn creation_address(
         b.extend(sender);
         b.extend(salt);
         b.extend(code_hash);
-        return Ok((keccak(&b)[12..].try_into().unwrap(), gas));
+        return Ok((low_address(keccak(&b)), gas));
     }
     let mut b = sender.to_vec();
     b.extend(nonce.to_be_bytes());
     b.extend(code);
-    let direct: Address = keccak(&b)[12..].try_into().unwrap();
+    let direct = low_address(keccak(&b));
     if local(&direct, location) {
         return Ok((direct, gas));
     }
@@ -300,7 +306,7 @@ pub fn creation_address(
         b.extend(sender);
         b.extend(salt);
         b.extend(code_hash);
-        let a: Address = keccak(&b)[12..].try_into().unwrap();
+        let a = low_address(keccak(&b));
         if local(&a, location) {
             return Ok((a, gas));
         }

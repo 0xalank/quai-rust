@@ -16,6 +16,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 static OWNERS: AtomicU64 = AtomicU64::new(1);
+fn missing_account() -> CapabilityError {
+    CapabilityError::StateUnavailable("journal account missing".into())
+}
 
 // The undo log has no length cap. Go's state journal (core/state/journal.go)
 // grows with every change too; gas bounds the number of changes.
@@ -123,6 +126,28 @@ impl Journal {
     pub fn world(&self) -> &World {
         &self.world
     }
+    /// Go `StateDB.GetBalance`: zero for an account that does not exist.
+    pub(crate) fn balance(&self, a: &Address) -> Result<Word, CapabilityError> {
+        Ok(self.world.account(a)?.map_or(Word::ZERO, |v| v.balance))
+    }
+    /// Go `StateDB.GetState`: the zero hash for an account that does not exist.
+    pub(crate) fn storage(&self, a: &Address, k: Hash) -> Result<Hash, CapabilityError> {
+        Ok(self
+            .world
+            .account(a)?
+            .map(|v| v.get(k))
+            .transpose()?
+            .unwrap_or([0; 32]))
+    }
+    /// An account that this journal created or found earlier in the same
+    /// operation. Only a journal bug can make it absent: that stops execution
+    /// as unavailable state and never decides a transaction.
+    fn existing(&self, a: &Address) -> Result<std::sync::Arc<Account>, CapabilityError> {
+        self.world.account(a)?.ok_or_else(missing_account)
+    }
+    fn existing_mut(&mut self, a: &Address) -> Result<&mut Account, CapabilityError> {
+        self.world.account_mut(a)?.ok_or_else(missing_account)
+    }
     pub fn into_world(self) -> Result<World, CapabilityError> {
         if !self.revisions.is_empty() {
             return Err(CapabilityError::Context("unclosed state revisions"));
@@ -196,7 +221,10 @@ impl Journal {
             }
         }
         while self.undo.len() > offset {
-            match self.undo.pop().unwrap() {
+            let Some(change) = self.undo.pop() else {
+                break;
+            };
+            match change {
                 Undo::Reinitialize(a, size, original, baseline) => {
                     self.world.set_size_baseline(a, baseline);
                     if let Some(v) = size {
@@ -217,19 +245,17 @@ impl Journal {
                 Undo::Account(a, None) => {
                     self.world.remove(&a)?;
                 }
+                // Undo runs in reverse order: a later removal recorded an
+                // Account undo that restores the account before these run.
                 Undo::Storage(a, k, v) => {
-                    self.world
-                        .account_mut(&a)?
-                        .unwrap()
-                        .put(k, v)
-                        .map_err(|error| {
-                            CapabilityError::state(error, CapabilityError::Context("storage undo"))
-                        })?;
+                    self.existing_mut(&a)?.put(k, v).map_err(|error| {
+                        CapabilityError::state(error, CapabilityError::Context("storage undo"))
+                    })?;
                 }
-                Undo::Balance(a, v) => self.world.account_mut(&a)?.unwrap().balance = v,
-                Undo::Nonce(a, v) => self.world.account_mut(&a)?.unwrap().nonce = v,
-                Undo::Code(a, v) => self.world.account_mut(&a)?.unwrap().code = v,
-                Undo::Size(a, v) => self.world.account_mut(&a)?.unwrap().storage_size = v,
+                Undo::Balance(a, v) => self.existing_mut(&a)?.balance = v,
+                Undo::Nonce(a, v) => self.existing_mut(&a)?.nonce = v,
+                Undo::Code(a, v) => self.existing_mut(&a)?.code = v,
+                Undo::Size(a, v) => self.existing_mut(&a)?.storage_size = v,
                 Undo::Suicided(a, true) => {
                     self.suicided.insert(a);
                 }
@@ -317,9 +343,9 @@ impl Journal {
         if self.world.account(&a)?.is_none() {
             self.create(a)?;
         }
-        let old = self.world.account(&a)?.unwrap().balance;
+        let old = self.existing(&a)?.balance;
         self.record(Undo::Balance(a, old))?;
-        self.world.account_mut(&a)?.unwrap().balance = v;
+        self.existing_mut(&a)?.balance = v;
         Ok(())
     }
     pub fn transfer(
@@ -386,9 +412,9 @@ impl Journal {
         if self.world.account(&a)?.is_none() {
             self.create(a)?;
         }
-        let old = self.world.account(&a)?.unwrap().nonce;
+        let old = self.existing(&a)?.nonce;
         self.record(Undo::Nonce(a, old))?;
-        self.world.account_mut(&a)?.unwrap().nonce = v;
+        self.existing_mut(&a)?.nonce = v;
         Ok(())
     }
     pub fn set_code(&mut self, a: Address, v: Vec<u8>) -> Result<(), CapabilityError> {
@@ -399,9 +425,9 @@ impl Journal {
         if self.world.account(&a)?.is_none() {
             self.create(a)?;
         }
-        let old = self.world.account(&a)?.unwrap().code.clone();
+        let old = self.existing(&a)?.code.clone();
         self.record(Undo::Code(a, old))?;
-        self.world.account_mut(&a)?.unwrap().code = v;
+        self.existing_mut(&a)?.code = v;
         Ok(())
     }
     pub fn original(&mut self, a: Address, k: Hash) -> Result<Hash, CapabilityError> {
@@ -429,9 +455,7 @@ impl Journal {
         }
         self.touch(a)?;
         self.record(Undo::Storage(a, k, old))?;
-        self.world
-            .account_mut(&a)?
-            .unwrap()
+        self.existing_mut(&a)?
             .put(k, v)
             .map_err(|error| CapabilityError::state(error, CapabilityError::Limit("storage slots")))
     }
@@ -443,7 +467,7 @@ impl Journal {
             .ok_or(CapabilityError::Context("storage account"))?
             .storage_size;
         self.record(Undo::Size(a, old))?;
-        self.world.account_mut(&a)?.unwrap().storage_size = v;
+        self.existing_mut(&a)?.storage_size = v;
         Ok(())
     }
     pub(crate) fn finalize_sizes(&mut self) -> Result<(), CapabilityError> {
@@ -495,8 +519,9 @@ impl Journal {
             })
             .collect::<Result<Vec<_>, CapabilityError>>()?;
         let changes = changes.into_iter().flatten();
+        // `changes` holds only accounts that exist, and set_size removes none.
         for (a, v) in changes {
-            if self.world.account(&a)?.unwrap().storage_size != v {
+            if self.existing(&a)?.storage_size != v {
                 self.set_size(a, v)?;
             }
         }

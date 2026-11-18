@@ -162,10 +162,12 @@ pub(crate) fn opcode(
         .account(&ctx.address)?
         .map(|a| a.balance)
         .unwrap_or(Word::ZERO);
-    if total == Word::ZERO || available < total || word::uint(limit).is_none_or(|n| n < 21000) {
+    let Some(gas) = word::uint(limit).filter(|n| *n >= 21000) else {
+        return Ok(Some(false));
+    };
+    if total == Word::ZERO || available < total {
         return Ok(Some(false));
     }
-    let gas = word::uint(limit).unwrap();
     if prime < FORKS.security_hardening {
         debit(s, ctx.address, total)?;
     }
@@ -227,8 +229,9 @@ pub(crate) fn convert(
             return Ok(false);
         }
     }
-    let b = word::bytes(limit);
-    let gas = u64::from_be_bytes(b[24..].try_into().unwrap());
+    // Go `etxGasLimit.Uint64()`: before SelfDestructRefund an oversized limit
+    // keeps its low 64 bits.
+    let gas = word::low_u64(limit);
     if gas < 21000
         || total == Word::ZERO
         || s.world()

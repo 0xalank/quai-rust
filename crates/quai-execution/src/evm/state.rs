@@ -72,8 +72,9 @@ fn rlp_prefix(length: usize, short: u8, long: u8) -> Vec<u8> {
     if length < 56 {
         return vec![short + length as u8];
     }
+    // Big-endian length without its leading zero bytes.
     let b = length.to_be_bytes();
-    let b = &b[b.iter().position(|v| *v != 0).unwrap()..];
+    let b = &b[(length.leading_zeros() / 8) as usize..];
     let mut out = vec![long + b.len() as u8];
     out.extend_from_slice(b);
     out
@@ -125,10 +126,9 @@ fn trie_error(error: mpt::Error, stored: bool) -> ReadError {
     }
 }
 pub(crate) fn slot_rlp(value: &Hash) -> Vec<u8> {
-    if *value == [0; 32] {
-        vec![]
-    } else {
-        rlp_bytes(&value[value.iter().position(|v| *v != 0).unwrap()..])
+    match value.iter().position(|v| *v != 0) {
+        None => vec![],
+        Some(start) => rlp_bytes(&value[start..]),
     }
 }
 impl Account {

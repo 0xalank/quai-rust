@@ -40,6 +40,15 @@ fn magnitude(v: Word) -> Vec<u8> {
     let b = bytes(v);
     b[b.iter().position(|v| *v != 0).unwrap_or(32)..].to_vec()
 }
+/// `N` bytes of `input` at `at`. Each arm of `run` handles one input length,
+/// so every read succeeds. Go's handlers recheck the length and fail with a
+/// plain error, which is `Fault::Lockup` here.
+fn field<const N: usize>(input: &[u8], at: usize) -> Result<[u8; N], Failure> {
+    input
+        .get(at..at + N)
+        .and_then(|v| v.try_into().ok())
+        .ok_or(Failure::Fault(Fault::Lockup))
+}
 fn local_any(a: &Address, loc: [u8; 2]) -> bool {
     a[0] == loc[0] << 4 | loc[1]
 }
@@ -76,23 +85,18 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
     let address = lockup::contract(c.location);
     match input.len() {
         20 => {
-            let owner: Address = input.try_into().unwrap();
+            let owner: Address = field(input, 0)?;
             if !calls::local(&c.address, c.location) || !calls::local(&owner, c.location) {
                 return Err(Fault::Lockup.into());
             }
             let k = lockup::deposit_key(c.address, owner);
-            let balance = s
-                .world()
-                .account(&address)?
-                .map(|v| v.get(k))
-                .transpose()?
-                .unwrap_or([0; 32]);
+            let balance = s.storage(&address, k)?;
             if balance == [0; 32] {
                 return Err(Fault::Lockup.into());
             }
             s.set_storage(address, k, [0; 32])?;
             let key = lockup::owner_key(c.address);
-            let old = s.world().account(&address)?.unwrap().get(key)?;
+            let old = s.storage(&address, key)?;
             s.set_storage(
                 address,
                 key,
@@ -101,9 +105,9 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
             Ok(balance.to_vec())
         }
         60 => {
-            let to: Address = input[..20].try_into().unwrap();
-            let value = from_bytes(&input[20..52]);
-            let limit = u64::from_be_bytes(input[52..].try_into().unwrap());
+            let to: Address = field(input, 0)?;
+            let value = from_bytes(&field::<32>(input, 20)?);
+            let limit = u64::from_be_bytes(field(input, 52)?);
             if *gas < limit {
                 return Err(Fault::OutOfGas.into());
             }
@@ -115,13 +119,7 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
                 return Err(Fault::Lockup.into());
             }
             let key = lockup::owner_key(c.address);
-            let balance = s
-                .world()
-                .account(&address)?
-                .map(|v| v.get(key))
-                .transpose()?
-                .map(|v| from_bytes(&v))
-                .unwrap_or(Word::ZERO);
+            let balance = from_bytes(&s.storage(&address, key)?);
             if balance == Word::ZERO || balance < value {
                 return Err(Fault::Lockup.into());
             }
@@ -130,20 +128,17 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
             Ok(vec![1])
         }
         21 | 25 | 53 => {
-            let beneficiary: Address = input[..20].try_into().unwrap();
+            let beneficiary: Address = field(input, 0)?;
             let height = uint(c.block_number).ok_or(Fault::Lockup)?;
             let (lock, epoch) = if input.len() == 53 {
-                (
-                    input[40],
-                    u32::from_be_bytes(input[41..45].try_into().unwrap()),
-                )
+                let [lock] = field(input, 40)?;
+                (lock, u32::from_be_bytes(field(input, 41)?))
             } else if input.len() == 25 {
-                (
-                    input[20],
-                    u32::from_be_bytes(input[21..25].try_into().unwrap()),
-                )
+                let [lock] = field(input, 20)?;
+                (lock, u32::from_be_bytes(field(input, 21)?))
             } else {
-                (input[20], (height / 50000 + 1) as u32)
+                let [lock] = field(input, 20)?;
+                (lock, (height / 50000 + 1) as u32)
             };
             let key = Key {
                 owner: c.address,
@@ -160,8 +155,8 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
             if input.len() != 53 {
                 return Ok(value.abi());
             }
-            let to: Address = input[20..40].try_into().unwrap();
-            let limit = u64::from_be_bytes(input[45..53].try_into().unwrap());
+            let to: Address = field(input, 20)?;
+            let limit = u64::from_be_bytes(field(input, 45)?);
             if *gas < limit {
                 return Err(Fault::OutOfGas.into());
             }

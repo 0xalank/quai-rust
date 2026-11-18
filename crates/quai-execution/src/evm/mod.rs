@@ -42,7 +42,7 @@ use quai_primitives::{
 };
 use state::World;
 use std::collections::BTreeSet;
-use word::{boolean, bytes, from_bytes, uint, Word};
+use word::{address, boolean, bytes, from_bytes, uint, Word};
 /// Diagnostic trace budget. Only `Context::trace` frames use it; consensus
 /// execution never sets that flag.
 pub const MAX_TRACE_BYTES: usize = 64 << 20;
@@ -301,12 +301,35 @@ struct Machine<'a> {
 
     jumps: BTreeSet<usize>,
 }
+/// `n` bytes of memory at `o`. `step` expands memory over every range that an
+/// operation uses before the operation runs, so a missing range is an
+/// interpreter bug: it stops execution and never decides a transaction.
+fn span(memory: &[u8], o: usize, n: usize) -> Result<&[u8], Stop> {
+    o.checked_add(n)
+        .and_then(|end| memory.get(o..end))
+        .ok_or_else(unexpanded)
+}
+fn span_mut(memory: &mut [u8], o: usize, n: usize) -> Result<&mut [u8], Stop> {
+    o.checked_add(n)
+        .and_then(|end| memory.get_mut(o..end))
+        .ok_or_else(unexpanded)
+}
+fn unexpanded() -> Stop {
+    CapabilityError::Context("memory range not expanded").into()
+}
 impl Machine<'_> {
-    fn back(&self, n: usize) -> Word {
-        self.stack[self.stack.len() - 1 - n]
+    // `step` checks the stack depth against `Spec::required` before an
+    // operation reads it; these accessors return the same fault.
+    fn back(&self, n: usize) -> Result<Word, Stop> {
+        Ok(*self
+            .stack
+            .iter()
+            .rev()
+            .nth(n)
+            .ok_or(Fault::StackUnderflow)?)
     }
-    fn pop(&mut self) -> Word {
-        self.stack.pop().unwrap()
+    fn pop(&mut self) -> Result<Word, Stop> {
+        Ok(self.stack.pop().ok_or(Fault::StackUnderflow)?)
     }
     fn push(&mut self, v: Word) {
         self.stack.push(v)
@@ -328,21 +351,21 @@ impl Machine<'_> {
     }
     fn needed_memory(&self, op: u8) -> Result<u64, Stop> {
         match op {
-            0x51 | 0x52 => Self::memory_end(self.back(0), Word::from_u64(32)),
-            0x53 => Self::memory_end(self.back(0), Word::ONE),
-            0x20 | 0xf3 | 0xfd | 0xa0..=0xa4 => Self::memory_end(self.back(0), self.back(1)),
-            0x37 | 0x39 | 0x3e => Self::memory_end(self.back(0), self.back(2)),
-            0xf6 => Ok(Self::memory_end(self.back(6), self.back(7))?
-                .checked_add(Self::memory_end(self.back(8), self.back(9))?)
+            0x51 | 0x52 => Self::memory_end(self.back(0)?, Word::from_u64(32)),
+            0x53 => Self::memory_end(self.back(0)?, Word::ONE),
+            0x20 | 0xf3 | 0xfd | 0xa0..=0xa4 => Self::memory_end(self.back(0)?, self.back(1)?),
+            0x37 | 0x39 | 0x3e => Self::memory_end(self.back(0)?, self.back(2)?),
+            0xf6 => Ok(Self::memory_end(self.back(6)?, self.back(7)?)?
+                .checked_add(Self::memory_end(self.back(8)?, self.back(9)?)?)
                 .ok_or(Fault::GasOverflow)?),
-            0x3c => Self::memory_end(self.back(1), self.back(3)),
-            0xf0 | 0xf5 => Self::memory_end(self.back(1), self.back(2)),
-            0xf1 | 0xf2 => Ok(Self::memory_end(self.back(3), self.back(4))?
-                .max(Self::memory_end(self.back(5), self.back(6))?)),
-            0xf4 | 0xfa => Ok(Self::memory_end(self.back(2), self.back(3))?
-                .max(Self::memory_end(self.back(4), self.back(5))?)),
-            0x5e => Ok(Self::memory_end(self.back(0), self.back(2))?
-                .max(Self::memory_end(self.back(1), self.back(2))?)),
+            0x3c => Self::memory_end(self.back(1)?, self.back(3)?),
+            0xf0 | 0xf5 => Self::memory_end(self.back(1)?, self.back(2)?),
+            0xf1 | 0xf2 => Ok(Self::memory_end(self.back(3)?, self.back(4)?)?
+                .max(Self::memory_end(self.back(5)?, self.back(6)?)?)),
+            0xf4 | 0xfa => Ok(Self::memory_end(self.back(2)?, self.back(3)?)?
+                .max(Self::memory_end(self.back(4)?, self.back(5)?)?)),
+            0x5e => Ok(Self::memory_end(self.back(0)?, self.back(2)?)?
+                .max(Self::memory_end(self.back(1)?, self.back(2)?)?)),
             _ => Ok(0),
         }
     }
@@ -362,7 +385,7 @@ impl Machine<'_> {
         ))
     }
     fn storage_cost(&mut self, op: u8) -> Result<(u64, u64), Stop> {
-        let slot = bytes(self.back(0));
+        let slot = bytes(self.back(0)?);
         let cold = if self.state.slots.contains(&(self.ctx.address, slot)) {
             0
         } else {
@@ -382,14 +405,9 @@ impl Machine<'_> {
         if self.gas <= self.cost(2300) {
             return Err(Fault::OutOfGas.into());
         }
-        let current = self
-            .state
-            .world()
-            .account(&self.ctx.address)?
-            .unwrap()
-            .get(slot)?;
+        let current = self.state.storage(&self.ctx.address, slot)?;
         let original = self.state.original(self.ctx.address, slot)?;
-        let value = bytes(self.back(1));
+        let value = bytes(self.back(1)?);
         let set = self.cost(20_000);
         let reset = self.cost(5000);
         let cold_rate = self.cost(2100);
@@ -465,13 +483,17 @@ impl Machine<'_> {
         }
         result
     }
-    fn range(&self, offset: Word, length: Word) -> (usize, usize) {
-        let len = uint(length).unwrap() as usize;
+    /// An offset/length pair that `needed_memory` already checked: with a
+    /// nonzero length both fit in u64, or `memory_end` returned this fault.
+    fn range(offset: Word, length: Word) -> Result<(usize, usize), Stop> {
+        let len = uint(length).ok_or(Fault::GasOverflow)?;
         if len == 0 {
-            (0, 0)
-        } else {
-            (uint(offset).unwrap() as usize, len)
+            return Ok((0, 0));
         }
+        Ok((
+            uint(offset).ok_or(Fault::GasOverflow)? as usize,
+            len as usize,
+        ))
     }
     fn step(&mut self) -> Result<(), Stop> {
         let op = self.code.get(self.pc).copied().unwrap_or(0);
@@ -511,7 +533,7 @@ impl Machine<'_> {
         if self.stack.len() - instruction.pop + instruction.push > 1024 {
             return Err(Fault::StackOverflow.into());
         }
-        if self.ctx.read_only && (instruction.writes || (op == 0xf1 && self.back(2) != Word::ZERO))
+        if self.ctx.read_only && (instruction.writes || (op == 0xf1 && self.back(2)? != Word::ZERO))
         {
             return Err(Fault::WriteProtection.into());
         }
@@ -536,8 +558,7 @@ impl Machine<'_> {
         let mut state_cost = 0;
         match op {
             0x31 | 0x3b | 0x3c | 0x3f => {
-                let b = bytes(self.back(0));
-                let a: Address = b[12..].try_into().unwrap();
+                let a = address(self.back(0)?);
                 let cold = if self.state.addresses.contains(&a) {
                     0
                 } else {
@@ -548,7 +569,7 @@ impl Machine<'_> {
                 if op == 0x3c {
                     dynamic = dynamic
                         .checked_add(
-                            uint(self.back(3))
+                            uint(self.back(3)?)
                                 .ok_or(Fault::OutOfGas)?
                                 .div_ceil(32)
                                 .checked_mul(3)
@@ -561,8 +582,7 @@ impl Machine<'_> {
                 }
             }
             0xff => {
-                let b = bytes(self.back(0));
-                let a: Address = b[12..].try_into().unwrap();
+                let a = address(self.back(0)?);
                 if !calls::local(&a, self.ctx.location) {
                     return Err(Fault::ExternalAddress.into());
                 }
@@ -570,13 +590,7 @@ impl Machine<'_> {
                     dynamic = self.cost(2600);
                 }
                 if calls::empty(self.state, &a)?
-                    && self
-                        .state
-                        .world()
-                        .account(&self.ctx.address)?
-                        .unwrap()
-                        .balance
-                        != Word::ZERO
+                    && self.state.balance(&self.ctx.address)? != Word::ZERO
                 {
                     dynamic = dynamic.checked_add(25000).ok_or(Fault::GasOverflow)?;
                 }
@@ -584,7 +598,7 @@ impl Machine<'_> {
             0xf5 => {
                 dynamic = dynamic
                     .checked_add(
-                        uint(self.back(2))
+                        uint(self.back(2)?)
                             .ok_or(Fault::OutOfGas)?
                             .div_ceil(32)
                             .checked_mul(6)
@@ -592,12 +606,12 @@ impl Machine<'_> {
                     )
                     .ok_or(Fault::GasOverflow)?
             }
-            0x0a => dynamic = 10 + ((self.back(1).bits_vartime() as u64 + 7) / 8) * 50,
-            0x20 => dynamic += uint(self.back(1)).ok_or(Fault::OutOfGas)?.div_ceil(32) * 6,
+            0x0a => dynamic = 10 + (self.back(1)?.bits_vartime() as u64).div_ceil(8) * 50,
+            0x20 => dynamic += uint(self.back(1)?).ok_or(Fault::OutOfGas)?.div_ceil(32) * 6,
             0x37 | 0x39 | 0x3e | 0x5e => {
                 dynamic = dynamic
                     .checked_add(
-                        uint(self.back(2))
+                        uint(self.back(2)?)
                             .ok_or(Fault::OutOfGas)?
                             .div_ceil(32)
                             .checked_mul(3)
@@ -606,8 +620,7 @@ impl Machine<'_> {
                     .ok_or(Fault::OutOfGas)?
             }
             0xf1 | 0xf2 | 0xf4 | 0xfa => {
-                let raw = bytes(self.back(1));
-                let address: Address = raw[12..].try_into().unwrap();
+                let address = address(self.back(1)?);
                 if op == 0xf1 && !calls::local(&address, self.ctx.location) {
                     return Err(Fault::OutOfGas.into());
                 }
@@ -618,7 +631,7 @@ impl Machine<'_> {
                 };
                 dynamic = dynamic.checked_add(cold).ok_or(Fault::GasOverflow)?;
                 state_cost = cold * 2;
-                if matches!(op, 0xf1 | 0xf2) && self.back(2) != Word::ZERO {
+                if matches!(op, 0xf1 | 0xf2) && self.back(2)? != Word::ZERO {
                     dynamic = dynamic.checked_add(9000).ok_or(Fault::GasOverflow)?;
                     if op == 0xf1 && calls::empty(self.state, &address)? {
                         dynamic = dynamic
@@ -628,7 +641,7 @@ impl Machine<'_> {
                 }
                 let available = self.gas.checked_sub(dynamic).ok_or(Fault::OutOfGas)?;
                 let cap = available - available / 64;
-                self.call_gas = uint(self.back(0)).unwrap_or(u64::MAX).min(cap);
+                self.call_gas = uint(self.back(0)?).unwrap_or(u64::MAX).min(cap);
                 dynamic = dynamic
                     .checked_add(self.call_gas)
                     .ok_or(Fault::GasOverflow)?;
@@ -639,10 +652,11 @@ impl Machine<'_> {
                 state_cost = s;
             }
             0xa0..=0xa4 => {
+                let size = self.back(1)?;
                 dynamic = dynamic
                     .checked_add(375 + (op as u64 - 0xa0) * 375)
                     .and_then(|n| {
-                        uint(self.back(1))
+                        uint(size)
                             .and_then(|v| v.checked_mul(8))
                             .and_then(|v| n.checked_add(v))
                     })
@@ -663,12 +677,12 @@ impl Machine<'_> {
         match op {
             0x00 => return Err(Stop::Success(vec![])),
             0x01..=0x0b | 0x10..=0x1d => {
-                let a = self.pop();
+                let a = self.pop()?;
                 let value = match op {
                     0x15 => boolean(a == Word::ZERO),
                     0x19 => a.wrapping_xor(&Word::MAX),
                     _ => {
-                        let b = self.pop();
+                        let b = self.pop()?;
                         match op {
                             0x01 => a.wrapping_add(&b),
                             0x02 => a.wrapping_mul(&b),
@@ -678,11 +692,11 @@ impl Machine<'_> {
                             0x06 => word::rem(a, b),
                             0x07 => word::signed_rem(a, b),
                             0x08 => {
-                                let m = self.pop();
+                                let m = self.pop()?;
                                 word::addmod(a, b, m)
                             }
                             0x09 => {
-                                let m = self.pop();
+                                let m = self.pop()?;
                                 word::mulmod(a, b, m)
                             }
                             0x0a => word::pow(a, b),
@@ -710,22 +724,22 @@ impl Machine<'_> {
                                 .map(|n| b.shr_vartime(n as usize))
                                 .unwrap_or(Word::ZERO),
                             0x1d => word::sar(b, a),
-                            _ => unreachable!(),
+                            _ => return Err(CapabilityError::Opcode(op).into()),
                         }
                     }
                 };
                 self.push(value);
             }
             0x20 => {
-                let off = self.pop();
-                let len = self.pop();
-                let (o, n) = self.range(off, len);
-                self.push(from_bytes(&keccak(&self.memory[o..o + n])));
+                let off = self.pop()?;
+                let len = self.pop()?;
+                let (o, n) = Self::range(off, len)?;
+                let hash = keccak(span(&self.memory, o, n)?);
+                self.push(from_bytes(&hash));
             }
             0x30 => self.push(from_bytes(&self.ctx.address)),
             0x31 | 0x3b | 0x3c | 0x3f => {
-                let b = bytes(self.pop());
-                let a: Address = b[12..].try_into().unwrap();
+                let a = address(self.pop()?);
                 if op != 0x3b && !calls::local(&a, self.ctx.location) {
                     return Err(Fault::ExternalAddress.into());
                 }
@@ -742,23 +756,24 @@ impl Machine<'_> {
                     0x3b => self.push(Word::from_u64(
                         account.map(|v| v.code.len()).unwrap_or(0) as u64
                     )),
-                    0x3f => self.push(if calls::empty(self.state, &a)? {
-                        Word::ZERO
-                    } else {
-                        from_bytes(&keccak(&account.unwrap().code))
+                    // Go `opExtCodeHash`: zero for an absent or empty account.
+                    0x3f => self.push(match account {
+                        Some(v) if !calls::empty_account(&v) => from_bytes(&keccak(&v.code)),
+                        _ => Word::ZERO,
                     }),
                     _ => {
                         let code = account.map(|v| v.code.clone()).unwrap_or_default();
-                        let off = self.pop();
-                        let src = self.pop();
-                        let len = self.pop();
-                        let (o, n) = self.range(off, len);
-                        self.memory[o..o + n].copy_from_slice(&Self::read_data(&code, src, n));
+                        let off = self.pop()?;
+                        let src = self.pop()?;
+                        let len = self.pop()?;
+                        let (o, n) = Self::range(off, len)?;
+                        span_mut(&mut self.memory, o, n)?
+                            .copy_from_slice(&Self::read_data(&code, src, n));
                     }
                 }
             }
             0x40 => {
-                let requested = uint(self.pop());
+                let requested = uint(self.pop()?);
                 let current = uint(self.ctx.block_number).unwrap_or(u64::MAX);
                 let h = if let Some(n) = requested.filter(|n| *n < current && current - *n <= 256) {
                     *self
@@ -779,7 +794,7 @@ impl Machine<'_> {
             })),
             0x34 => self.push(self.ctx.value),
             0x35 => {
-                let off = self.pop();
+                let off = self.pop()?;
                 self.push(from_bytes(&Self::read_data(self.input, off, 32)));
             }
             0x36 => self.push(Word::from_u64(self.input.len() as u64)),
@@ -787,18 +802,18 @@ impl Machine<'_> {
             0x3a => self.push(self.ctx.gas_price),
             0x3d => self.push(Word::from_u64(self.return_data.len() as u64)),
             0x37 | 0x39 => {
-                let off = self.pop();
-                let src = self.pop();
-                let len = self.pop();
-                let (o, n) = self.range(off, len);
+                let off = self.pop()?;
+                let src = self.pop()?;
+                let len = self.pop()?;
+                let (o, n) = Self::range(off, len)?;
                 let value =
                     Self::read_data(if op == 0x37 { self.input } else { &self.code }, src, n);
-                self.memory[o..o + n].copy_from_slice(&value);
+                span_mut(&mut self.memory, o, n)?.copy_from_slice(&value);
             }
             0x3e => {
-                let off = self.pop();
-                let offset = self.pop();
-                let len = self.pop();
+                let off = self.pop()?;
+                let offset = self.pop()?;
+                let len = self.pop()?;
                 let start = uint(offset).ok_or(Fault::ReturnDataBounds)?;
                 let count = uint(len).ok_or(Fault::ReturnDataBounds)?;
                 if start
@@ -807,9 +822,13 @@ impl Machine<'_> {
                 {
                     return Err(Fault::ReturnDataBounds.into());
                 }
-                let (o, n) = self.range(off, len);
-                self.memory[o..o + n]
-                    .copy_from_slice(&self.return_data[start as usize..start as usize + n]);
+                let (o, n) = Self::range(off, len)?;
+                let start = start as usize;
+                let data = self
+                    .return_data
+                    .get(start..start + n)
+                    .ok_or(Fault::ReturnDataBounds)?;
+                span_mut(&mut self.memory, o, n)?.copy_from_slice(data);
             }
             0x41 => self.push(from_bytes(&self.ctx.coinbase)),
             0x42 => self.push(self.ctx.timestamp),
@@ -817,56 +836,46 @@ impl Machine<'_> {
             0x44 => self.push(self.ctx.difficulty),
             0x45 => self.push(Word::from_u64(self.ctx.block_gas_limit)),
             0x46 => self.push(self.ctx.chain_id),
-            0x47 => self.push(
-                self.state
-                    .world()
-                    .account(&self.ctx.address)?
-                    .unwrap()
-                    .balance,
-            ),
+            0x47 => self.push(self.state.balance(&self.ctx.address)?),
             0x48 => self.push(self.ctx.base_fee),
             0x50 => {
-                self.pop();
+                self.pop()?;
             }
             0x51 => {
-                let off = self.pop();
-                let o = uint(off).unwrap() as usize;
-                self.push(from_bytes(&self.memory[o..o + 32]));
+                let off = self.pop()?;
+                let (o, n) = Self::range(off, Word::from_u64(32))?;
+                let v = from_bytes(span(&self.memory, o, n)?);
+                self.push(v);
             }
             0x52 => {
-                let off = self.pop();
-                let v = self.pop();
-                let o = uint(off).unwrap() as usize;
-                self.memory[o..o + 32].copy_from_slice(&bytes(v));
+                let off = self.pop()?;
+                let v = self.pop()?;
+                let (o, n) = Self::range(off, Word::from_u64(32))?;
+                span_mut(&mut self.memory, o, n)?.copy_from_slice(&bytes(v));
             }
             0x53 => {
-                let off = self.pop();
-                let v = self.pop();
-                self.memory[uint(off).unwrap() as usize] = bytes(v)[31];
+                let off = self.pop()?;
+                let [.., low] = bytes(self.pop()?);
+                let (o, n) = Self::range(off, Word::ONE)?;
+                span_mut(&mut self.memory, o, n)?.fill(low);
             }
             0x54 | 0x55 => {
                 if !self.state.addresses.contains(&self.ctx.address) {
                     return Err(Fault::InvalidAccessList.into());
                 }
-                let key = bytes(self.pop());
+                let key = bytes(self.pop()?);
                 if op == 0x54 {
-                    self.push(from_bytes(
-                        &self
-                            .state
-                            .world()
-                            .account(&self.ctx.address)?
-                            .unwrap()
-                            .get(key)?,
-                    ));
+                    let v = self.state.storage(&self.ctx.address, key)?;
+                    self.push(from_bytes(&v));
                 } else {
-                    let v = bytes(self.pop());
+                    let v = bytes(self.pop()?);
                     self.state.set_storage(self.ctx.address, key, v)?;
                 }
             }
             0x56 | 0x57 => {
-                let dest = self.pop();
+                let dest = self.pop()?;
                 let jump = if op == 0x57 {
-                    self.pop() != Word::ZERO
+                    self.pop()? != Word::ZERO
                 } else {
                     true
                 };
@@ -884,21 +893,24 @@ impl Machine<'_> {
             0x5a => self.push(Word::from_u64(self.gas)),
             0x5b => {}
             0x5c => {
-                let key = bytes(self.pop());
+                let key = bytes(self.pop()?);
                 self.push(from_bytes(&self.state.transient(self.ctx.address, key)));
             }
             0x5d => {
-                let key = bytes(self.pop());
-                let value = bytes(self.pop());
+                let key = bytes(self.pop()?);
+                let value = bytes(self.pop()?);
                 self.state.set_transient(self.ctx.address, key, value)?;
             }
             0x5e => {
-                let dest = self.pop();
-                let src = self.pop();
-                let len = self.pop();
-                let (d, n) = self.range(dest, len);
+                let dest = self.pop()?;
+                let src = self.pop()?;
+                let len = self.pop()?;
+                let (d, n) = Self::range(dest, len)?;
                 if n != 0 {
-                    let s = uint(src).unwrap() as usize;
+                    let (s, _) = Self::range(src, len)?;
+                    // Both ranges lie in memory, so copy_within cannot fail.
+                    span(&self.memory, s, n)?;
+                    span(&self.memory, d, n)?;
                     self.memory.copy_within(s..s + n, d);
                 }
             }
@@ -912,46 +924,38 @@ impl Machine<'_> {
                 self.push(from_bytes(&value));
                 self.pc += n;
             }
-            0x80..=0x8f => self.push(self.back((op - 0x80) as usize)),
+            0x80..=0x8f => self.push(self.back((op - 0x80) as usize)?),
             0x90..=0x9f => {
-                let a = self.stack.len() - 1;
-                let b = a - (op - 0x8f) as usize;
-                self.stack.swap(a, b);
+                let top = self.stack.len().checked_sub(1);
+                let other = top.and_then(|n| n.checked_sub((op - 0x8f) as usize));
+                let (Some(top), Some(other)) = (top, other) else {
+                    return Err(Fault::StackUnderflow.into());
+                };
+                self.stack.swap(top, other);
             }
             0xa0..=0xa4 => {
-                let off = self.pop();
-                let len = self.pop();
-                let (o, n) = self.range(off, len);
+                let off = self.pop()?;
+                let len = self.pop()?;
+                let (o, n) = Self::range(off, len)?;
                 let mut topics = Vec::new();
                 for _ in 0..op - 0xa0 {
-                    topics.push(bytes(self.pop()));
+                    topics.push(bytes(self.pop()?));
                 }
                 self.state.logs.push(Log {
                     address: self.ctx.address,
                     topics,
-                    data: self.memory[o..o + n].to_vec(),
+                    data: span(&self.memory, o, n)?.to_vec(),
                 });
             }
             0xff => {
-                let b = bytes(self.pop());
-                let a: Address = b[12..].try_into().unwrap();
+                let a = address(self.pop()?);
                 if !self.state.addresses.contains(&a)
                     || !self.state.addresses.contains(&self.ctx.address)
                 {
                     return Err(Fault::InvalidAccessList.into());
                 }
-                let balance = self
-                    .state
-                    .world()
-                    .account(&self.ctx.address)?
-                    .unwrap()
-                    .balance;
-                let before = self
-                    .state
-                    .world()
-                    .account(&a)?
-                    .map(|v| v.balance)
-                    .unwrap_or(Word::ZERO);
+                let balance = self.state.balance(&self.ctx.address)?;
+                let before = self.state.balance(&a)?;
                 let mut credit = balance;
                 if !self.state.has_suicided(self.ctx.address)
                     || self
@@ -974,16 +978,16 @@ impl Machine<'_> {
                 return Err(Stop::Success(vec![]));
             }
             0xf0 | 0xf5 => {
-                let value = self.pop();
-                let off = self.pop();
-                let len = self.pop();
+                let value = self.pop()?;
+                let off = self.pop()?;
+                let len = self.pop()?;
                 let salt = if op == 0xf5 {
-                    Some(bytes(self.pop()))
+                    Some(bytes(self.pop()?))
                 } else {
                     None
                 };
-                let (o, n) = self.range(off, len);
-                let code = self.memory[o..o + n].to_vec();
+                let (o, n) = Self::range(off, len)?;
+                let code = span(&self.memory, o, n)?.to_vec();
                 let gas = self.gas - self.gas / 64;
                 self.charge(gas)?;
                 let (out, address) = calls::create(
@@ -995,11 +999,15 @@ impl Machine<'_> {
                     salt,
                     self.depth + 1,
                 )?;
-                self.push(if out.error.is_none() && !out.reverted {
-                    from_bytes(&address.unwrap())
+                let created = if out.error.is_none() && !out.reverted {
+                    // `calls::create` returns the address with every success.
+                    let address = address
+                        .ok_or(CapabilityError::Context("CREATE success without address"))?;
+                    from_bytes(&address)
                 } else {
                     Word::ZERO
-                });
+                };
+                self.push(created);
                 self.gas = self
                     .gas
                     .checked_add(out.gas_remaining)
@@ -1011,23 +1019,22 @@ impl Machine<'_> {
                 self.return_data = if out.reverted { out.output } else { vec![] };
             }
             0xf1 | 0xf2 | 0xf4 | 0xfa => {
-                self.pop();
-                let raw = bytes(self.pop());
-                let target: Address = raw[12..].try_into().unwrap();
+                self.pop()?;
+                let target = address(self.pop()?);
                 let value = if matches!(op, 0xf1 | 0xf2) {
-                    self.pop()
+                    self.pop()?
                 } else {
                     Word::ZERO
                 };
-                let off = self.pop();
-                let len = self.pop();
-                let ret_off = self.pop();
-                let ret_len = self.pop();
+                let off = self.pop()?;
+                let len = self.pop()?;
+                let ret_off = self.pop()?;
+                let ret_len = self.pop()?;
                 if !self.state.addresses.contains(&target) {
                     return Err(Fault::InvalidAccessList.into());
                 }
-                let (o, n) = self.range(off, len);
-                let args = self.memory[o..o + n].to_vec();
+                let (o, n) = Self::range(off, len)?;
+                let args = span(&self.memory, o, n)?.to_vec();
                 let kind = match op {
                     0xf1 => calls::Kind::Call,
                     0xf2 => calls::Kind::CallCode,
@@ -1047,9 +1054,9 @@ impl Machine<'_> {
                 )?;
                 self.push(boolean(result.error.is_none() && !result.reverted));
                 if result.error.is_none() {
-                    let (o, n) = self.range(ret_off, ret_len);
+                    let (o, n) = Self::range(ret_off, ret_len)?;
                     let count = n.min(result.output.len());
-                    self.memory[o..o + count].copy_from_slice(&result.output[..count]);
+                    span_mut(&mut self.memory, o, count)?.copy_from_slice(&result.output[..count]);
                 }
                 self.return_data = result.output;
                 self.gas = self
@@ -1064,10 +1071,10 @@ impl Machine<'_> {
                 }
             }
             0xf3 | 0xfd => {
-                let off = self.pop();
-                let len = self.pop();
-                let (o, n) = self.range(off, len);
-                let value = self.memory[o..o + n].to_vec();
+                let off = self.pop()?;
+                let len = self.pop()?;
+                let (o, n) = Self::range(off, len)?;
+                let value = span(&self.memory, o, n)?.to_vec();
                 return Err(if op == 0xf3 {
                     Stop::Success(value)
                 } else {
@@ -1075,21 +1082,20 @@ impl Machine<'_> {
                 });
             }
             0xf6 => {
-                self.pop();
-                let b = bytes(self.pop());
-                let to: Address = b[12..].try_into().unwrap();
-                let value = self.pop();
-                let gas = self.pop();
-                let tip = self.pop();
-                let cap = self.pop();
-                let off = self.pop();
-                let len = self.pop();
-                let access_off = self.pop();
-                let access_len = self.pop();
-                let (o, n) = self.range(off, len);
-                let data = self.memory[o..o + n].to_vec();
-                let (o, n) = self.range(access_off, access_len);
-                let access = self.memory[o..o + n].to_vec();
+                self.pop()?;
+                let to = address(self.pop()?);
+                let value = self.pop()?;
+                let gas = self.pop()?;
+                let tip = self.pop()?;
+                let cap = self.pop()?;
+                let off = self.pop()?;
+                let len = self.pop()?;
+                let access_off = self.pop()?;
+                let access_len = self.pop()?;
+                let (o, n) = Self::range(off, len)?;
+                let data = span(&self.memory, o, n)?.to_vec();
+                let (o, n) = Self::range(access_off, access_len)?;
+                let access = span(&self.memory, o, n)?.to_vec();
                 if let Some(result) = etx::opcode(
                     self.state, self.ctx, to, value, gas, tip, cap, data, &access,
                 )? {
@@ -1097,22 +1103,21 @@ impl Machine<'_> {
                 }
             }
             0xf8 => {
-                self.pop();
-                let b = bytes(self.pop());
-                let to: Address = b[12..].try_into().unwrap();
-                let value = self.pop();
-                let gas = self.pop();
+                self.pop()?;
+                let to = address(self.pop()?);
+                let value = self.pop()?;
+                let gas = self.pop()?;
                 let result = etx::convert(self.state, self.ctx, to, value, gas)?;
                 self.push(boolean(result));
             }
             0xf7 => {
-                let value = bytes(self.pop());
-                let addr = &value[12..];
+                let a = address(self.pop()?);
                 self.push(boolean(
-                    addr[0] == (self.ctx.location[0] << 4 | self.ctx.location[1]),
+                    a[0] == (self.ctx.location[0] << 4 | self.ctx.location[1]),
                 ));
             }
-            _ => unreachable!(),
+            // `spec` and this match list the same operations.
+            _ => return Err(CapabilityError::Opcode(op).into()),
         }
         self.pc += 1;
         Ok(())
@@ -1176,8 +1181,7 @@ pub(crate) fn run_code(
         .unwrap_or(Word::ZERO);
     let mut jumps = BTreeSet::new();
     let mut pc = 0;
-    while pc < code.len() {
-        let op = code[pc];
+    while let Some(&op) = code.get(pc) {
         if op == 0x5b {
             jumps.insert(pc);
         }

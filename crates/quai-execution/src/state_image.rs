@@ -42,7 +42,7 @@ pub struct Restored {
     pub world: World,
     pub utxos: UtxoState,
 }
-fn hash(v: &[u8]) -> Hash {
+pub(crate) fn hash(v: &[u8]) -> Hash {
     Sha256::digest(v).into()
 }
 fn roots(world: &World, state: &UtxoState) -> Result<Roots, String> {

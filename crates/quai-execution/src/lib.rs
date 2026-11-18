@@ -29,3 +29,6 @@ pub mod state_error;
 extern crate self as quai_execution;
 
 pub mod lockup_state;
+
+#[cfg(test)]
+mod fuzz_tests;

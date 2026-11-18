@@ -78,3 +78,21 @@ fn precompile_address_of_every_zone_matches_go() {
 fn value_check_order_matches_go() {
     check_group("balance", 18);
 }
+
+/// A frame that fails with common.ErrExternalAddress makes the CALL,
+/// CALLCODE, DELEGATECALL or STATICCALL that called it fail too: BALANCE,
+/// EXTCODECOPY and EXTCODEHASH of another zone's address, a call of the
+/// last three kinds to it, three frames deep, CALLCODE with value; a Qi
+/// address, a CREATE and SELFDESTRUCT stop it.
+#[test]
+fn external_address_errors_reach_the_caller_as_in_go() {
+    check_group("scope", 180);
+}
+
+/// The lockup contract from a contract and from the transaction: every
+/// function with an address of this zone, this zone's Qi ledger and another
+/// zone of each ledger, and inputs of other lengths.
+#[test]
+fn lockup_contract_address_errors_match_go() {
+    check_group("lockup", 88);
+}

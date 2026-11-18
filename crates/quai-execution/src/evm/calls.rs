@@ -19,6 +19,15 @@ pub enum Kind {
 pub fn local(a: &Address, location: [u8; 2]) -> bool {
     a[0] == (location[0] << 4 | location[1]) && a[1] & 128 == 0
 }
+/// The error of go-quai `Address.InternalAndQuaiAddress` for an address that
+/// is not `local` (common/address.go:60-75): it checks the ledger first.
+pub(crate) fn scope_fault(a: &Address) -> Fault {
+    if a[1] > 127 {
+        Fault::QiAddress
+    } else {
+        Fault::ExternalAddress
+    }
+}
 /// Go `StateDB.Empty` for an account that exists.
 pub(crate) fn empty_account(v: &Account) -> bool {
     v.nonce == 0 && v.code.is_empty() && v.balance == Word::ZERO && v.storage_size == Word::ZERO
@@ -73,8 +82,10 @@ pub(crate) fn invoke(
     let precompile = super::precompile::translate(target, parent.location);
     let target = precompile.map(|(_, a)| a).unwrap_or(target);
     if !local(&target, parent.location) {
+        // EVM.CallCode, DelegateCall and StaticCall (core/vm/evm.go:377,
+        // 420, 464): no gas left.
         if kind != Kind::Call {
-            return Ok(result(s, 0, Some(Fault::ExternalAddress)));
+            return Ok(result(s, 0, Some(scope_fault(&target))));
         }
         let point = s.snapshot()?;
         let outcome = super::etx::transfer(s, parent, target, value, gas, input)?;
@@ -372,7 +383,7 @@ pub(crate) fn create(
         return Ok((result(s, gas, Some(Fault::InsufficientBalance)), None));
     }
     if !local(&address, parent.location) {
-        return Ok((result(s, 0, Some(Fault::ExternalAddress)), None));
+        return Ok((result(s, 0, Some(scope_fault(&address))), None));
     }
     if !s.address_listed(&address) {
         return Ok((result(s, 0, Some(Fault::InvalidAccessList)), None));

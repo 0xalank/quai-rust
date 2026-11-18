@@ -55,8 +55,6 @@ pub enum FaultDetail {
     InvalidOpcode(u8),
     /// `Address.InternalAndQuaiAddress` refused this address.
     Scope(Address),
-    /// A dynamic gas function failed, which Go reports as `ErrOutOfGas`.
-    OutOfGas,
 }
 
 /// A call message (`TransactionArgs.ToMessage`): gas price zero and the
@@ -402,9 +400,10 @@ fn fault_text(fault: Fault, detail: Option<&FaultDetail>, top: &Top) -> String {
         (Fault::InvalidOpcode, Some(FaultDetail::InvalidOpcode(op))) => {
             format!("invalid opcode: {}", opcodes::name(*op))
         }
-        (Fault::ExternalAddress, Some(FaultDetail::OutOfGas)) => "out of gas".into(),
-        (Fault::ExternalAddress, Some(FaultDetail::Scope(a))) => scope_error(a, top.block.location)
-            .unwrap_or_else(|| "Address belongs to other zone".into()),
+        (Fault::ExternalAddress | Fault::QiAddress, Some(FaultDetail::Scope(a))) => {
+            scope_error(a, top.block.location)
+                .unwrap_or_else(|| "Address belongs to other zone".into())
+        }
         (Fault::Etx, _) => create_etx_error(top),
         (Fault::AddressGrind, _) => grind_error(top),
         (Fault::Precompile, _) => top
@@ -436,6 +435,7 @@ pub fn plain(f: Fault) -> &'static str {
         Fault::CodeStoreOutOfGas => "contract creation code storage out of gas",
         Fault::AddressGrind => "contract address grinding failed",
         Fault::ExternalAddress => "Address belongs to other zone",
+        Fault::QiAddress => "expected Quai address, but found Qi address",
         Fault::MaxCodeSize => "max code size exceeded",
         Fault::Precompile => "precompile failed",
         Fault::Lockup => "lockup error",

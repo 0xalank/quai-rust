@@ -39,3 +39,7 @@ required-features = ["native-transport"]
 [[example]]
 name = "private-node"
 required-features = ["native-transport"]
+
+[[example]]
+name = "mainnet-probe"
+required-features = ["native-transport"]

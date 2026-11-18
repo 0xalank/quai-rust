@@ -7,13 +7,14 @@
 //! transactions in `quai_getTransactionByHash`, `txpool_*`) answer through
 //! the view's pool hooks; a view without a pool refuses them.
 //!
-//! Not served here (they need the live head, Phase 2.3): `quai_newFilter`,
-//! `quai_newBlockFilter`, `quai_getFilterChanges`, `quai_getFilterLogs`,
-//! `quai_uninstallFilter`, `quai_subscribe`. `ChainView::head_events` is
-//! their hook.
+//! Filters (`quai_newFilter` and the others) and subscriptions live in
+//! `filters.rs`, driven by `ChainView::head_events`; the Qi and conversion
+//! quotes in `qi.rs`.
 pub mod args;
 pub mod fees;
+pub mod filters;
 pub mod json;
+pub mod qi;
 
 use crate::view::{BlockData, CallError, CallRequest, ChainView, ViewError};
 use args::{Address, Args, BlockNumber, BlockRef};
@@ -117,6 +118,23 @@ pub const METHODS: &[&str] = &[
     "txpool_contentFrom",
     "txpool_status",
     "txpool_inspect",
+    "quai_qiToQuai",
+    "quai_quaiToQi",
+    "quai_calculateConversionAmount",
+    "quai_estimateFeeForQi",
+    "quai_getOutpointDeltasForAddressesInRange",
+    "quai_getLockedBalance",
+    "quai_getWrappedQiDeposit",
+    "quai_listRunningChains",
+    "quai_newPendingTransactionFilter",
+    "quai_newBlockFilter",
+    "quai_newFilter",
+    "quai_uninstallFilter",
+    "quai_getFilterChanges",
+    "quai_getFilterLogs",
+    "quai_subscribe",
+    "quai_unsubscribe",
+    "net_listening",
 ];
 
 /// Answer one call. View calls do disk reads and proof-of-work, so they run
@@ -133,6 +151,9 @@ pub async fn handle(view: Arc<dyn ChainView>, method: &str, params: &Value) -> R
 }
 
 pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> {
+    if let Some(r) = qi::dispatch(view, method, params) {
+        return r;
+    }
     match method {
         "quai_chainId" => {
             Args::new(params, 0)?;
@@ -161,6 +182,10 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
         "net_version" => {
             Args::new(params, 0)?;
             Ok(Value::String(view.chain_id().to_string()))
+        }
+        "net_listening" => {
+            Args::new(params, 0)?;
+            Ok(Value::Bool(true))
         }
         "quai_getBlockByNumber" => {
             let a = Args::new(params, 2)?;
@@ -752,13 +777,24 @@ fn balance(view: &dyn ChainView, address: &Address, original: &str, at: BlockRef
 
 // --- logs ------------------------------------------------------------------
 
+/// `encoding/json`'s field match: the member named `key`, else one whose
+/// name equals it without regard to case.
+pub(crate) fn member<'a>(m: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    m.get(key).or_else(|| {
+        m.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v)
+    })
+}
+
 /// `filters.FilterCriteria`.
+#[derive(Clone, Debug)]
 pub struct Filter {
-    block_hash: Option<Hash>,
-    from: Option<BlockNumber>,
-    to: Option<BlockNumber>,
-    addresses: Vec<Address>,
-    topics: Vec<Vec<Hash>>,
+    pub(crate) block_hash: Option<Hash>,
+    pub(crate) from: Option<BlockNumber>,
+    pub(crate) to: Option<BlockNumber>,
+    pub(crate) addresses: Vec<Address>,
+    pub(crate) topics: Vec<Vec<Hash>>,
 }
 /// `hexutil.Decode` then a length check (`decodeAddress`, `decodeTopic`).
 fn decode_fixed(s: &str, want: usize, what: &str) -> Result<Vec<u8>, String> {
@@ -781,20 +817,25 @@ fn decode_fixed(s: &str, want: usize, what: &str) -> Result<Vec<u8>, String> {
     }
     Ok(b)
 }
-fn filter(v: &Value) -> Result<Filter, String> {
-    let Value::Object(m) = v else {
-        return Err(args::type_error(
-            match v {
-                Value::String(_) => "string",
-                Value::Number(_) => "number",
-                Value::Bool(_) => "bool",
-                Value::Array(_) => "array",
-                _ => "null",
-            },
-            "filters.input",
-        ));
+pub(crate) fn filter(v: &Value) -> Result<Filter, String> {
+    // `FilterCriteria.UnmarshalJSON` decodes null as no criteria.
+    let empty = Map::new();
+    let m = match v {
+        Value::Null => &empty,
+        Value::Object(m) => m,
+        _ => {
+            return Err(args::type_error(
+                match v {
+                    Value::String(_) => "string",
+                    Value::Number(_) => "number",
+                    Value::Bool(_) => "bool",
+                    _ => "array",
+                },
+                "filters.input",
+            ))
+        }
     };
-    let get = |k: &str| m.get(k).filter(|v| !v.is_null());
+    let get = |k: &str| member(m, k).filter(|v| !v.is_null());
     let block_hash = get("blockHash")
         .map(|v| {
             args::hash(v).map_err(|e| {
@@ -882,7 +923,7 @@ fn topic(s: &str) -> Result<Hash, String> {
     Ok(b.try_into().unwrap_or([0; 32]))
 }
 /// `filterLogs`.
-fn matches(f: &Filter, log: &crate::view::LogData) -> bool {
+pub(crate) fn matches(f: &Filter, log: &crate::view::LogData) -> bool {
     if !f.addresses.is_empty() && !f.addresses.contains(&log.address) {
         return false;
     }
@@ -910,12 +951,32 @@ fn block_logs(view: &dyn ChainView, f: &Filter, block: &BlockData, out: &mut Vec
     }
     Ok(())
 }
-const MAX_FILTER_RANGE: i64 = 10_000;
-/// `PublicFilterAPI.GetLogs` and `Filter.Logs`, in block order.
+pub(crate) const MAX_FILTER_RANGE: i64 = 10_000;
+/// `PublicFilterAPI.GetLogs`: its range checks, then `Filter.Logs`.
 fn logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
+    if f.block_hash.is_none() {
+        let begin = f.from.map_or(-1, BlockNumber::int64);
+        let end = f.to.map_or(-1, BlockNumber::int64);
+        if end != -1 && begin > end {
+            return Err(RpcError::go(
+                "fromBlock must be less than or equal to toBlock",
+            ));
+        }
+        if end != -1 && end - begin > MAX_FILTER_RANGE {
+            return Err(RpcError::go(format!(
+                "filter range must be less than or equal to {MAX_FILTER_RANGE}"
+            )));
+        }
+    }
+    filter_logs(view, f)
+}
+/// `Filter.Logs` of a block filter (`HeaderByHash`: any known block) or a
+/// range filter, in block order. Go collects a range on 8 goroutines and
+/// appends their parts in the order they finish.
+pub(crate) fn filter_logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
     let mut out = vec![];
     if let Some(hash) = f.block_hash {
-        let Some(block) = view.block_by_hash(&hash)? else {
+        let Some(block) = view.block_or_candidate(&hash)? else {
             return Err(RpcError::go("unknown block"));
         };
         block_logs(view, f, &block, &mut out)?;
@@ -923,16 +984,6 @@ fn logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
     }
     let begin = f.from.map_or(-1, BlockNumber::int64);
     let end = f.to.map_or(-1, BlockNumber::int64);
-    if end != -1 && begin > end {
-        return Err(RpcError::go(
-            "fromBlock must be less than or equal to toBlock",
-        ));
-    }
-    if end != -1 && end - begin > MAX_FILTER_RANGE {
-        return Err(RpcError::go(format!(
-            "filter range must be less than or equal to {MAX_FILTER_RANGE}"
-        )));
-    }
     let head = view.head();
     let begin = if begin >= 0 { begin as u64 } else { head };
     let end = if end >= 0 { end as u64 } else { head };
@@ -1003,7 +1054,7 @@ fn call_args(v: &Value) -> Result<CallArgs, String> {
             "quaiapi.TransactionArgs",
         ));
     };
-    let get = |k: &str| m.get(k).filter(|v| !v.is_null());
+    let get = |k: &str| member(m, k).filter(|v| !v.is_null());
     let mut a = CallArgs {
         from: get("from")
             .map(|v| in_field(args::address(v), "from"))
@@ -1035,12 +1086,13 @@ fn call_args(v: &Value) -> Result<CallArgs, String> {
         };
         let mut out = vec![];
         for t in list {
-            let address = t
-                .get("address")
+            let tuple = t.as_object();
+            let address = tuple
+                .and_then(|m| member(m, "address"))
                 .filter(|v| !v.is_null())
                 .ok_or("missing required field 'address' for AccessTuple")?;
-            let keys = t
-                .get("storageKeys")
+            let keys = tuple
+                .and_then(|m| member(m, "storageKeys"))
                 .filter(|v| !v.is_null())
                 .ok_or("missing required field 'storageKeys' for AccessTuple")?;
             let address = args::address(address)?;

@@ -21,6 +21,7 @@ mod fresh;
 pub mod ingest;
 pub mod native;
 pub mod view;
+mod ws;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -44,6 +45,13 @@ pub struct Config {
     pub max_body_bytes: usize,
     pub max_response_bytes: usize,
     pub timeout_ms: u64,
+    /// Native mode: the deadline of a polling filter (go-quai: 5 minutes).
+    pub filter_timeout_ms: u64,
+    /// Native mode: go-quai's `--rpc.ws-max-subs`.
+    pub ws_max_subscriptions: usize,
+    /// Native mode: origins allowed to open a WebSocket (go-quai's
+    /// `--rpc.ws-origins`; empty: localhost and this host's name; "*": any).
+    pub ws_origins: Vec<String>,
 }
 
 impl Default for Config {
@@ -65,6 +73,9 @@ impl Default for Config {
             max_body_bytes: 1024 * 1024,
             max_response_bytes: 10 * 1024 * 1024,
             timeout_ms: 5000,
+            filter_timeout_ms: 300_000,
+            ws_max_subscriptions: native::filters::DEFAULT_SUBSCRIPTION_LIMIT,
+            ws_origins: vec![],
         }
     }
 }
@@ -124,6 +135,7 @@ impl Config {
             || !(1..=60_000).contains(&self.timeout_ms)
             || !(128..=16 * 1024 * 1024).contains(&self.max_body_bytes)
             || !(128..=32 * 1024 * 1024).contains(&self.max_response_bytes)
+            || !(1..=86_400_000).contains(&self.filter_timeout_ms)
         {
             return Err("configuration outside supported bounds".into());
         }
@@ -164,6 +176,8 @@ pub struct App {
     store: Option<quai_store::Store>,
     /// The validated chain data of `--mode native`.
     view: Option<Arc<dyn view::ChainView>>,
+    /// Filters and subscriptions of the native view, made on first use.
+    filters: std::sync::OnceLock<Arc<native::filters::FilterApi>>,
     ingestion: std::sync::RwLock<Value>,
     native_hits: AtomicU64,
     native_receipt_hits: AtomicU64,
@@ -266,6 +280,7 @@ impl App {
             client,
             store,
             view,
+            filters: std::sync::OnceLock::new(),
             ingestion: std::sync::RwLock::new(json!({"enabled":config.follow,"state":"starting"})),
             native_hits: AtomicU64::new(0),
             native_receipt_hits: AtomicU64::new(0),
@@ -281,6 +296,20 @@ impl App {
             hash,
             encoded_payload_fields,
         }))
+    }
+
+    /// The filter API of the native view (started on the current runtime).
+    pub fn filter_api(&self) -> Option<&Arc<native::filters::FilterApi>> {
+        let view = self.view.as_ref()?;
+        let api = self.filters.get_or_init(|| {
+            native::filters::FilterApi::new(
+                view.clone(),
+                Duration::from_millis(self.config.filter_timeout_ms),
+                self.config.ws_max_subscriptions,
+            )
+        });
+        api.start();
+        Some(api)
     }
 
     /// The follower status. Writers only replace the whole `Value`, so a lock
@@ -491,7 +520,24 @@ impl App {
         Outcome::Result(value["result"].clone())
     }
 
-    async fn call(&self, request: Value) -> Option<Vec<u8>> {
+    /// One request, over HTTP (`ws` None) or on a WebSocket connection. The
+    /// answer, and the subscription to activate once it is written.
+    async fn call_in(
+        &self,
+        request: Value,
+        ws: Option<&ws::Connection>,
+    ) -> (Option<Vec<u8>>, Option<String>) {
+        let mut created = None;
+        let reply = self.call_inner(request, ws, &mut created).await;
+        (reply, created)
+    }
+
+    async fn call_inner(
+        &self,
+        request: Value,
+        ws: Option<&ws::Connection>,
+        created: &mut Option<String>,
+    ) -> Option<Vec<u8>> {
         let invalid = || Some(encode(&Value::Null, error(-32600, "invalid request")));
         let Some(object) = request.as_object() else {
             return invalid();
@@ -514,6 +560,19 @@ impl App {
             match tokio::time::timeout(Duration::from_millis(self.config.timeout_ms), async {
                 if self.config.mode == "fixture" {
                     self.fixture(method, params).await
+                } else if let Some(outcome) = self.subscriptions(method, params, ws, created) {
+                    outcome
+                } else if let Some(r) = match self.filter_api() {
+                    Some(api) => api.call(method, params).await,
+                    None => None,
+                } {
+                    match r {
+                        Ok(value) => {
+                            self.native_hits.fetch_add(1, Ordering::Relaxed);
+                            Outcome::Result(value)
+                        }
+                        Err(e) => Outcome::Error(e.to_value()),
+                    }
                 } else if let Some(view) = &self.view {
                     match native::handle(view.clone(), method, params).await {
                         Ok(value) => {
@@ -557,25 +616,91 @@ impl App {
     }
 
     pub async fn handle(&self, body: &[u8]) -> Option<Vec<u8>> {
+        self.handle_in(body, None).await.0
+    }
+
+    /// `subscribe` and `unsubscribe` of the native view (rpc/handler.go
+    /// `handleCall`): a `*_subscribe` call needs a WebSocket connection
+    /// (over HTTP go-quai answers "notifications not supported"), and a
+    /// `*_unsubscribe` finds only the subscriptions of its own connection.
+    fn subscriptions(
+        &self,
+        method: &str,
+        params: &Value,
+        ws: Option<&ws::Connection>,
+        created: &mut Option<String>,
+    ) -> Option<Outcome> {
+        self.view.as_ref()?;
+        let result = if method.ends_with("_subscribe") {
+            match (ws, self.filter_api()) {
+                (Some(conn), Some(api)) => {
+                    api.subscribe(conn.id, &conn.out, method, params).map(|id| {
+                        *created = Some(id.clone());
+                        Value::String(id)
+                    })
+                }
+                _ => Err(native::RpcError::go("notifications not supported")),
+            }
+        } else if method.ends_with("_unsubscribe") {
+            match (ws, self.filter_api()) {
+                (Some(conn), Some(api)) => api.unsubscribe(conn.id, params),
+                _ => native::args::Args::new(params, 1).and_then(|a| {
+                    a.get(0, native::filters::rpc_id)?;
+                    Err(native::RpcError::go("subscription not found"))
+                }),
+            }
+        } else {
+            return None;
+        };
+        Some(match result {
+            Ok(v) => Outcome::Result(v),
+            Err(e) => Outcome::Error(e.to_value()),
+        })
+    }
+
+    /// A request body (one call or a batch) over HTTP or a WebSocket
+    /// connection: the answer, and the subscriptions it created, to
+    /// activate once the answer is written.
+    async fn handle_in(
+        &self,
+        body: &[u8],
+        ws: Option<&ws::Connection>,
+    ) -> (Option<Vec<u8>>, Vec<String>) {
         let value: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
-            Err(_) => return Some(encode(&Value::Null, error(-32700, "parse error"))),
+            Err(_) => {
+                return (
+                    Some(encode(&Value::Null, error(-32700, "parse error"))),
+                    vec![],
+                )
+            }
         };
+        let mut created = vec![];
         let result = if let Value::Array(batch) = value {
             if batch.is_empty() {
-                return Some(encode(&Value::Null, error(-32600, "empty batch")));
+                return (
+                    Some(encode(&Value::Null, error(-32600, "empty batch"))),
+                    vec![],
+                );
             }
             if batch.len() > self.config.max_batch {
-                return Some(encode(&Value::Null, error(-32600, "batch too large")));
+                return (
+                    Some(encode(&Value::Null, error(-32600, "batch too large"))),
+                    vec![],
+                );
             }
-            let mut replies = stream::iter(batch.into_iter().map(|request| self.call(request)))
-                .buffered(self.config.batch_concurrency);
+            let mut replies =
+                stream::iter(batch.into_iter().map(|request| self.call_in(request, ws)))
+                    .buffered(self.config.batch_concurrency);
             let mut out = vec![b'['];
             let mut count = 0;
-            while let Some(reply) = replies.next().await {
+            let mut too_large = false;
+            while let Some((reply, sub)) = replies.next().await {
+                created.extend(sub);
                 if let Some(reply) = reply {
                     if out.len() + reply.len() + 2 > self.config.max_response_bytes {
-                        return Some(encode(&Value::Null, error(-32005, "response too large")));
+                        too_large = true;
+                        continue;
                     }
                     if count > 0 {
                         out.push(b',')
@@ -584,6 +709,12 @@ impl App {
                     count += 1;
                 }
             }
+            if too_large {
+                return (
+                    Some(encode(&Value::Null, error(-32005, "response too large"))),
+                    created,
+                );
+            }
             if count == 0 {
                 None
             } else {
@@ -591,15 +722,20 @@ impl App {
                 Some(out)
             }
         } else {
-            self.call(value).await
+            let (reply, sub) = self.call_in(value, ws).await;
+            created.extend(sub);
+            reply
         };
         if result
             .as_ref()
             .is_some_and(|body| body.len() > self.config.max_response_bytes)
         {
-            Some(encode(&Value::Null, error(-32005, "response too large")))
+            (
+                Some(encode(&Value::Null, error(-32005, "response too large"))),
+                created,
+            )
         } else {
-            result
+            (result, created)
         }
     }
 }
@@ -736,7 +872,7 @@ pub async fn serve_until(
 
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
-        .route("/", post(rpc_handler))
+        .route("/", post(rpc_handler).get(ws::handler))
         .route("/health", get(health))
         .layer(DefaultBodyLimit::max(app.config.max_body_bytes))
         .with_state(app)

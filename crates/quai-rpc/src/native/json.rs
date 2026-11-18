@@ -414,6 +414,137 @@ pub fn block(block: &BlockData, full: bool, kinds: &[UncleKind], total_entropy: 
     Value::Object(m)
 }
 
+/// `Transaction.MarshalJSON` (core/types/transaction_marshalling.go): the
+/// form of transactions inside a marshalled work object. `hash` is
+/// `tx.Hash()`. Fields without "omitempty" are null when the type has no
+/// value for them.
+pub fn tx_json(tx: &Transaction, hash: &Hash) -> Value {
+    let mut m = Map::new();
+    m.insert("type".into(), u64_hex(tx.type_id() as u64));
+    m.insert("hash".into(), hash_hex(hash));
+    for k in [
+        "nonce",
+        "gasPrice",
+        "gas",
+        "value",
+        "input",
+        "to",
+        "accessList",
+    ] {
+        m.insert(k.into(), Value::Null);
+    }
+    let work = |m: &mut Map<String, Value>, w: &quai_primitives::transaction::Work| {
+        if let Some(p) = &w.parent {
+            m.insert("parentHash".into(), hash_hex(p));
+        }
+        if let Some(p) = &w.mix {
+            m.insert("mixHash".into(), hash_hex(p));
+        }
+    };
+    match tx.kind() {
+        Kind::Quai(q) => {
+            m.insert("chainId".into(), big_hex(&q.chain_id));
+            m.insert("accessList".into(), access_list(&q.access_list));
+            m.insert("nonce".into(), u64_hex(q.nonce));
+            m.insert("gas".into(), u64_hex(q.gas));
+            m.insert("gasPrice".into(), big_hex(&q.gas_price));
+            m.insert("value".into(), big_hex(&q.value));
+            m.insert("input".into(), bytes_hex(&q.data));
+            if let Some(to) = &q.to {
+                m.insert("to".into(), Value::String(checksum(to)));
+            }
+            m.insert("v".into(), big_hex(&q.v));
+            m.insert("r".into(), big_hex(&q.r));
+            m.insert("s".into(), big_hex(&q.s));
+            work(&mut m, &q.work);
+            if let Some(n) = q.work.nonce {
+                m.insert("workNonce".into(), u64_hex(n));
+            }
+        }
+        Kind::External(e) => {
+            m.insert("accessList".into(), access_list(&e.access_list));
+            m.insert("originatingTxHash".into(), hash_hex(&e.originating_hash));
+            m.insert("etxIndex".into(), u64_hex(e.index as u64));
+            m.insert("gas".into(), u64_hex(e.gas));
+            m.insert("value".into(), big_hex(&e.value));
+            m.insert("input".into(), bytes_hex(&e.data));
+            m.insert("to".into(), Value::String(checksum(&e.to)));
+            m.insert("from".into(), Value::String(checksum(&e.sender)));
+            m.insert("etxType".into(), u64_hex(e.etx_type));
+        }
+        Kind::Qi(q) => {
+            m.insert("chainId".into(), big_hex(&q.chain_id));
+            if !q.inputs.is_empty() {
+                m.insert(
+                    "inputs".into(),
+                    Value::Array(
+                        q.inputs
+                            .iter()
+                            .map(|i| {
+                                json!({
+                                    "previousOutPoint": {
+                                        "txHash": hash_hex(&i.hash),
+                                        "index": u64_hex(i.index as u64),
+                                    },
+                                    "pubkey": bytes_hex(&i.public_key),
+                                })
+                            })
+                            .collect(),
+                    ),
+                );
+            }
+            // A decoded Qi transaction always has data (`ProtoEncode` writes
+            // an empty slice for none).
+            m.insert("input".into(), bytes_hex(&q.data));
+            if !q.outputs.is_empty() {
+                m.insert(
+                    "outputs".into(),
+                    Value::Array(
+                        q.outputs
+                            .iter()
+                            .map(|o| {
+                                json!({
+                                    "address": bytes_hex(o.address.as_deref().unwrap_or_default()),
+                                    "denomination": u64_hex(o.denomination as u64),
+                                    "lock": big_hex(&o.lock),
+                                })
+                            })
+                            .collect(),
+                    ),
+                );
+            }
+            m.insert("utxoSignature".into(), bytes_hex(&q.signature));
+        }
+    }
+    Value::Object(m)
+}
+
+/// `WorkObject.RPCMarshalWorkObject("v1")` of a block read from the
+/// database (`ProtoDecode` gives every body list, so none is null): the
+/// payload of a "newHeads" notification.
+pub fn work_object(block: &BlockData) -> Value {
+    let list = |txs: &[Transaction], hashes: &[Hash]| -> Value {
+        Value::Array(
+            txs.iter()
+                .zip(hashes)
+                .map(|(tx, h)| tx_json(tx, h))
+                .collect(),
+        )
+    };
+    let hashes = |v: Vec<Hash>| -> Value { Value::Array(v.iter().map(|h| hash_hex(h)).collect()) };
+    json!({
+        "woHeader": wo_header(&block.header),
+        "woBody": {
+            "header": Value::Object(body_header(block.object.header().wire())),
+            "transactions": list(block.object.transactions(), &block.tx_hashes),
+            "outboundEtxs": list(block.object.outbound_etxs(), &block.etx_hashes),
+            "manifest": hashes(block.object.manifest_hashes()),
+            "interlinkHashes": hashes(block.object.interlink_hashes()),
+            "uncles": Value::Array(block.uncles.iter().map(wo_header).collect()),
+        },
+    })
+}
+
 /// A `types.Log` with its derived fields.
 pub fn log(log: &LogData, block: &BlockData, tx_index: usize, log_index: usize) -> Value {
     json!({

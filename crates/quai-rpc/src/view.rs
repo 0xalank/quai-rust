@@ -11,7 +11,8 @@
 //! The first implementation is `quai_node::rpc_view::ExportView`: a QEX1
 //! export plus the state of one replay checkpoint. A live node implements the
 //! same trait over its own store, and adds the optional parts at the end of
-//! the trait (head events and a transaction pool), which have defaults here.
+//! the trait (head events, a transaction pool, the UTXO journals and indexes
+//! of the Qi methods), which have defaults here.
 use quai_primitives::{
     transaction::{AccessTuple, Address, Transaction},
     work::WorkObject,
@@ -87,7 +88,8 @@ pub struct ReceiptData {
 }
 
 /// The logs of a canonical block that a reorg removed (go-quai's
-/// `RemovedLogsEvent`), for filters and subscriptions.
+/// `RemovedLogsEvent`). go-quai v0.57.0 never sends that event, so the
+/// filters and subscriptions do not read them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemovedLogs {
     pub block_hash: Hash,
@@ -137,6 +139,17 @@ pub struct OutpointData {
     pub tx_hash: Hash,
     pub index: u16,
     pub denomination: u8,
+    pub lock: Vec<u8>,
+}
+
+/// An output that a block spent or trimmed (`types.SpentUtxoEntry`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpentUtxo {
+    pub tx_hash: Hash,
+    pub index: u16,
+    pub denomination: u8,
+    pub address: Address,
+    /// Big-endian lock height, without leading zeros; empty for no lock.
     pub lock: Vec<u8>,
 }
 
@@ -257,13 +270,15 @@ pub trait ChainView: Send + Sync + 'static {
     fn pinned(&self) -> Option<Arc<dyn ChainView>> {
         None
     }
-    /// New canonical heads, for filters and subscriptions. A view without a
-    /// live head has none.
+    /// New canonical heads, for filters and subscriptions
+    /// (`native::filters`): each hash wakes the event loop, which sends the
+    /// logs of every block that became canonical and then the head. A view
+    /// without a live head has none.
     fn head_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
         None
     }
-    /// Logs that reorgs removed from the canonical chain. A view without a
-    /// live head has none.
+    /// Logs that reorgs removed from the canonical chain (unused: go-quai
+    /// sends none). A view without a live head has none.
     fn removed_logs(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<RemovedLogs>>> {
         None
     }
@@ -292,6 +307,40 @@ pub trait ChainView: Send + Sync + 'static {
     /// `TxPool.Stats`: pending, queued and Qi transactions. None: no pool.
     fn pool_stats(&self) -> Option<(u64, u64, u64)> {
         None
+    }
+
+    /// The canonical hash at `number` (the filter system walks the chain
+    /// with it). The default loads the block.
+    fn canonical_hash(&self, number: u64) -> Result<Option<Hash>, ViewError> {
+        Ok(self.block_by_number(number)?.map(|b| b.hash))
+    }
+    /// `BlockOrCandidateByHash` and `HeaderByHash`: a block by hash,
+    /// canonical or not. The default knows the canonical chain only.
+    fn block_or_candidate(&self, hash: &Hash) -> Result<Option<Arc<BlockData>>, ViewError> {
+        self.block_by_hash(hash)
+    }
+    /// `rawdb.ReadUTXOSetSize` of a block (`quai_estimateFeeForQi` reads
+    /// the head's).
+    fn utxo_set_size(&self, _block: &BlockData) -> Result<u64, ViewError> {
+        Err(ViewError::Unavailable("the UTXO set size".into()))
+    }
+    /// The outputs a block removed: `rawdb.ReadSpentUTXOs` (the inputs of
+    /// its Qi transactions, in order) followed by `rawdb.ReadTrimmedUTXOs`.
+    fn spent_utxos(&self, _block: &BlockData) -> Result<Vec<SpentUtxo>, ViewError> {
+        Err(ViewError::Unavailable(
+            "the spent outputs of a block".into(),
+        ))
+    }
+    /// `rawdb.ReadLockedBalance`: the Quai of coinbase lockups and Qi-to-Quai
+    /// conversions of an address that are still locked, as go-quai keeps it
+    /// with `--node.index-address-utxos` (core/state_processor.go
+    /// `WriteNewLockups`). The chain processor must supply it.
+    fn locked_quai(&self, _address: &Address) -> Result<U256, ViewError> {
+        Err(ViewError::Unavailable("the locked Quai index".into()))
+    }
+    /// `GetSlicesRunning`: the zones this node runs.
+    fn running_chains(&self) -> Vec<[u8; 2]> {
+        vec![self.location()]
     }
 }
 

@@ -45,6 +45,8 @@ pub struct Options {
     /// At the peers' head less the margin, follow the head through gossip
     /// with go-quai's head choice (tip mode); otherwise poll by number.
     pub gossip: bool,
+    /// The transaction pool (with state only).
+    pub txpool: crate::cli::TxpoolOptions,
 }
 
 /// SIGINT and SIGTERM set `stop`; the code is 130 or 143. A second signal
@@ -127,7 +129,13 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     let metrics = Arc::new(Metrics::new(start));
     processor.set_metrics(metrics.clone());
     // The RPC view follows the processor's published head.
-    let (view, live) = processor.live_view()?;
+    let (mut view, live) = processor.live_view()?;
+    // The transaction pool resets on every published head (with state).
+    let pool = if o.stateless {
+        None
+    } else {
+        crate::cli::start_pool(&mut view, &o.txpool, runtime.handle(), stop.clone(), *log)?
+    };
     let view = Arc::new(view);
     let shutdown = {
         let stop = stop.clone();
@@ -141,12 +149,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         }
     };
     if let Some(listen) = &o.rpc_listen {
-        let config = quai_rpc::Config {
-            mode: "native".into(),
-            listen: listen.clone(),
-            timeout_ms: 30_000,
-            ..quai_rpc::Config::default()
-        };
+        let config = crate::cli::rpc_config(listen.clone());
         let app = quai_rpc::App::native(config, view.clone())?;
         let listener = runtime
             .block_on(tokio::net::TcpListener::bind(listen))
@@ -241,6 +244,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             node.clone(),
             stop.clone(),
             stats.clone(),
+            pool.clone(),
             *log,
         ) {
             Ok(gossip) => {

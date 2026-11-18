@@ -55,12 +55,15 @@ pub struct GossipStats {
 }
 
 /// Subscribe to slice [0 0] and forward the zone blocks go-quai's validators
-/// accept; count the workshares.
+/// accept; count the workshares. With a transaction pool, the
+/// transactions of each accepted workshare go to its remote queue, as
+/// go-quai's `OnNewBroadcast` sends them to `SendRemoteTxs`.
 pub fn subscribe(
     runtime: &tokio::runtime::Handle,
     node: Arc<PublicNode>,
     stop: Arc<AtomicBool>,
     stats: Arc<GossipStats>,
+    pool: Option<Arc<crate::txpool::service::Service>>,
     log: Log,
 ) -> Result<Receiver<Vec<u8>>, String> {
     let genesis = quai_network::public::colosseum_topic_genesis();
@@ -98,6 +101,12 @@ pub fn subscribe(
             match (t.kind, t.context()) {
                 (TopicKind::Workshares, 2) => {
                     stats.workshares.fetch_add(1, Ordering::Relaxed);
+                    if let Some(pool) = &pool {
+                        let txs = workshare_transactions(&data, pool.now());
+                        if !txs.is_empty() {
+                            pool.add_remotes(txs);
+                        }
+                    }
                 }
                 (TopicKind::Blocks, 2) => {
                     let Ok(view) = ProtoWorkObjectBlockView::decode(data.as_slice()) else {
@@ -114,6 +123,30 @@ pub fn subscribe(
         }
     });
     Ok(rx)
+}
+
+/// The transactions of a gossiped workshare view, decoded as go-quai's
+/// `ProtoDecode` decodes them (the validators accepted the view, so each
+/// decodes).
+pub fn workshare_transactions(data: &[u8], now: u64) -> Vec<crate::txpool::list::Tx> {
+    use quai_primitives::schema::block::ProtoWorkObjectShareView;
+    let Ok(view) = ProtoWorkObjectShareView::decode(data) else {
+        return vec![];
+    };
+    view.work_object
+        .and_then(|wo| wo.wo_body)
+        .and_then(|b| b.transactions)
+        .map(|t| {
+            t.transactions
+                .iter()
+                .filter_map(|tx| {
+                    crate::txpool::tx::PoolTx::decode(&tx.encode_to_vec(), now)
+                        .ok()
+                        .map(Arc::new)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A block by hash in a context from the peers (`WorkObjectBlock`).
@@ -401,6 +434,7 @@ pub fn observe(seconds: u64, log: &Log) -> Result<i32, String> {
         node.clone(),
         stop.clone(),
         stats.clone(),
+        None,
         *log,
     )?;
     let caches = Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?);

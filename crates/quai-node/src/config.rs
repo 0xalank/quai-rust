@@ -20,6 +20,11 @@
 //! peers = ["/ip4/127.0.0.1/tcp/4002/p2p/12D3Koo..."]
 //! checkpoint_every = 10000
 //! commit_every = 1000
+//!
+//! [txpool]
+//! enabled = true                 # the transaction pool (rpc and run with state)
+//! sharing_clients = ["http://127.0.0.1:9201"]   # go-quai's --txpool.sharing-clients
+//! sync_tx_with_return = true     # go-quai's --txpool.sync-tx-with-return
 //! ```
 //!
 //! Values are strings in double quotes (with `\"` and `\\` escapes),
@@ -51,6 +56,9 @@ pub const KEYS: &[&str] = &[
     "sync.peers",
     "sync.checkpoint_every",
     "sync.commit_every",
+    "txpool.enabled",
+    "txpool.sharing_clients",
+    "txpool.sync_tx_with_return",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

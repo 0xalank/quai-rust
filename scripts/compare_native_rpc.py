@@ -9,6 +9,12 @@ answers. Optionally also ask the live Go node again (--go) and compare live.
 Prints the counts per method and every differing answer; exits 1 when an
 "equal" or "head" vector differs or a "difference" vector does not give its
 documented Rust answer. Only object member order is ignored.
+
+    scripts/compare_native_rpc.py --sample 300 --head 27406 --go URL --rust URL
+
+asks both live nodes about random blocks up to --head instead: blocks by
+number (full) and by hash, headers, and up to two transactions per block
+(by hash, receipt, raw), and counts equal answers per method.
 """
 import argparse
 import json
@@ -39,13 +45,61 @@ def same(a, b):
     return a == b
 
 
+def sample(args):
+    import random
+    rng = random.Random(args.seed)
+    per = {}
+    failures = []
+
+    def check(method, params):
+        go = post(args.go, method, params)
+        got = post(args.rust, method, params)
+        row = per.setdefault(method, [0, 0])
+        row[0] += 1
+        if same(go, got):
+            row[1] += 1
+        else:
+            failures.append((method, params, go, got))
+        return go
+    for n in sorted(rng.sample(range(args.head + 1), min(args.sample, args.head + 1))):
+        block = check('quai_getBlockByNumber', [hex(n), True]).get('result') or {}
+        if block:
+            check('quai_getBlockByHash', [block['hash'], False])
+        check('quai_getHeaderByNumber', [hex(n)])
+        txs = block.get('transactions', [])
+        for tx in rng.sample(txs, min(2, len(txs))):
+            check('quai_getTransactionByHash', [tx['hash']])
+            check('quai_getTransactionReceipt', [tx['hash']])
+            check('quai_getRawTransactionByHash', [tx['hash']])
+    total = sum(r[0] for r in per.values())
+    equal = sum(r[1] for r in per.values())
+    print(f'live sample of {args.sample} heights in 0..={args.head} (seed {args.seed}): '
+          f'{equal}/{total} equal')
+    for m in sorted(per):
+        print(f'  {m:<32}  {per[m][1]}/{per[m][0]} equal')
+    for f in failures[:10]:
+        print('DIFF', f[0], json.dumps(f[1], default=str)[:120])
+    if args.report:
+        with open(args.report, 'w') as out:
+            json.dump({'sample': args.sample, 'seed': args.seed, 'head': args.head,
+                       'per_method': per, 'failures': failures}, out, indent=1, default=str)
+    sys.exit(1 if failures else 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('fixture')
+    ap.add_argument('fixture', nargs='?')
+    ap.add_argument('--sample', type=int)
+    ap.add_argument('--head', type=int)
+    ap.add_argument('--seed', type=int, default=1)
     ap.add_argument('--rust', default='http://127.0.0.1:8547')
     ap.add_argument('--go', help='also query this live Go node (read-only methods only)')
     ap.add_argument('--report')
     args = ap.parse_args()
+    if args.sample:
+        if not (args.go and args.head is not None):
+            raise SystemExit('--sample needs --go and --head')
+        return sample(args)
     doc = json.load(open(args.fixture), parse_float=Decimal)
     per = {}
     failures = []

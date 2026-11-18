@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "kind": "synthetic-account-storage-transition",
+  "parent_accounts": 10000,
+  "initial_slots_per_account": 2,
+  "touched_accounts": [
+    1,
+    2,
+    3
+  ],
+  "storage_writes": [
+    {
+      "account": 1,
+      "key": 0,
+      "value": 7000
+    },
+    {
+      "account": 1,
+      "key": 3,
+      "value": 2
+    }
+  ],
+  "balance_transfer": {
+    "from": 2,
+    "to": 3,
+    "value": 7
+  },
+  "backends": [
+    "materialized",
+    "sparse"
+  ],
+  "timing_pairs": 5,
+  "separate_allocation_pairs": 3,
+  "included": [
+    "fresh_snapshot",
+    "restore_parent",
+    "clone",
+    "journal_storage_and_balance_writes",
+    "storage_size_finalization",
+    "durable_keyed_commit"
+  ],
+  "excluded": [
+    "database_and_cache_initialization",
+    "parent_generation_and_commit",
+    "expected_result_construction",
+    "final_full_export_checks",
+    "cleanup"
+  ],
+  "required_equal": [
+    "account_membership",
+    "account_fields_and_storage",
+    "evm_root",
+    "etx_root",
+    "utxo_root_and_count",
+    "local_root_set_digest",
+    "version_id"
+  ],
+  "native_block_admission": false,
+  "signed_transaction": false,
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "finalization": "World.begin_block, journal writes/commit, World.finish_block"
+}

@@ -1,0 +1,33 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "eb384dafa8b6817042a0b34d1ad01faf3a0856b210f80b867bc8f3e15fd06887",
+  "oracle_source_sha256": "7cb57ee647a59347f5dc4e720b578d371809127c2e87b30f4b48d4041e5d1f96",
+  "template_sha256": "fb8dee75f628d90539926838b5d3a98c4a284c0053766a96ccb10708887be7a0",
+  "dispatch_sha256": "c65b6fbc11777e9db0097d23315cb4f742c667b48b2646dacb1148dad439b96b",
+  "harness_sha256": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928",
+  "oracle_sources": {
+    "reference/incoming/main.go": "7cb57ee647a59347f5dc4e720b578d371809127c2e87b30f4b48d4041e5d1f96",
+    "reference/incoming/core-template.go": "fb8dee75f628d90539926838b5d3a98c4a284c0053766a96ccb10708887be7a0",
+    "reference/early-blocks/harness.go": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928"
+  },
+  "driver_sha256": "a419b09087799c455271c484d37a310fcb1f2ea08f3a21cf6338765b5b27aa6d",
+  "go_sources": {
+    "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
+    "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",
+    "core/state/statedb.go": "84bece787e5207237c612a7d2659a3692e4c6a1686f7e89343642444b5427f3e",
+    "core/state/state_object.go": "27a03b98f4653612788c5374e33fc1f574fa2ef5a0220faf5f41fe3a20ebdb89",
+    "core/vm/evm.go": "77629a1e77b36ae14ba6c66e7146bdba45b1e96603fd28984f38cd03bf886e54",
+    "core/vm/contracts.go": "4854f9498dda1d7c8368874b82383fc7e6cd138e78520f8e268c2310519fd1ea",
+    "core/rawdb/accessors_chain.go": "917b3c97845995643557d06096c2722e0f4f00f9b66d9a4a8d2e09e7f702a2e7",
+    "core/types/receipt.go": "6a0dbc7fc21a960e44b92b0365a72b2c7fc27a1162c8303e0e91f10294ee1c3e",
+    "core/types/utxo.go": "e6789ad476704e88cee846b12f27d00132175299d3119e0c5eefa9b8dfded498",
+    "core/types/transaction.go": "a629fe1c32e8e4e73091540fed92c8aa0c20e070332a565708e0a5c91890f169",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "full_block_admission": false,
+  "scope": "Exact extracted incoming-ETX branch of StateProcessor.Process, with actual state/VM/rawdb functions; not full block or header admission."
+}

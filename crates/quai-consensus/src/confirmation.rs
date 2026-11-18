@@ -1,0 +1,623 @@
+//! Bounded native three-context append and confirmed-ETX derivation. No global
+//! admitted-block token, fork choice or canonical/RPC publication is implied.
+use crate::{
+    history::{History, Record, MAX_RECORDS},
+    placement::{self, CandidateIndex, Prepared, Profile},
+    private_profile::PrivateChain,
+    rules::{self, Uint},
+    share_rules,
+    verifier::Verifier,
+    Error,
+};
+use quai_primitives::{
+    transaction::{Kind, Transaction},
+    work::transactions_root,
+    Hash,
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+const MAX_ETXS: usize = 8192;
+const MAX_ETX_BYTES: usize = 32 << 20;
+fn external(tx: &Transaction) -> Result<&quai_primitives::transaction::External, Error> {
+    if let Kind::External(e) = tx.kind() {
+        Ok(e)
+    } else {
+        Err(Error::Invalid("non-ETX in committed rollup"))
+    }
+}
+fn extend(out: &mut Vec<Transaction>, part: &[Transaction]) -> Result<(), Error> {
+    if out.len() + part.len() > MAX_ETXS {
+        return Err(Error::ResourceLimit("confirmed rollup transaction count"));
+    }
+    out.extend_from_slice(part);
+    Ok(())
+}
+/// Preserve reference order and duplicates. Coinbase/conversion require prime
+/// confirmation; region-local confirmation carries only standard ETXs.
+pub fn filter_to_sub(
+    input: &[Transaction],
+    location: [u8; 2],
+    context: usize,
+    order: u8,
+) -> Result<Vec<Transaction>, Error> {
+    if context > 2 || order > 2 || location.iter().any(|v| *v > 15) {
+        return Err(Error::Invalid("rollup filter scope"));
+    }
+    if input.len() > MAX_ETXS {
+        return Err(Error::ResourceLimit("rollup filter count"));
+    }
+    let mut out = vec![];
+    for tx in input {
+        let e = external(tx)?;
+        let prefix = location[0] << 4 | location[1];
+        let keep = match context {
+            0 => e.to[0] >> 4 == location[0],
+            1 => e.to[0] == prefix && (order == 0 || !matches!(e.etx_type, 1 | 2)),
+            _ => false,
+        };
+        if keep {
+            out.push(tx.clone());
+        }
+    }
+    Ok(out)
+}
+pub fn cross_prime(input: &[Transaction], region: u8) -> Result<Vec<Transaction>, Error> {
+    if region > 15 || input.len() > MAX_ETXS {
+        return Err(Error::ResourceLimit("cross-prime rollup scope"));
+    }
+    let mut out = vec![];
+    for tx in input {
+        let e = external(tx)?;
+        if e.to[0] >> 4 != region || matches!(e.etx_type, 1 | 2) {
+            out.push(tx.clone());
+        }
+    }
+    Ok(out)
+}
+pub(crate) mod delta;
+pub use delta::LocalOutputs;
+/// Authenticated local hierarchy outputs scoped to one immutable branch version.
+pub trait Reader: Send + Sync {
+    fn heads(&self) -> Result<[Hash; 3], Error>;
+    fn record(&self, context: usize, id: &Hash) -> Result<Option<Arc<Record>>, Error>;
+    fn snapshot(
+        &self,
+        context: usize,
+        id: &Hash,
+    ) -> Result<Option<Arc<placement::Snapshot>>, Error>;
+    fn order(&self, id: &Hash) -> Result<Option<u8>, Error>;
+    fn region_rollup(&self, id: &Hash) -> Result<Option<Arc<Vec<Transaction>>>, Error>;
+    fn confirmed(&self, id: &Hash) -> Result<Option<Arc<Vec<Transaction>>>, Error>;
+}
+struct HistoryReader {
+    source: Arc<dyn Reader>,
+    context: usize,
+}
+impl crate::history::Reader for HistoryReader {
+    fn read(&self, id: &Hash) -> Result<Option<Arc<Record>>, Error> {
+        self.source.record(self.context, id)
+    }
+}
+struct IndexReader {
+    source: Arc<dyn Reader>,
+    context: usize,
+}
+impl placement::Reader for IndexReader {
+    fn read(&self, id: &Hash) -> Result<Option<Arc<placement::Snapshot>>, Error> {
+        self.source.snapshot(self.context, id)
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreparationDomain {
+    Early,
+    ActivatedLocal,
+    ActivatedHierarchy,
+    ActivatedETX,
+}
+pub struct Hierarchy {
+    chain: Arc<PrivateChain>,
+    source: Option<Arc<dyn Reader>>,
+    profiles: [Profile; 3],
+    histories: [History; 3],
+    indexes: [CandidateIndex; 3],
+    heads: [Hash; 3],
+    orders: BTreeMap<Hash, u8>,
+    region_rollups: BTreeMap<Hash, Arc<Vec<Transaction>>>,
+    confirmed: BTreeMap<Hash, Arc<Vec<Transaction>>>,
+    etx_bytes: usize,
+}
+/// Privately constructed component permit bound to the current three heads.
+/// It never grants execution or full consensus authority by itself.
+pub struct PreparedConfirmation {
+    chain: Arc<PrivateChain>,
+    expected: [Hash; 3],
+    records: [Option<Record>; 3],
+    appends: [Option<Prepared>; 3],
+    order: u8,
+    region_rollup: Vec<Transaction>,
+    confirmed: Vec<Transaction>,
+    execution_inbound: Vec<Transaction>,
+    charge: usize,
+}
+impl PreparedConfirmation {
+    pub(crate) fn chain_profile(&self) -> &PrivateChain {
+        &self.chain
+    }
+    pub fn order(&self) -> u8 {
+        self.order
+    }
+    pub fn inbound_for_execution(&self) -> &[Transaction] {
+        &self.execution_inbound
+    }
+    pub(crate) fn binds(&self, block: &Record) -> bool {
+        self.records[2]
+            .as_ref()
+            .is_some_and(|record| record.bytes() == block.bytes())
+    }
+    pub fn newly_confirmed(&self) -> &[Transaction] {
+        &self.confirmed
+    }
+    pub fn region_rollup(&self) -> &[Transaction] {
+        &self.region_rollup
+    }
+    pub fn context_components(&self) -> usize {
+        self.records.iter().filter(|v| v.is_some()).count()
+    }
+    pub fn snapshot(&self, context: usize) -> Option<&placement::Snapshot> {
+        self.appends
+            .get(context)
+            .and_then(Option::as_ref)
+            .map(|p| &p.next)
+    }
+    pub fn returned_dominant(&self, c: usize) -> Option<Hash> {
+        self.appends
+            .get(c)
+            .and_then(Option::as_ref)
+            .map(|p| p.previous_dominant)
+    }
+}
+impl Hierarchy {
+    pub fn new() -> Result<Self, Error> {
+        Self::new_for_chain(PrivateChain::hierarchy_template()?)
+    }
+    pub(crate) fn new_for_chain(p: Arc<PrivateChain>) -> Result<Self, Error> {
+        let id = p.genesis[2].id();
+        let mut s = Self {
+            chain: p.clone(),
+            source: None,
+            profiles: std::array::from_fn(|c| Profile {
+                location: p.location[..c].to_vec(),
+                genesis: BTreeSet::from([id]),
+                default_genesis: None,
+                minimum_difficulty: Uint::from_u64(2),
+                duration: 5,
+                gas_ceiling: p.gas_limit,
+                p2p_threshold: 7,
+            }),
+            histories: std::array::from_fn(|_| History::default()),
+            indexes: std::array::from_fn(|_| CandidateIndex::default()),
+            heads: [id; 3],
+            orders: BTreeMap::from([(id, 0)]),
+            region_rollups: BTreeMap::from([(id, Arc::new(vec![]))]),
+            confirmed: BTreeMap::from([(id, Arc::new(vec![]))]),
+            etx_bytes: 0,
+        };
+        for c in 0..3 {
+            let profile = s.profile(c)?;
+            s.indexes[c]
+                .insert_imported(id, placement::bootstrap_candidate(&p.genesis[2], &profile)?)?;
+            s.histories[c].insert(p.genesis[2].clone())?;
+        }
+        Ok(s)
+    }
+    pub fn from_reader(source: Arc<dyn Reader>) -> Result<Self, Error> {
+        Self::from_reader_for_chain(source, PrivateChain::hierarchy_template()?)
+    }
+    pub(crate) fn from_reader_for_chain(
+        source: Arc<dyn Reader>,
+        p: Arc<PrivateChain>,
+    ) -> Result<Self, Error> {
+        let id = p.genesis[2].id();
+        let heads = source.heads()?;
+        Ok(Self {
+            chain: p.clone(),
+            profiles: std::array::from_fn(|c| Profile {
+                location: p.location[..c].to_vec(),
+                genesis: BTreeSet::from([id]),
+                default_genesis: None,
+                minimum_difficulty: Uint::from_u64(2),
+                duration: 5,
+                gas_ceiling: p.gas_limit,
+                p2p_threshold: 7,
+            }),
+            histories: std::array::from_fn(|context| {
+                History::with_reader(Arc::new(HistoryReader {
+                    source: source.clone(),
+                    context,
+                }))
+            }),
+            indexes: std::array::from_fn(|context| {
+                CandidateIndex::with_reader(Arc::new(IndexReader {
+                    source: source.clone(),
+                    context,
+                }))
+            }),
+            heads,
+            orders: BTreeMap::from([(id, 0)]),
+            region_rollups: BTreeMap::from([(id, Arc::new(vec![]))]),
+            confirmed: BTreeMap::from([(id, Arc::new(vec![]))]),
+            etx_bytes: 0,
+            source: Some(source),
+        })
+    }
+    pub(crate) fn overlay_records(&self) -> usize {
+        self.histories[2].len()
+    }
+    pub fn indexed_history(&self) -> bool {
+        self.source.is_some()
+    }
+    fn known_order(&self, id: &Hash) -> Result<u8, Error> {
+        if let Some(order) = self.orders.get(id) {
+            return Ok(*order);
+        }
+        self.source
+            .as_ref()
+            .ok_or(Error::Unavailable("confirmed ancestry order"))?
+            .order(id)?
+            .ok_or(Error::Unavailable("confirmed ancestry order"))
+    }
+    fn region(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
+        if let Some(list) = self.region_rollups.get(id) {
+            return Ok(list.clone());
+        }
+        self.source
+            .as_ref()
+            .ok_or(Error::Unavailable("committed region rollup"))?
+            .region_rollup(id)?
+            .ok_or(Error::Unavailable("committed region rollup"))
+    }
+    fn profile(&self, c: usize) -> Result<Profile, Error> {
+        self.profiles
+            .get(c)
+            .cloned()
+            .ok_or(Error::Invalid("hierarchy context"))
+    }
+    pub fn heads(&self) -> [Hash; 3] {
+        self.heads
+    }
+    pub fn confirmed_after(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
+        if let Some(list) = self.confirmed.get(id) {
+            return Ok(list.clone());
+        }
+        self.source
+            .as_ref()
+            .ok_or(Error::Unavailable("confirmed parent ETXs"))?
+            .confirmed(id)?
+            .ok_or(Error::Unavailable("confirmed parent ETXs"))
+    }
+    fn sub_rollup(&self, record: &Record, context: usize) -> Result<Vec<Transaction>, Error> {
+        let mut out = vec![];
+        for id in record.object().manifest_hashes() {
+            if context == 1 {
+                let zone = self.histories[2].get(&id)?;
+                extend(&mut out, zone.object().outbound_etxs())?;
+            } else if context == 0 {
+                let part = self.region(&id)?;
+                extend(&mut out, &part)?;
+            }
+        }
+        Ok(out)
+    }
+    fn collect(
+        &self,
+        block: &Record,
+        context: usize,
+        order: u8,
+        current: &[Transaction],
+    ) -> Result<Vec<Transaction>, Error> {
+        let location: [u8; 2] = block
+            .header()
+            .wire()
+            .location
+            .as_ref()
+            .unwrap()
+            .value
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Unsupported("confirmation location"))?;
+        let mut out = filter_to_sub(current, location, context, order)?;
+        let mut cursor = crate::history::Cursor::from(block);
+        loop {
+            let parent = self.histories[context].get(&cursor.parents[context])?;
+            if parent.number(context)?.checked_add(1) != Some(cursor.number(context)?) {
+                return Err(Error::Invalid("confirmation ancestry height"));
+            }
+            if parent.number(context)? == 0 {
+                return Ok(out);
+            }
+            let parent_order = self.known_order(&parent.id())?;
+            let pl = &parent.header().wire().location.as_ref().unwrap().value;
+            if pl.get(context) == Some(&location[context]) && parent_order as usize == context {
+                return Ok(out);
+            }
+            if context == 1 && parent_order == 0 && pl.as_slice() != location {
+                let list = self.confirmed_after(&parent.id())?;
+                extend(&mut out, &filter_to_sub(&list, location, 1, 0)?)?;
+            }
+            let part = self.sub_rollup(&parent, context)?;
+            extend(&mut out, &filter_to_sub(&part, location, context, order)?)?;
+            cursor = parent.into();
+        }
+    }
+    /// Runtime dispatch uses only the embedded local chain contract. It does
+    /// not admit an anchor, bypass ancestry or accept caller-supplied ETXs.
+    pub(crate) fn prepare_for_runtime(
+        &self,
+        v: &mut Verifier,
+        zone: &Record,
+        views: &[(u8, Vec<u8>)],
+        now: u64,
+    ) -> Result<PreparedConfirmation, Error> {
+        let domain = if self.chain.activated_hierarchy && zone.number(2)? > rules::START_TX {
+            if self.chain.all_etx_hierarchy {
+                PreparationDomain::ActivatedETX
+            } else {
+                PreparationDomain::ActivatedHierarchy
+            }
+        } else {
+            PreparationDomain::Early
+        };
+        self.prepare_scoped(v, zone, views, now, domain)
+    }
+    pub fn prepare(
+        &self,
+        v: &mut Verifier,
+        zone: &Record,
+        views: &[(u8, Vec<u8>)],
+        now: u64,
+    ) -> Result<PreparedConfirmation, Error> {
+        self.prepare_scoped(v, zone, views, now, PreparationDomain::Early)
+    }
+    /// Activated local append components against an explicitly authenticated
+    /// branch reader. This does not widen the private canonical runtime profile
+    /// or authenticate a supplied checkpoint. Prime/region confirmation remains
+    /// on the separately qualified early path.
+    pub fn prepare_activated_local_components(
+        &self,
+        v: &mut Verifier,
+        zone: &Record,
+        now: u64,
+    ) -> Result<PreparedConfirmation, Error> {
+        self.prepare_scoped(v, zone, &[], now, PreparationDomain::ActivatedLocal)
+    }
+    /// Activated coincident append/rollup components before economic-controller
+    /// activation. All parent records and confirmed outputs remain supplied by
+    /// the authenticated branch reader. This grants no checkpoint or canonical
+    /// authority and does not widen the early private runtime profile.
+    pub fn prepare_activated_components(
+        &self,
+        v: &mut Verifier,
+        zone: &Record,
+        views: &[(u8, Vec<u8>)],
+        now: u64,
+    ) -> Result<PreparedConfirmation, Error> {
+        self.prepare_scoped(v, zone, views, now, PreparationDomain::ActivatedHierarchy)
+    }
+    /// Composed activated hierarchy components for every currently defined
+    /// external transaction kind. Parent state/history are authenticated inputs
+    /// to this component interface, not a supplied canonical checkpoint. The
+    /// reviewed runtime dispatch retains its narrower qualified contract.
+    pub fn prepare_activated_etx_components(
+        &self,
+        v: &mut Verifier,
+        zone: &Record,
+        views: &[(u8, Vec<u8>)],
+        now: u64,
+    ) -> Result<PreparedConfirmation, Error> {
+        self.prepare_scoped(v, zone, views, now, PreparationDomain::ActivatedETX)
+    }
+    fn prepare_scoped(
+        &self,
+        v: &mut Verifier,
+        zone: &Record,
+        views: &[(u8, Vec<u8>)],
+        now: u64,
+        domain: PreparationDomain,
+    ) -> Result<PreparedConfirmation, Error> {
+        let activated = zone.number(2)? > rules::START_TX;
+        let activated_domain = domain != PreparationDomain::Early;
+        if activated != activated_domain || zone.prime >= rules::KAWPOW_FORK {
+            return Err(Error::Unsupported("hierarchy transaction/fork profile"));
+        }
+        for tx in zone.object().transactions() {
+            if activated_domain {
+                if matches!(tx.kind(), Kind::External(e) if
+                    if domain == PreparationDomain::ActivatedETX { e.etx_type > 6 }
+                    else { !matches!(e.etx_type, 0 | 1) })
+                {
+                    return Err(Error::Unsupported("activated local ETX kind"));
+                }
+            } else if external(tx)?.etx_type != 1 {
+                return Err(Error::Unsupported(
+                    "mixed transaction/fork history unqualified",
+                ));
+            }
+        }
+        if matches!(
+            domain,
+            PreparationDomain::ActivatedHierarchy | PreparationDomain::ActivatedETX
+        ) && zone.prime >= 262000
+        {
+            return Err(Error::Unsupported(
+                "activated economic controllers unqualified",
+            ));
+        }
+        let placement = placement::verify_placement(v, zone, &self.profile(2)?)?;
+        if domain == PreparationDomain::ActivatedLocal && (placement.order != 2 || zone.prime != 0)
+        {
+            return Err(Error::Unsupported(
+                "activated local prime-zero components required",
+            ));
+        }
+        let order = placement.order;
+        let mut records: [Option<Record>; 3] = std::array::from_fn(|_| None);
+        records[2] = Some(zone.clone());
+        if views.len() != 2usize.saturating_sub(order as usize) {
+            return Err(Error::Unavailable("required higher-order views"));
+        }
+        for (c, bytes) in views {
+            if *c > 1 || (*c as u8) < order || records[*c as usize].is_some() {
+                return Err(Error::Invalid("hierarchy view roles"));
+            }
+            let r = Record::decode(bytes)?;
+            if r.id() != zone.id()
+                || r.header().encode() != zone.header().encode()
+                || r.object().header().encode() != zone.object().header().encode()
+            {
+                return Err(Error::Invalid("coincident view/header binding"));
+            }
+            records[*c as usize] = Some(r);
+        }
+        let g = &self.chain;
+        let h = zone.object().header().wire();
+        let gh = g.genesis[2].object().header().wire();
+        if h.exchange_rate != gh.exchange_rate
+            || h.k_quai_discount != gh.k_quai_discount
+            || h.conversion_flow_amount != gh.conversion_flow_amount
+        {
+            return Err(Error::Invalid("early hierarchy economic defaults"));
+        }
+        let mut appends: [Option<Prepared>; 3] = std::array::from_fn(|_| None);
+        let mut claim = [0; 32];
+        for c in order as usize..3 {
+            let r = records[c]
+                .as_ref()
+                .ok_or(Error::Unavailable("coincident context"))?;
+            if r.parents[c] != self.heads[c] {
+                return Err(Error::Invalid("hierarchy parent branch"));
+            }
+            let p = placement::prepare_append_components(
+                v,
+                &self.histories[c],
+                &self.indexes[c],
+                r,
+                &self.profile(c)?,
+                now,
+                (order as usize) < c,
+                claim,
+            )?;
+            claim = p.previous_dominant;
+            appends[c] = Some(p);
+        }
+        let share_entropy = crate::prefork_shares::native_components(v, &self.histories[2], zone)?;
+        if share_rules::uint(h.uncled_entropy.as_ref().unwrap())? != share_entropy.uncled {
+            return Err(Error::Invalid("hierarchy uncled entropy"));
+        }
+        let zone_parent = self.indexes[2].get(&zone.parents[2])?;
+        let mut accumulated = vec![];
+        for id in zone_parent
+            .manifest
+            .as_ref()
+            .ok_or(Error::Unavailable("zone rollup manifest"))?
+        {
+            extend(
+                &mut accumulated,
+                self.histories[2].get(id)?.object().outbound_etxs(),
+            )?;
+        }
+        let cross = cross_prime(&accumulated, 0)?;
+        if transactions_root(&cross)
+            .map_err(|_| Error::Unsupported("rollup root domain"))?
+            .as_slice()
+            != h.etx_rollup_hash.as_ref().unwrap().value
+        {
+            return Err(Error::Invalid("committed ETX rollup root"));
+        }
+        if order <= 1 {
+            let from_view = self.sub_rollup(records[1].as_ref().unwrap(), 1)?;
+            if from_view
+                .iter()
+                .map(Transaction::encode)
+                .collect::<Vec<_>>()
+                != accumulated
+                    .iter()
+                    .map(Transaction::encode)
+                    .collect::<Vec<_>>()
+            {
+                return Err(Error::Invalid("region/zone rollup disagreement"));
+            }
+        }
+        let confirmed = if order == 0 {
+            let prime = records[0].as_ref().unwrap();
+            let sub = self.sub_rollup(prime, 0)?;
+            filter_to_sub(&self.collect(prime, 0, order, &sub)?, [0, 0], 1, 0)?
+        } else if order == 1 {
+            self.collect(records[1].as_ref().unwrap(), 1, order, &accumulated)?
+        } else {
+            vec![]
+        };
+        let execution_inbound = self.confirmed_after(&zone.parents[2])?.to_vec();
+        let retained_cross = if order <= 1 { cross.as_slice() } else { &[] };
+        let charge = retained_cross
+            .iter()
+            .chain(confirmed.iter())
+            .try_fold(0usize, |n, t| {
+                n.checked_add(t.encode().len())
+                    .ok_or(Error::ResourceLimit("rollup size overflow"))
+            })?;
+        if self
+            .etx_bytes
+            .checked_add(charge)
+            .is_none_or(|n| n > MAX_ETX_BYTES)
+        {
+            return Err(Error::ResourceLimit("hierarchy ETX history budget"));
+        }
+        Ok(PreparedConfirmation {
+            chain: self.chain.clone(),
+            expected: self.heads,
+            records,
+            appends,
+            order,
+            region_rollup: cross,
+            confirmed,
+            execution_inbound,
+            charge,
+        })
+    }
+    /// Installs checked components only. The private branch caller must execute
+    /// and validate zone state before persisting/choosing any execution head.
+    pub fn commit(&mut self, mut p: PreparedConfirmation) -> Result<(), Error> {
+        if self.chain.fingerprint != p.chain.fingerprint || self.heads != p.expected {
+            return Err(Error::Invalid("stale hierarchy preparation"));
+        }
+        for c in p.order as usize..3 {
+            let r = p.records[c].as_ref().unwrap();
+            self.histories[c].check_insert(r)?;
+            self.indexes[c].check_insert(&r.id(), &p.appends[c].as_ref().unwrap().next)?;
+        }
+        if self.orders.len() >= MAX_RECORDS
+            || self
+                .etx_bytes
+                .checked_add(p.charge)
+                .is_none_or(|n| n > MAX_ETX_BYTES)
+        {
+            return Err(Error::ResourceLimit("hierarchy history capacity"));
+        }
+        let id = p.records[2].as_ref().unwrap().id();
+        for c in p.order as usize..3 {
+            let r = p.records[c].take().unwrap();
+            self.heads[c] = r.id();
+            self.histories[c].insert(r)?;
+            self.indexes[c].insert_imported(id, p.appends[c].take().unwrap().next)?;
+        }
+        self.orders.insert(id, p.order);
+        if p.order <= 1 {
+            self.region_rollups.insert(id, Arc::new(p.region_rollup));
+        }
+        self.confirmed.insert(id, Arc::new(p.confirmed));
+        self.etx_bytes += p.charge;
+        Ok(())
+    }
+}

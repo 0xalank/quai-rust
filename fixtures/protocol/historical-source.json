@@ -1,0 +1,23 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "0f8c89e875528b6ef00d7b375fa23aae21284c39f94a449c553f6720ecf8ad23",
+  "driver_sha256": "c0c46eaa23dcda5c6f466d74e209586ca1530618d3c9b906d4bf7a7ccb58a4cb",
+  "oracle_sources": {
+    "reference/historical/main.go": "934e1f3c284ca0c2a392bb9d6b4940c8cf85ac8a9b1e02630fa60450a56874a7",
+    "reference/historical/core-export.go": "65d2bcc6cd0dff7eaf70bf635f414f565adb2bf1d68db3e54e39e73b162390c4",
+    "reference/early-blocks/harness.go": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928",
+    "reference/incoming/core-template.go": "fb8dee75f628d90539926838b5d3a98c4a284c0053766a96ccb10708887be7a0",
+    "scripts/gen_historical_vectors.py": "c0c46eaa23dcda5c6f466d74e209586ca1530618d3c9b906d4bf7a7ccb58a4cb"
+  },
+  "go_sources": {
+    "core/state/gen_allocs.go": "5d13fc2496da38e53f1bd81a7a7dabab214902385d1bfdf0b25c11f7e7616a24",
+    "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
+    "core/headerchain_validation.go": "6f412c112f2a675a7811be9fca32d1827257ad962c092d79ab4c3d607df5fdf8",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "params/genesis_alloc.json": "652f49600e4a1a9cab47eace536d6236eb778c0efb97166d90ca7c1f6297a1f9",
+    "params/forfeiture_addresses.json": "711f0b0380deec09a92402bf23795c38c8b2d62e318cf7631f8ca84a0bb84d34",
+    "params/founder_forfeiture_addresses.json": "c01ad27da05145b60a9834bf1bb77e6b01b9d2074528ca2fbea1dc5ffd566761"
+  },
+  "full_consensus": false,
+  "public_network": false
+}

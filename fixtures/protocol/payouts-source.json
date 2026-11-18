@@ -1,0 +1,25 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "d7b8d4dfae149ca5ed213fe80f5f05e925722a01058bb8c02eb858a5d577f7cb",
+  "dispatch_sha256": "5d73488fc907b2afdb0f5797ed23818012f0a7c318ea180837a1e40801a5e43e",
+  "driver_sha256": "19e962d46f5b2ff896d1e829d44871f36be0daae1d84245e57cef75614a70308",
+  "oracle_sources": {
+    "reference/payouts/main.go": "b433bb60c8a2e06a53f22a7c578d1a74f2696fdd6baf4d9fa9cadd0e687b0d09",
+    "reference/payouts/core-template.go": "125df73f05448efd5948f9866edabcc14c215fa701f35a001dd471407e3bef56",
+    "reference/early-blocks/harness.go": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928"
+  },
+  "go_sources": {
+    "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "core/headerchain_validation.go": "6f412c112f2a675a7811be9fca32d1827257ad962c092d79ab4c3d607df5fdf8",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "core/types/auxpow_coinbase_utils.go": "0e911eb71c781284dca90968c1f82d78cdbdf3e6257adb58178076d5ca78aefe",
+    "common/types.go": "7bc526e37b42e1a33adb096d652f0eed153eea4239e73f9cff3b7a207a854912",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "scope": "Exact StateProcessor.Process fee feedback and reward-depth branch with controlled work hashes; arithmetic, not proof or complete block admission.",
+  "public_network": false,
+  "full_consensus": false
+}

@@ -1,0 +1,1584 @@
+{
+  "schema": 1,
+  "status_meanings": {
+    "partial": "Only native_scope is implemented; whole component parity is not claimed.",
+    "missing": "No native implementation of this component contract.",
+    "support": "Supporting build/test machinery exists; this is not a runtime parity claim.",
+    "deferred": "Outside the first non-mining node target; still open for broader feature parity."
+  },
+  "components": [
+    {
+      "id": "chain_spec",
+      "title": "Genesis, chain configuration and fork contexts",
+      "status": "partial",
+      "native_scope": "Official allocation data imported into a native height-indexed asset; 28 allocation-root comparisons include Singularity and Polaris forfeiture changes. Private chain 1337 source/config/genesis remain pinned. Public target and complete initialization qualification remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G0",
+        "G3",
+        "G4"
+      ],
+      "go_references": [
+        "params/config.go",
+        "params/protocol_params.go",
+        "params/genesis_alloc.json",
+        "core/genesis.go"
+      ],
+      "rust_sources": [
+        "crates/quai-consensus/src/initialization.rs",
+        "crates/quai-consensus/src/candidate_state.rs",
+        "crates/quai-consensus/src/placement.rs",
+        "crates/quai-consensus/src/scoring.rs",
+        "crates/quai-consensus/src/frontier.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-execution/src/historical.rs",
+        "crates/quai-execution/assets/allocations.bin",
+        "crates/quai-consensus/src/zone_admission.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs"
+      ],
+      "remaining": [
+        "Qualify a complete network target and its hierarchy/genesis/fork configuration.",
+        "Validate expansion/genesis initialization and allocation integration in complete historical block replay."
+      ],
+      "proposed_crate": "quai-chain-spec",
+      "evidence": [
+        "fixtures/protocol/genesis-source.json",
+        "results/latest-genesis.json",
+        "NATIVE_GENESIS_RESULTS.md",
+        "fixtures/protocol/frontier-source.json",
+        "results/latest-frontier.json",
+        "NATIVE_FRONTIER_RESULTS.md",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "NATIVE_ADMISSION_RESULTS.md",
+        "results/latest-admission.json",
+        "configs/private-admission-v1.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "wire_schema",
+      "title": "Common and core Protobuf schema",
+      "status": "partial",
+      "native_scope": "All 67 raw message declarations/codecs across five schemas; bounded preflight and canonical body/header/transaction reconstruction. Bounded ProtoTermini reconstruction enforces 16 dominant and 16 subordinate hashes and canonicalizes supported short hashes.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1"
+      ],
+      "go_references": [
+        "common/proto_common.proto",
+        "core/types/proto_block.proto"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/wire.rs",
+        "crates/quai-primitives/src/wire/tx.rs",
+        "crates/quai-primitives/src/schema/mod.rs",
+        "crates/quai-primitives/src/schema/block.rs",
+        "crates/quai-primitives/src/schema/quaiprotocol.rs",
+        "crates/quai-consensus/src/placement.rs"
+      ],
+      "remaining": [
+        "Qualify exact protocol limits, unsupported group/domain handling and semantic reconstruction for every declared view."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "fixtures/protocol/source.json",
+        "fixtures/protocol/transactions-source.json",
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json",
+        "fixtures/protocol/placement-source.json",
+        "results/latest-placement.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "transaction_primitives",
+      "title": "Quai/Qi/ETX codecs, IDs and signature mathematics",
+      "status": "partial",
+      "native_scope": "Canonical transaction Protobuf, typed-RLP encoder, routed IDs, signing messages, ECDSA recovery and Qi MuSig2/BIP340 mathematics.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1",
+        "G2",
+        "G9"
+      ],
+      "go_references": [
+        "core/types/transaction.go",
+        "core/types/transaction_signing.go",
+        "core/types/qi_tx.go",
+        "core/types/utxo.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/transaction.rs"
+      ],
+      "remaining": [
+        "Typed-RLP decoding for raw-transaction RPC.",
+        "Node chain-ID policy, address/ledger policy and state admission remain outside primitives."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "fixtures/protocol/transactions.json",
+        "results/native-validation.json",
+        "results/latest-transaction-pipeline.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "header_body",
+      "title": "Full headers, work objects and body commitments",
+      "status": "partial",
+      "native_scope": "Bounded canonical body headers/complete work objects, body-header binding and zone/region/prime body commitments.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1",
+        "G2"
+      ],
+      "go_references": [
+        "core/types/wo.go",
+        "core/types/block.go",
+        "core/types/hashing.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/header.rs",
+        "crates/quai-primitives/src/work.rs"
+      ],
+      "remaining": [
+        "Active auxiliary work-header semantic support and complete proof/header/body validation remain open."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "fixtures/protocol/work-headers.json",
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "receipts",
+      "title": "Receipts, logs and consensus commitments",
+      "status": "partial",
+      "native_scope": "Native consensus receipt/log RLP, 10,240-byte blooms and ordered receipt roots.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1",
+        "G2",
+        "G3"
+      ],
+      "go_references": [
+        "core/types/receipt.go",
+        "core/types/log.go",
+        "core/types/bloom9.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/receipt.rs"
+      ],
+      "remaining": [
+        "Receipt production from native execution and canonical storage reconstruction remain open."
+      ],
+      "proposed_crate": "quai-primitives",
+      "evidence": [
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "auxpow",
+      "title": "Auxiliary PoW, donor formats and quorum templates",
+      "status": "partial",
+      "native_scope": "Bounded auxiliary/template codecs and hashes; pinned 2-of-3 MuSig2 verification; coinbase/Quai seal/time/donor Merkle and Litecoin/Dogecoin commitments; signed KAWPOW block proof integration. Full block/share history and economic admission remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1",
+        "G4"
+      ],
+      "go_references": [
+        "core/types/auxpow.go",
+        "core/types/auxpow_coinbase_utils.go",
+        "core/types/btc.go",
+        "core/types/bch.go",
+        "core/types/ltc.go",
+        "core/types/ravencoin.go",
+        "crypto/musig2/musig2.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/auxiliary.rs",
+        "crates/quai-consensus/src/auxiliary/mod.rs",
+        "crates/quai-consensus/src/auxiliary/coinbase.rs",
+        "crates/quai-consensus/src/auxiliary/quorum.rs",
+        "crates/quai-consensus/src/verifier.rs"
+      ],
+      "remaining": [
+        "Qualify full protocol/resource domains and signed quorum configuration for the selected network target.",
+        "Complete uncle/workshare difficulty/count/history/hierarchy/economic policy, donor-chain assumptions and complete accepted/rejected block replay."
+      ],
+      "proposed_crate": "quai-consensus",
+      "evidence": [
+        "fixtures/protocol/auxiliary-source.json",
+        "results/latest-auxiliary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "pow_consensus",
+      "title": "PoW engines and complete header rules",
+      "status": "partial",
+      "native_scope": "Native ProgPoW/KAWPOW proof kernels, supported signed auxiliary binding and donor hashes, bounded header/share/entropy controllers and hierarchy components. The early private-hierarchy profile now composes native work, all required context views, body/placement, strong/weak pre-fork shares, confirmation and state roots into a store-bound private admission permit. Native zone entropy selects a three-tip frontier and atomically publishes the selected private checkpoint. Twenty-five actual-Go coordinator/topology events qualify 24 native blocks, a higher-entropy shorter-branch reorg and recovery. This is not full global block admission: later forks/auxiliary economics, expansion, nonlocal histories, mixed transaction blocks and complete coordinator generation/leader runtime remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G4"
+      ],
+      "go_references": [
+        "consensus/consensus.go",
+        "consensus/blake3pow/blake3pow.go",
+        "consensus/progpow/progpow.go",
+        "consensus/kawpow/kawpow.go",
+        "core/headerchain_validation.go",
+        "core/block_validator.go",
+        "cmd/utils/hierarchical_coordinator.go"
+      ],
+      "rust_sources": [
+        "crates/quai-consensus/src/pow.rs",
+        "crates/quai-consensus/src/donor.rs",
+        "crates/quai-consensus/src/rules.rs",
+        "crates/quai-consensus/src/verifier.rs",
+        "crates/quai-consensus/src/share_rules.rs",
+        "crates/quai-consensus/src/history.rs",
+        "crates/quai-consensus/src/validation.rs",
+        "crates/quai-consensus/src/zone_header.rs",
+        "crates/quai-consensus/src/economics.rs",
+        "crates/quai-consensus/src/hierarchy_header.rs",
+        "crates/quai-consensus/src/placement.rs",
+        "crates/quai-consensus/tests/placement.rs",
+        "crates/quai-consensus/src/initialization.rs",
+        "crates/quai-consensus/src/candidate_state.rs",
+        "crates/quai-consensus/src/scoring.rs",
+        "crates/quai-consensus/src/frontier.rs",
+        "crates/quai-consensus/src/eligibility.rs",
+        "crates/quai-consensus/tests/eligibility.rs",
+        "crates/quai-consensus/examples/check-eligibility.rs",
+        "crates/quai-consensus/src/coordinator/mod.rs",
+        "crates/quai-consensus/src/coordinator/sort.rs",
+        "crates/quai-consensus/tests/coordinator.rs",
+        "crates/quai-consensus/examples/check-coordinator.rs",
+        "crates/quai-consensus/src/zone_admission.rs",
+        "crates/quai-consensus/src/confirmation.rs",
+        "crates/quai-consensus/tests/confirmation.rs",
+        "crates/quai-consensus/src/strong_uncles.rs",
+        "crates/quai-consensus/tests/uncles.rs",
+        "crates/quai-consensus/src/prefork_shares.rs",
+        "crates/quai-consensus/src/weak_float.rs",
+        "crates/quai-consensus/tests/weakshares.rs",
+        "crates/quai-consensus/tests/weak_float.rs",
+        "crates/quai-consensus/src/private_canonical.rs",
+        "crates/quai-consensus/tests/canonical.rs",
+        "crates/quai-consensus/src/confirmation/delta.rs",
+        "crates/quai-consensus/src/private_branch/reader.rs",
+        "crates/quai-store/src/admission.rs",
+        "crates/quai-consensus/src/private_canonical/catalog.rs",
+        "crates/quai-consensus/examples/check-coincident.rs",
+        "crates/quai-consensus/tests/coincident.rs",
+        "crates/quai-consensus/examples/check-activation.rs",
+        "crates/quai-consensus/tests/activation.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs"
+      ],
+      "remaining": [
+        "Complete expansion-genesis economic initialization, cross-context eligibility, historical workshare qualification and network/fork coverage beyond bounded component profiles.",
+        "Integrate complete economic state replay and canonical fork-choice policy before accepting blocks."
+      ],
+      "proposed_crate": "quai-consensus",
+      "evidence": [
+        "fixtures/protocol/consensus-source.json",
+        "results/latest-consensus.json",
+        "fixtures/protocol/history-source.json",
+        "results/latest-history.json",
+        "NATIVE_HISTORY_RESULTS.md",
+        "fixtures/protocol/header-source.json",
+        "results/latest-header.json",
+        "NATIVE_HEADER_RESULTS.md",
+        "fixtures/protocol/hierarchy-source.json",
+        "results/latest-hierarchy.json",
+        "NATIVE_HIERARCHY_RESULTS.md",
+        "fixtures/protocol/placement-source.json",
+        "results/latest-placement.json",
+        "NATIVE_PLACEMENT_RESULTS.md",
+        "fixtures/protocol/genesis-source.json",
+        "results/latest-genesis.json",
+        "NATIVE_GENESIS_RESULTS.md",
+        "fixtures/protocol/frontier-source.json",
+        "results/latest-frontier.json",
+        "NATIVE_FRONTIER_RESULTS.md",
+        "fixtures/protocol/eligibility-source.json",
+        "results/latest-eligibility.json",
+        "NATIVE_ELIGIBILITY_RESULTS.md",
+        "fixtures/protocol/coordinator-source.json",
+        "results/latest-coordinator.json",
+        "NATIVE_COORDINATOR_RESULTS.md",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "PERFORMANCE_LEDGER.md",
+        "NATIVE_ADMISSION_RESULTS.md",
+        "results/latest-admission.json",
+        "configs/private-admission-v1.json",
+        "NATIVE_CONFIRMATION_RESULTS.md",
+        "fixtures/protocol/confirmation-source.json",
+        "results/latest-confirmation.json",
+        "configs/private-hierarchy-v1.json",
+        "NATIVE_UNCLES_RESULTS.md",
+        "fixtures/protocol/uncles-source.json",
+        "results/latest-uncles.json",
+        "NATIVE_WEAKSHARES_RESULTS.md",
+        "fixtures/protocol/weakshares-source.json",
+        "results/latest-weakshares.json",
+        "NATIVE_CANONICAL_RESULTS.md",
+        "results/latest-canonical.json",
+        "fixtures/protocol/canonical-source.json",
+        "NATIVE_INDEXED_HISTORY_RESULTS.md",
+        "results/latest-indexed-history-work.json",
+        "NATIVE_INDEXED_CATALOG_RESULTS.md",
+        "results/latest-indexed-catalog-work.json",
+        "NATIVE_ACTIVATION_RESULTS.md",
+        "fixtures/protocol/activation-source.json",
+        "results/latest-activation.json",
+        "NATIVE_COINCIDENT_RESULTS.md",
+        "fixtures/protocol/coincident-source.json",
+        "results/latest-coincident.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json",
+        "NATIVE_PROOF_REUSE_RESULTS.md",
+        "results/proof-handoff-work-20261116T035653866226Z/summary.json",
+        "NATIVE_WORK_REUSE_RESULTS.md",
+        "results/work-reuse-20261116T044232200275Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "hierarchy",
+      "title": "PoEM, hierarchy, fork choice and expansion",
+      "status": "partial",
+      "native_scope": "Bounded native order/rank/entropy, context headers, manifests/interlinks/PCRC, genesis geometry, multi-context ancestry/eligibility and Go coordinator search/reapplication components. A fixed early single-zone private profile now has sealed admission, native frontier selection, immutable canonical generations and crash recovery, matched to 25 actual Go BuildPendingHeaders/SetCurrentHeader events. Full global coordinator worker generation, multi-zone and nonlocal fork selection remain unqualified. The hash-only scoring projection still refuses nonempty pre-fork shares; the composed private path uses authenticated native entropy instead. Activated local components now compose native header/body/manifest/PCRC, authenticated cross-prime rollups, and signed Qi/Quai/standard-ETX execution from an explicit synthetic height-259200 checkpoint. Four sealed accepted blocks and 33 valid-work rejections are conditional component evidence, not added genesis-to-head canonical coverage. The existing canonical path now executes from an exact-block/profile-bound hierarchy preparation instead of a cloned inbound list. Full mixed canonical and later/nonlocal/fork coverage remain open. All seven currently defined incoming ETX kinds now compose with signed Quai/Qi and hierarchy append/PCRC in conditional supplied-checkpoint tests. This grants no canonical ancestry or runtime widening. Exact native prime-controller arithmetic now matches 3200 actual Go comparisons, including signed floor division, resets/holds/freeze and the existing miner EWMA. Authenticated window/history and complete admission integration remain open. A branch-bound native 4000-entry token-choice window now matches 4216 actual Go updates, including signed correction rounding, rolling replacement, atomic persistence and fork/recovery checks. Complete controller history/admission integration remains open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G4",
+        "G7"
+      ],
+      "go_references": [
+        "core/poem.go",
+        "core/core.go",
+        "core/slice.go",
+        "core/headerchain.go",
+        "core/blocks.go",
+        "cmd/utils/hierarchical_coordinator.go"
+      ],
+      "rust_sources": [
+        "crates/quai-consensus/src/rules.rs",
+        "crates/quai-consensus/src/share_rules.rs",
+        "crates/quai-consensus/src/history.rs",
+        "crates/quai-consensus/src/validation.rs",
+        "crates/quai-consensus/src/zone_header.rs",
+        "crates/quai-consensus/src/economics.rs",
+        "crates/quai-consensus/src/hierarchy_header.rs",
+        "crates/quai-consensus/src/placement.rs",
+        "crates/quai-consensus/tests/placement.rs",
+        "crates/quai-consensus/src/initialization.rs",
+        "crates/quai-consensus/src/candidate_state.rs",
+        "crates/quai-consensus/src/scoring.rs",
+        "crates/quai-consensus/src/frontier.rs",
+        "crates/quai-consensus/src/eligibility.rs",
+        "crates/quai-consensus/tests/eligibility.rs",
+        "crates/quai-consensus/examples/check-eligibility.rs",
+        "crates/quai-consensus/src/coordinator/mod.rs",
+        "crates/quai-consensus/src/coordinator/sort.rs",
+        "crates/quai-consensus/tests/coordinator.rs",
+        "crates/quai-consensus/examples/check-coordinator.rs",
+        "crates/quai-consensus/src/zone_admission.rs",
+        "crates/quai-consensus/src/confirmation.rs",
+        "crates/quai-consensus/tests/confirmation.rs",
+        "crates/quai-consensus/src/strong_uncles.rs",
+        "crates/quai-consensus/tests/uncles.rs",
+        "crates/quai-consensus/src/prefork_shares.rs",
+        "crates/quai-consensus/src/weak_float.rs",
+        "crates/quai-consensus/tests/weakshares.rs",
+        "crates/quai-consensus/tests/weak_float.rs",
+        "crates/quai-consensus/src/private_canonical.rs",
+        "crates/quai-consensus/tests/canonical.rs",
+        "crates/quai-consensus/src/confirmation/delta.rs",
+        "crates/quai-consensus/src/private_branch/reader.rs",
+        "crates/quai-store/src/admission.rs",
+        "crates/quai-consensus/src/private_canonical/catalog.rs",
+        "crates/quai-execution/src/state_store/utxo_reader.rs",
+        "crates/quai-execution/src/utxo.rs",
+        "crates/quai-consensus/examples/check-activation.rs",
+        "crates/quai-consensus/tests/activation.rs",
+        "crates/quai-consensus/examples/check-coincident.rs",
+        "crates/quai-consensus/tests/coincident.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs"
+      ],
+      "remaining": [
+        "Complete genesis allocation and expansion state initialization, historical pre-fork nonempty workshares, and cross-context qualification on selected network/fork profiles.",
+        "Qualify runtime candidate retention/refresh, pending-header body assembly, generation/event integration and canonical branch selection, economic replay and durable reorg/crash recovery; clarify the pinned coordinator legacy region-name collisions before network qualification."
+      ],
+      "proposed_crate": "quai-consensus",
+      "evidence": [
+        "fixtures/protocol/consensus-source.json",
+        "results/latest-consensus.json",
+        "fixtures/protocol/history-source.json",
+        "results/latest-history.json",
+        "NATIVE_HISTORY_RESULTS.md",
+        "fixtures/protocol/header-source.json",
+        "results/latest-header.json",
+        "NATIVE_HEADER_RESULTS.md",
+        "fixtures/protocol/hierarchy-source.json",
+        "results/latest-hierarchy.json",
+        "NATIVE_HIERARCHY_RESULTS.md",
+        "fixtures/protocol/placement-source.json",
+        "results/latest-placement.json",
+        "NATIVE_PLACEMENT_RESULTS.md",
+        "fixtures/protocol/genesis-source.json",
+        "results/latest-genesis.json",
+        "NATIVE_GENESIS_RESULTS.md",
+        "fixtures/protocol/frontier-source.json",
+        "results/latest-frontier.json",
+        "NATIVE_FRONTIER_RESULTS.md",
+        "fixtures/protocol/eligibility-source.json",
+        "results/latest-eligibility.json",
+        "NATIVE_ELIGIBILITY_RESULTS.md",
+        "fixtures/protocol/coordinator-source.json",
+        "results/latest-coordinator.json",
+        "NATIVE_COORDINATOR_RESULTS.md",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_ADMISSION_RESULTS.md",
+        "results/latest-admission.json",
+        "configs/private-admission-v1.json",
+        "NATIVE_CONFIRMATION_RESULTS.md",
+        "fixtures/protocol/confirmation-source.json",
+        "results/latest-confirmation.json",
+        "configs/private-hierarchy-v1.json",
+        "NATIVE_UNCLES_RESULTS.md",
+        "fixtures/protocol/uncles-source.json",
+        "results/latest-uncles.json",
+        "NATIVE_WEAKSHARES_RESULTS.md",
+        "fixtures/protocol/weakshares-source.json",
+        "results/latest-weakshares.json",
+        "NATIVE_CANONICAL_RESULTS.md",
+        "results/latest-canonical.json",
+        "fixtures/protocol/canonical-source.json",
+        "NATIVE_INDEXED_HISTORY_RESULTS.md",
+        "results/latest-indexed-history-work.json",
+        "NATIVE_INDEXED_CATALOG_RESULTS.md",
+        "results/latest-indexed-catalog-work.json",
+        "NATIVE_LAZY_QI_RESULTS.md",
+        "results/latest-lazy-qi-work.json",
+        "NATIVE_ACTIVATION_RESULTS.md",
+        "fixtures/protocol/activation-source.json",
+        "results/latest-activation.json",
+        "NATIVE_COINCIDENT_RESULTS.md",
+        "fixtures/protocol/coincident-source.json",
+        "results/latest-coincident.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json",
+        "NATIVE_ETX_FAMILY_RESULTS.md",
+        "results/etx-family-work-20261116T055952448924Z/summary.json",
+        "NATIVE_CONTROLLER_RESULTS.md",
+        "results/controller-work-20261116T064028341659Z/summary.json",
+        "NATIVE_CHOICE_WINDOW_RESULTS.md",
+        "results/choice-window-work-20261116T070003552554Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "block_execution",
+      "title": "Serial block processing and transition orchestration",
+      "status": "partial",
+      "native_scope": "Atomic serial zone composition of signed Quai/Qi/incoming settlement, fee ordering/feedback, reward-depth payouts, historical effects and execution commitments. Qualified on 16 linked early private actual Process blocks with real native proofs and restored local images. Full mixed/fork/hierarchy admission remains open. Execution-checked private candidates now stage complete durable branch commits, with 24 unique blocks across two actual-Go branches and explicit selection/recovery. A separately pinned pre-transaction local-zone profile now enforces native header/body/manifest/PCRC components before atomic execution and private staging; 31 real-work field mutations are rejected without publication. A separately pinned early profile now composes native prime/region/zone append, authenticated rollup commitments, ordered confirmed ETX derivation and incoming coinbase execution with durable branch witnesses. Two local branches qualify 24 unique blocks and 38 context bundles; mixed/nonlocal/fork/workshare/expansion and sealed global admission remain open. Pre-KAWPOW full-target ProgPoW uncles now compose integer distance-discounted entropy, parent PoEM fields, payouts/confirmation and incoming coinbase execution in that early profile. The earlier Go-valid weak-share capability case is now accepted; native binary-precision entropy and supplied-ancestry candidate scoring have bounded private qualification. Fresh parent state is restored once within each hierarchy append, with current-call ancestry checksums and a separate stage-parent check. Exact weak-share rounding has 5,875 controlled Go arithmetic cases; native three-context branches add 760 comparisons, 10 weak shares, 13 full-target inclusions, 30 incoming coinbases and 15 local candidate scores. Current native score components still grant no verified-history/canonical authority. Nonlocal/mixed/auxiliary/fork/expansion and sealed full admission remain open. Activated local components now compose native header/body/manifest/PCRC, authenticated cross-prime rollups, and signed Qi/Quai/standard-ETX execution from an explicit synthetic height-259200 checkpoint. Four sealed accepted blocks and 33 valid-work rejections are conditional component evidence, not added genesis-to-head canonical coverage. The existing canonical path now executes from an exact-block/profile-bound hierarchy preparation instead of a cloned inbound list. Full mixed canonical and later/nonlocal/fork coverage remain open. All seven currently defined incoming ETX kinds now compose with signed Quai/Qi and hierarchy append/PCRC in conditional supplied-checkpoint tests. This grants no canonical ancestry or runtime widening.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G3"
+      ],
+      "go_references": [
+        "core/state_processor.go",
+        "core/state_transition.go",
+        "core/evm.go",
+        "core/types/gaspool.go"
+      ],
+      "rust_sources": [
+        "crates/quai-execution/src/gas.rs",
+        "crates/quai-execution/src/settlement.rs",
+        "crates/quai-execution/src/qi_settlement.rs",
+        "crates/quai-execution/src/early_replay.rs",
+        "crates/quai-execution/src/incoming.rs",
+        "crates/quai-execution/src/historical.rs",
+        "crates/quai-consensus/src/zone_execution.rs",
+        "crates/quai-consensus/tests/block_execution.rs",
+        "crates/quai-consensus/src/private_branch.rs",
+        "crates/quai-consensus/src/zone_admission.rs",
+        "crates/quai-consensus/src/confirmation.rs",
+        "crates/quai-consensus/tests/confirmation.rs",
+        "crates/quai-consensus/src/strong_uncles.rs",
+        "crates/quai-consensus/tests/uncles.rs",
+        "crates/quai-consensus/src/prefork_shares.rs",
+        "crates/quai-consensus/src/weak_float.rs",
+        "crates/quai-consensus/tests/weakshares.rs",
+        "crates/quai-consensus/tests/weak_float.rs",
+        "crates/quai-execution/src/state_store/utxo_reader.rs",
+        "crates/quai-execution/src/utxo.rs",
+        "crates/quai-execution/src/state_error.rs",
+        "crates/quai-execution/src/state_store/account_reader.rs",
+        "crates/quai-execution/src/etx.rs",
+        "crates/quai-execution/src/lockup_state.rs",
+        "crates/quai-execution/src/state_store/aux_reader.rs",
+        "crates/quai-consensus/examples/check-activation.rs",
+        "crates/quai-consensus/tests/activation.rs",
+        "crates/quai-consensus/examples/check-coincident.rs",
+        "crates/quai-consensus/tests/coincident.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs"
+      ],
+      "remaining": [
+        "Qualify mixed Quai/Qi/ETX blocks, official allocation histories, workshares and every economic fork in integrated replay; complete header/hierarchy/inbound eligibility and canonical admission remain open."
+      ],
+      "proposed_crate": "quai-execution",
+      "evidence": [
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "results/latest-zone-execution.json",
+        "NATIVE_CONSENSUS_RESULTS.md",
+        "NATIVE_DURABLE_RESULTS.md",
+        "results/latest-private-branches.json",
+        "NATIVE_ADMISSION_RESULTS.md",
+        "results/latest-admission.json",
+        "configs/private-admission-v1.json",
+        "NATIVE_CONFIRMATION_RESULTS.md",
+        "fixtures/protocol/confirmation-source.json",
+        "results/latest-confirmation.json",
+        "configs/private-hierarchy-v1.json",
+        "NATIVE_UNCLES_RESULTS.md",
+        "fixtures/protocol/uncles-source.json",
+        "results/latest-uncles.json",
+        "NATIVE_WEAKSHARES_RESULTS.md",
+        "fixtures/protocol/weakshares-source.json",
+        "results/latest-weakshares.json",
+        "NATIVE_LAZY_QI_RESULTS.md",
+        "results/latest-lazy-qi-work.json",
+        "NATIVE_LAZY_AUX_RESULTS.md",
+        "NATIVE_ACTIVATION_RESULTS.md",
+        "fixtures/protocol/activation-source.json",
+        "results/latest-activation.json",
+        "NATIVE_COINCIDENT_RESULTS.md",
+        "fixtures/protocol/coincident-source.json",
+        "results/latest-coincident.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json",
+        "NATIVE_ETX_FAMILY_RESULTS.md",
+        "results/etx-family-work-20261116T055952448924Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "evm",
+      "title": "Quai EVM, custom opcodes and precompiles",
+      "status": "partial",
+      "native_scope": "Bounded nested CALL/CREATE, precompiles, custom opcodes and native lockup calls, including raw-batch rollback forks. Expanded actual-Go corpus covers 1548 VM cases/20124 comparisons. Full historical/economic domains remain open. Account and contract slot access now uses fallible pinned providers and bounded write overlays; the journal captures/finalizes touched size baselines and backend unavailability aborts nested CALL/CREATE and settlement. Full global EVM/resource qualification remains open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G3"
+      ],
+      "go_references": [
+        "core/vm/evm.go",
+        "core/vm/instructions.go",
+        "core/vm/gas_table.go",
+        "core/vm/operations_acl.go",
+        "core/vm/contracts.go"
+      ],
+      "rust_sources": [
+        "crates/quai-execution/src/evm/mod.rs",
+        "crates/quai-execution/src/evm/word.rs",
+        "crates/quai-execution/src/evm/state_gas.rs",
+        "crates/quai-execution/src/evm/journal.rs",
+        "crates/quai-execution/src/evm/calls.rs",
+        "crates/quai-execution/src/evm/precompile.rs",
+        "crates/quai-execution/src/evm/etx.rs",
+        "crates/quai-execution/src/evm/lockup.rs",
+        "crates/quai-execution/src/lockup.rs",
+        "crates/quai-execution/src/state_error.rs",
+        "crates/quai-execution/src/state_store/account_reader.rs",
+        "crates/quai-execution/src/etx.rs",
+        "crates/quai-execution/src/lockup_state.rs",
+        "crates/quai-execution/src/state_store/aux_reader.rs",
+        "crates/quai-consensus/examples/check-coincident.rs",
+        "crates/quai-consensus/tests/coincident.rs",
+        "crates/quai-consensus/examples/check-activation.rs",
+        "crates/quai-consensus/tests/activation.rs"
+      ],
+      "remaining": [
+        "Complete valid-domain/fork qualification, remaining historical economic behavior, production resource limits and complete block composition."
+      ],
+      "proposed_crate": "quai-execution",
+      "evidence": [
+        "fixtures/protocol/serial-vm-source.json",
+        "results/latest-vm.json",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "NATIVE_LAZY_WORLD_RESULTS.md",
+        "NATIVE_LAZY_AUX_RESULTS.md",
+        "NATIVE_ACTIVATION_RESULTS.md",
+        "fixtures/protocol/activation-source.json",
+        "results/latest-activation.json",
+        "NATIVE_COINCIDENT_RESULTS.md",
+        "fixtures/protocol/coincident-source.json",
+        "results/latest-coincident.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "qi_etx_state",
+      "title": "Qi/UTXO/ETX state rules and journals",
+      "status": "partial",
+      "native_scope": "Atomic Qi settlement plus native incoming dispatch for all seven ETX types, ordered queues, coinbase/lockups, conversions/wrapping and historical trimming components. Independent committed size/MuHash preserves historical duplicate-delete/overwrite behavior. Full block replay, eligibility and persistence remain open. Complete local state images preserve pending queue metadata and independent MuHash/count, including legacy raw-map ghosts; durable canonical publication remains open. A separately pinned early profile now composes native prime/region/zone append, authenticated rollup commitments, ordered confirmed ETX derivation and incoming coinbase execution with durable branch witnesses. Two local branches qualify 24 unique blocks and 38 context bundles; mixed/nonlocal/fork/workshare/expansion and sealed global admission remain open. Pre-KAWPOW full-target ProgPoW uncles now compose integer distance-discounted entropy, parent PoEM fields, payouts/confirmation and incoming coinbase execution in that early profile. The earlier Go-valid weak-share capability case is now accepted; native binary-precision entropy and supplied-ancestry candidate scoring have bounded private qualification. Fresh parent state is restored once within each hierarchy append, with current-call ancestry checksums and a separate stage-parent check. Exact weak-share rounding has 5,875 controlled Go arithmetic cases; native three-context branches add 760 comparisons, 10 weak shares, 13 full-target inclusions, 30 incoming coinbases and 15 local candidate scores. Current native score components still grant no verified-history/canonical authority. Nonlocal/mixed/auxiliary/fork/expansion and sealed full admission remain open. All seven currently defined incoming ETX kinds now compose with signed Quai/Qi and hierarchy append/PCRC in conditional supplied-checkpoint tests. This grants no canonical ancestry or runtime widening.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G3",
+        "G5"
+      ],
+      "go_references": [
+        "core/state_processor.go",
+        "core/types/utxo_validate.go",
+        "core/types/stxo.go",
+        "core/types/etx_set.go"
+      ],
+      "rust_sources": [
+        "crates/quai-execution/src/qi.rs",
+        "crates/quai-execution/src/etx.rs",
+        "crates/quai-execution/src/qi_settlement.rs",
+        "crates/quai-execution/src/utxo.rs",
+        "crates/quai-execution/src/muhash.rs",
+        "crates/quai-execution/src/incoming.rs",
+        "crates/quai-execution/src/historical.rs",
+        "crates/quai-execution/src/lockup.rs",
+        "crates/quai-execution/src/state_image.rs",
+        "crates/quai-consensus/src/private_branch.rs",
+        "crates/quai-consensus/src/confirmation.rs",
+        "crates/quai-consensus/tests/confirmation.rs",
+        "crates/quai-consensus/src/strong_uncles.rs",
+        "crates/quai-consensus/tests/uncles.rs",
+        "crates/quai-consensus/src/prefork_shares.rs",
+        "crates/quai-consensus/src/weak_float.rs",
+        "crates/quai-consensus/tests/weakshares.rs",
+        "crates/quai-consensus/tests/weak_float.rs",
+        "crates/quai-execution/src/state_store/utxo_reader.rs",
+        "crates/quai-consensus/examples/check-coincident.rs",
+        "crates/quai-consensus/tests/coincident.rs",
+        "crates/quai-consensus/examples/check-activation.rs",
+        "crates/quai-consensus/tests/activation.rs"
+      ],
+      "remaining": [
+        "Full Qi output/value/fee/fork policy, UTXO mutations/MuHash, conversions/rewards, hierarchy ETX eligibility and durable state remain open."
+      ],
+      "proposed_crate": "quai-execution",
+      "evidence": [
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "NATIVE_DURABLE_RESULTS.md",
+        "results/latest-private-branches.json",
+        "NATIVE_CONFIRMATION_RESULTS.md",
+        "fixtures/protocol/confirmation-source.json",
+        "results/latest-confirmation.json",
+        "configs/private-hierarchy-v1.json",
+        "NATIVE_UNCLES_RESULTS.md",
+        "fixtures/protocol/uncles-source.json",
+        "results/latest-uncles.json",
+        "NATIVE_WEAKSHARES_RESULTS.md",
+        "fixtures/protocol/weakshares-source.json",
+        "results/latest-weakshares.json",
+        "NATIVE_CANONICAL_DB_RESULTS.md",
+        "results/latest-persistent-execution.json",
+        "results/latest-canonical-db-work.json",
+        "NATIVE_LAZY_QI_RESULTS.md",
+        "results/latest-lazy-qi-work.json",
+        "NATIVE_ACTIVATION_RESULTS.md",
+        "fixtures/protocol/activation-source.json",
+        "results/latest-activation.json",
+        "NATIVE_COINCIDENT_RESULTS.md",
+        "fixtures/protocol/coincident-source.json",
+        "results/latest-coincident.json",
+        "NATIVE_ETX_FAMILY_RESULTS.md",
+        "results/etx-family-work-20261116T055952448924Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "economics",
+      "title": "Rewards, fees, conversion and controller math",
+      "status": "partial",
+      "native_scope": "Bounded reward/conversion/base-fee math, incoming economic dispatch, coinbase interest, authority updates, indexed allocations, redemption and trimming. Exact official fee feedback/reward-depth branch has 486 projection cases; 16 early private whole blocks qualify native payouts and incoming coinbases. Complete historical economic replay remains open. Exact native prime-controller arithmetic now matches 3200 actual Go comparisons, including signed floor division, resets/holds/freeze and the existing miner EWMA. Authenticated window/history and complete admission integration remain open. A branch-bound native 4000-entry token-choice window now matches 4216 actual Go updates, including signed correction rounding, rolling replacement, atomic persistence and fork/recovery checks. Complete controller history/admission integration remains open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G3",
+        "G4"
+      ],
+      "go_references": [
+        "consensus/misc/rewards.go",
+        "consensus/misc/statefee.go",
+        "core/exchange_controller.go",
+        "core/types/token_choice.go"
+      ],
+      "rust_sources": [
+        "crates/quai-consensus/src/zone_header.rs",
+        "crates/quai-consensus/src/economics.rs",
+        "crates/quai-execution/src/economic_state.rs",
+        "crates/quai-execution/src/historical.rs",
+        "crates/quai-execution/src/incoming.rs",
+        "crates/quai-consensus/src/payouts.rs",
+        "crates/quai-consensus/src/zone_execution.rs",
+        "crates/quai-consensus/src/controllers.rs",
+        "crates/quai-consensus/tests/controllers.rs",
+        "crates/quai-consensus/examples/check-controllers.rs",
+        "crates/quai-consensus/src/choice_window.rs",
+        "crates/quai-consensus/tests/choice_window.rs",
+        "crates/quai-consensus/examples/check-choice-window.rs"
+      ],
+      "remaining": [
+        "Qualify reward composition with real auxiliary workshares, mixed transaction blocks, complete historical/fork domains and hierarchy eligibility.",
+        "Qualify remaining signed/out-of-domain arithmetic and complete hierarchy reward policy."
+      ],
+      "proposed_crate": "quai-execution",
+      "evidence": [
+        "fixtures/protocol/header-source.json",
+        "results/latest-header.json",
+        "NATIVE_HEADER_RESULTS.md",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "results/latest-stateful.json",
+        "results/latest-zone-execution.json",
+        "NATIVE_CONSENSUS_RESULTS.md",
+        "NATIVE_CONTROLLER_RESULTS.md",
+        "results/controller-work-20261116T064028341659Z/summary.json",
+        "NATIVE_CHOICE_WINDOW_RESULTS.md",
+        "results/choice-window-work-20261116T070003552554Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "fee_extensions",
+      "title": "Local fee-fallback feature-branch behavior",
+      "status": "missing",
+      "native_scope": "Local fee-reserve extensions are preserved on backup/pre-polaris-fees-20261110 at db42af74d31f25390236ffeca14cca2cba7de639. They are not part of the official v0.57.0 reference profile and are not enabled in the native runtime.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G0",
+        "G3",
+        "G9"
+      ],
+      "go_references": [
+        "params/config.go",
+        "core/state_transition.go"
+      ],
+      "rust_sources": [],
+      "remaining": [
+        "Decide whether the network target enables these five post-release commits.",
+        "Replay activation, reserve fallback, selector/signature binding and alternative-fee RPC semantics."
+      ],
+      "proposed_crate": "quai-execution",
+      "evidence": [],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "account_state",
+      "title": "Account/storage state, journaling and snapshots",
+      "status": "partial",
+      "native_scope": "Copy-on-write snapshots and invalidation-aware commitment caches, block-deferred storage sizing and raw-lockup rollback. Complete trusted local images preserve accounts/storage, pending ETX indices/metadata, raw lockups and legacy UTXO/MuHash/count state; restored after each of 16 private blocks. Persistent canonical branch state and crash recovery remain open. Complete state images now persist with receipts and history in the private branch journal, qualified on two actual-Go branches; production canonical state remains open. World account-state commitments now copy only changed secure-trie paths and preserve prior snapshot roots. Aggregate account/storage/byte quota validation still applies; account maps and per-account storage remain bounded in memory. Native private canonical execution now restores account/storage/code from keyed database versions and persists changed records. Signed Quai, Qi and incoming-ETX components retain frozen Go outputs after persisted before/after state roundtrips. World maps are still bounded and materialized; lazy production access remains open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G3",
+        "G5"
+      ],
+      "go_references": [
+        "core/state/statedb.go",
+        "core/state/database.go",
+        "core/state/journal.go"
+      ],
+      "rust_sources": [
+        "crates/quai-execution/src/evm/state.rs",
+        "crates/quai-execution/src/evm/journal.rs",
+        "crates/quai-execution/src/checkpoint.rs",
+        "crates/quai-execution/src/state_image.rs",
+        "crates/quai-consensus/src/private_branch.rs",
+        "crates/quai-execution/src/state_store.rs"
+      ],
+      "remaining": [
+        "Implement lazy account/storage/code execution and remove full materialization/history limits; qualify rent/domain coverage, production state sizes and full reorg/fault behavior."
+      ],
+      "proposed_crate": "quai-state",
+      "evidence": [
+        "fixtures/protocol/serial-vm-source.json",
+        "results/latest-vm.json",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "results/latest-zone-execution.json",
+        "NATIVE_CONSENSUS_RESULTS.md",
+        "NATIVE_DURABLE_RESULTS.md",
+        "results/latest-private-branches.json",
+        "NATIVE_STATE_DB_RESULTS.md",
+        "fixtures/protocol/state-db-source.json",
+        "results/latest-state-db.json",
+        "NATIVE_CANONICAL_DB_RESULTS.md",
+        "results/latest-persistent-execution.json",
+        "results/latest-canonical-db-work.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "trie",
+      "title": "Trie and state/UTXO commitments",
+      "status": "partial",
+      "native_scope": "Pure Rust ordered/raw/secure-key MPT commitments, immutable path-copying secure trie updates/deletes, hash-addressed lazy node reads, exact UTXOHash and MuHash3072. Incremental World account roots reuse unchanged branches. A transactional native database persists trie nodes and immutable fork roots; actual-Go qualification covers 70,000 keys and 5,000 state-version commits. The native private canonical path now uses the keyed database; lazy/global execution providers and production storage qualification remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G2",
+        "G3",
+        "G5"
+      ],
+      "go_references": [
+        "trie/trie.go",
+        "trie/stacktrie.go",
+        "crypto/multiset/multiset.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/trie.rs",
+        "crates/quai-execution/src/muhash.rs",
+        "crates/quai-execution/src/utxo.rs",
+        "crates/quai-primitives/src/mpt.rs",
+        "crates/quai-store/src/state_db.rs"
+      ],
+      "remaining": [
+        "Integrate lazy persistent account/storage/code access into execution and canonical commits; qualify proofs, pruning, production-scale UTXOs and resource/fault behavior. Storage state versions are not admitted blockchain heights."
+      ],
+      "proposed_crate": "quai-state",
+      "evidence": [
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json",
+        "NATIVE_CONSENSUS_PROGRESS.md",
+        "results/latest-stateful.json",
+        "NATIVE_STATE_DB_RESULTS.md",
+        "fixtures/protocol/state-db-source.json",
+        "results/latest-state-db.json",
+        "NATIVE_CANONICAL_DB_RESULTS.md",
+        "results/latest-persistent-execution.json",
+        "results/latest-canonical-db-work.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "chain_storage",
+      "title": "Durable canonical chain/state database",
+      "status": "partial",
+      "native_scope": "The fixed private canonical writer loads account/code-for-requested-accounts, contract storage, ETX queue/economic metadata, raw lockups and Qi membership on demand from pinned snapshots. Touched records, root sets, independent MuHash/count, version metadata and indexes commit together; indexed admission/frontier records and selected-version CAS govern native private recovery/reorg. Format-5/codec-2 storage is unchanged from the prior sparse-account source, with old/current binary reopen checked at the small frozen profile. Overlay/cache/export limits remain. Production scale, complete admission, indexes/pruning and platform faults remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G5"
+      ],
+      "go_references": [
+        "core/rawdb/schema.go",
+        "core/rawdb/accessors_chain.go",
+        "ethdb/database.go",
+        "core/bodydb.go"
+      ],
+      "rust_sources": [
+        "crates/quai-store/src/journal.rs",
+        "crates/quai-consensus/src/private_branch.rs",
+        "crates/quai-consensus/src/confirmation.rs",
+        "crates/quai-consensus/tests/confirmation.rs",
+        "crates/quai-consensus/src/strong_uncles.rs",
+        "crates/quai-consensus/tests/uncles.rs",
+        "crates/quai-consensus/src/prefork_shares.rs",
+        "crates/quai-consensus/src/weak_float.rs",
+        "crates/quai-consensus/tests/weakshares.rs",
+        "crates/quai-consensus/tests/weak_float.rs",
+        "crates/quai-consensus/src/private_canonical.rs",
+        "crates/quai-consensus/tests/canonical.rs",
+        "crates/quai-store/src/state_db.rs",
+        "crates/quai-execution/src/state_store.rs",
+        "crates/quai-consensus/src/private_branch/store.rs",
+        "crates/quai-consensus/src/confirmation/delta.rs",
+        "crates/quai-consensus/src/private_branch/reader.rs",
+        "crates/quai-store/src/admission.rs",
+        "crates/quai-consensus/src/private_canonical/catalog.rs",
+        "crates/quai-execution/src/state_store/utxo_reader.rs",
+        "crates/quai-execution/src/utxo.rs",
+        "crates/quai-execution/src/state_error.rs",
+        "crates/quai-execution/src/state_store/account_reader.rs",
+        "crates/quai-execution/src/etx.rs",
+        "crates/quai-execution/src/lockup_state.rs",
+        "crates/quai-execution/src/state_store/aux_reader.rs",
+        "crates/quai-consensus/examples/check-coincident.rs",
+        "crates/quai-consensus/tests/coincident.rs",
+        "crates/quai-consensus/examples/check-activation.rs",
+        "crates/quai-consensus/tests/activation.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs"
+      ],
+      "remaining": [
+        "Qualify sustained state/history scale, working budgets and reader retention, safe pruning, receipt/log indexes and Linux/platform faults. All execution membership types now use lazy providers; independent code fetching and further resource tuning remain open.",
+        "Broaden native sealed admission across all forks, mixed transactions, nonlocal history and expansion before global authority or live RPC."
+      ],
+      "proposed_crate": "quai-db",
+      "evidence": [
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_DURABLE_RESULTS.md",
+        "results/latest-private-branches.json",
+        "NATIVE_CONFIRMATION_RESULTS.md",
+        "fixtures/protocol/confirmation-source.json",
+        "results/latest-confirmation.json",
+        "configs/private-hierarchy-v1.json",
+        "NATIVE_UNCLES_RESULTS.md",
+        "fixtures/protocol/uncles-source.json",
+        "results/latest-uncles.json",
+        "NATIVE_WEAKSHARES_RESULTS.md",
+        "fixtures/protocol/weakshares-source.json",
+        "results/latest-weakshares.json",
+        "NATIVE_CANONICAL_RESULTS.md",
+        "results/latest-canonical.json",
+        "fixtures/protocol/canonical-source.json",
+        "NATIVE_PROCESS_RESULTS.md",
+        "results/latest-private-processes.json",
+        "NATIVE_STATE_DB_RESULTS.md",
+        "fixtures/protocol/state-db-source.json",
+        "results/latest-state-db.json",
+        "NATIVE_CANONICAL_DB_RESULTS.md",
+        "results/latest-persistent-execution.json",
+        "results/latest-canonical-db-work.json",
+        "NATIVE_INDEXED_HISTORY_RESULTS.md",
+        "results/latest-indexed-history-work.json",
+        "NATIVE_INDEXED_CATALOG_RESULTS.md",
+        "results/latest-indexed-catalog-work.json",
+        "NATIVE_LAZY_QI_RESULTS.md",
+        "results/latest-lazy-qi-work.json",
+        "NATIVE_PINNED_STATE_RESULTS.md",
+        "NATIVE_LAZY_WORLD_RESULTS.md",
+        "NATIVE_LAZY_AUX_RESULTS.md",
+        "NATIVE_ACTIVATION_RESULTS.md",
+        "fixtures/protocol/activation-source.json",
+        "results/latest-activation.json",
+        "NATIVE_COINCIDENT_RESULTS.md",
+        "fixtures/protocol/coincident-source.json",
+        "results/latest-coincident.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "indexes",
+      "title": "Bloom, address/outpoint and RPC indexes",
+      "status": "partial",
+      "native_scope": "Rust indexes imported frozen receipts/logs only.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G5",
+        "G9"
+      ],
+      "go_references": [
+        "core/bloom_indexer.go",
+        "core/chain_indexer.go",
+        "core/rawdb/accessors_indexes.go",
+        "core/bloombits/matcher.go"
+      ],
+      "rust_sources": [
+        "crates/quai-store/src/lib.rs",
+        "crates/quai-store/src/logs.rs"
+      ],
+      "remaining": [
+        "Native commit-derived address/outpoint/log indexes, pagination, reorg restoration and historical coverage."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "compatibility/standalone.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "mempool",
+      "title": "Transaction admission, pool and persistence",
+      "status": "missing",
+      "native_scope": "Submission is disabled in the shipping RPC service.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G9"
+      ],
+      "go_references": [
+        "core/tx_pool.go",
+        "core/tx_cacher.go",
+        "core/tx_journal.go",
+        "core/tx_list.go"
+      ],
+      "rust_sources": [],
+      "remaining": [
+        "Account nonces/replacement, Qi conflict sets, admission policy, journal/restart and native gossip."
+      ],
+      "proposed_crate": "quai-txpool",
+      "evidence": [],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "network_transport",
+      "title": "Peer transport, identity and resource management",
+      "status": "partial",
+      "native_scope": "Optional Rust libp2p 0.56.0 Noise/Yamux persistent-stream transport with enrollment, IPv4-loopback filtering before TCP, stream/connection/frame limits and poisoned streams after I/O failure. Eight actual Go/Rust request pairs and three early Rust/Rust block deliveries passed; default RPC binaries do not enable transport.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G6"
+      ],
+      "go_references": [
+        "p2p/node/node.go",
+        "p2p/node/nodekey.go",
+        "p2p/types.go"
+      ],
+      "rust_sources": [
+        "crates/quai-network/src/transport.rs",
+        "crates/quai-network/examples/private-peer.rs"
+      ],
+      "remaining": [
+        "Integrate with sealed full native block admission and canonical fork-choice/state publication.",
+        "Qualify all relevant network, fork, resource and historical domains; current evidence is private and bounded."
+      ],
+      "proposed_crate": "quai-network",
+      "evidence": [
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_PROCESS_RESULTS.md",
+        "results/latest-private-processes.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "peer_discovery",
+      "title": "Peer discovery, scoring and peer database",
+      "status": "partial",
+      "native_scope": "Optional private identify and Kademlia /quai behavior; only enrolled loopback addresses are admitted to the routing table. Persistent identities/peer databases, bootstrap/liveness/scoring and network discovery qualification remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G6",
+        "G7"
+      ],
+      "go_references": [
+        "common/bootnodes.go",
+        "p2p/node/peerManager/peerManager.go",
+        "p2p/node/peerManager/peerdb/peerdb.go"
+      ],
+      "rust_sources": [
+        "crates/quai-network/src/transport.rs"
+      ],
+      "remaining": [
+        "Integrate with sealed full native block admission and canonical fork-choice/state publication.",
+        "Qualify all relevant network, fork, resource and historical domains; current evidence is private and bounded."
+      ],
+      "proposed_crate": "quai-network",
+      "evidence": [
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "network_wire",
+      "title": "Quai streams, request/response envelopes and framing",
+      "status": "partial",
+      "native_scope": "Native bounded Quai framing/envelopes and ID/location/type correlation plus optional enrolled loopback Noise/Yamux persistent streams. Existing real Go/Rust interoperability evidence is retained. Private raw block acquisition now checks response hashes, strict parent heights, required context witnesses and bounded bytes/block count/deadline; semantic failures close the stream. Global peer scheduling and production transport/resource qualification remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1",
+        "G6"
+      ],
+      "go_references": [
+        "common/stream_services.go",
+        "p2p/pb/quai_messages.proto",
+        "p2p/pb/proto_services.go",
+        "p2p/protocol/constants.go",
+        "p2p/protocol/handler.go",
+        "p2p/node/streamManager/streamManager.go"
+      ],
+      "rust_sources": [
+        "crates/quai-network/src/lib.rs",
+        "crates/quai-network/examples/wire-peer.rs",
+        "crates/quai-network/src/private_sync.rs",
+        "crates/quai-network/examples/canonical-sync.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs",
+        "crates/quai-network/src/private_sync/forward.rs"
+      ],
+      "remaining": [
+        "Real libp2p transport/handshake/stream integration, query/body validation, timeout/resource handling and sync remain open."
+      ],
+      "proposed_crate": "quai-network",
+      "evidence": [
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json",
+        "NATIVE_CANONICAL_RESULTS.md",
+        "results/latest-canonical.json",
+        "fixtures/protocol/canonical-source.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "gossip",
+      "title": "Gossip topics, workshares, blocks and auxiliary templates",
+      "status": "partial",
+      "native_scope": "Optional signed strict GossipSub with manual validation before forwarding. Three-peer test proves messages wait for acceptance and rejected payloads are withheld. Full chain-data admission and production scoring/resource qualification remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G6",
+        "G7"
+      ],
+      "go_references": [
+        "p2p/node/pubsubManager/gossipsub.go",
+        "p2p/node/pubsubManager/utils.go"
+      ],
+      "rust_sources": [
+        "crates/quai-network/src/lib.rs",
+        "crates/quai-network/src/transport.rs"
+      ],
+      "remaining": [
+        "Integrate with sealed full native block admission and canonical fork-choice/state publication.",
+        "Qualify all relevant network, fork, resource and historical domains; current evidence is private and bounded."
+      ],
+      "proposed_crate": "quai-network",
+      "evidence": [
+        "fixtures/protocol/foundation-source.json",
+        "results/latest-foundation.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "sync",
+      "title": "Native chain acquisition and synchronization",
+      "status": "partial",
+      "native_scope": "Reusable private_sync and an optional private-node runner acquire raw zone/context objects over actual loopback Noise/Yamux, verify ID/location/type/hash and native work/order/ancestry, then import through sealed native private admission. Independent Rust OS processes qualify the early profile, one native fork reorg, receiver/source restarts, SIGKILL recovery and cancellation with exact Go roots/head. Persistent checksummed peer identities retain enrollment across restarts. Known heads need no peer connection. Broader forks, mixed transactions, global coordinator, production peer scheduling and automatic head following remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G7",
+        "G8"
+      ],
+      "go_references": [
+        "quai/handler.go",
+        "p2p/node/api.go",
+        "p2p/node/p2p_services.go"
+      ],
+      "rust_sources": [
+        "crates/quai-network/examples/private-replay.rs",
+        "crates/quai-network/src/private_sync.rs",
+        "crates/quai-network/examples/canonical-sync.rs",
+        "crates/quai-network/examples/private-node.rs",
+        "crates/quai-network/src/transport.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs",
+        "crates/quai-network/src/private_sync/forward.rs"
+      ],
+      "remaining": [
+        "Qualify sustained wider histories, malformed/slow peers, automatic head following and global native admission beyond the frozen independent-process private profile.",
+        "Qualify all relevant network, fork, resource and historical domains; current evidence is private and bounded."
+      ],
+      "proposed_crate": "quai-sync",
+      "evidence": [
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json",
+        "NATIVE_CANONICAL_RESULTS.md",
+        "results/latest-canonical.json",
+        "fixtures/protocol/canonical-source.json",
+        "NATIVE_PROCESS_RESULTS.md",
+        "results/latest-private-processes.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json",
+        "NATIVE_PROOF_REUSE_RESULTS.md",
+        "results/proof-handoff-work-20261116T035653866226Z/summary.json",
+        "NATIVE_WORK_REUSE_RESULTS.md",
+        "results/work-reuse-20261116T044232200275Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "rpc_framework",
+      "title": "JSON-RPC transport, IDs, errors and limits",
+      "status": "partial",
+      "native_scope": "Native HTTP JSON-RPC subset with IDs, notifications, batches, limits and backpressure.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G9"
+      ],
+      "go_references": [
+        "rpc/server.go",
+        "rpc/handler.go",
+        "rpc/subscription.go",
+        "node/rpcstack.go"
+      ],
+      "rust_sources": [
+        "crates/quai-rpc/src/lib.rs",
+        "crates/quai-rpc/src/main.rs"
+      ],
+      "remaining": [
+        "WebSocket/subscriptions, reconnects and full endpoint/module behavior."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "results/latest-rust.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "rpc_methods",
+      "title": "Node RPC methods and filters",
+      "status": "partial",
+      "native_scope": "Eight frozen-view read methods; live state/calls/estimates/submission are unavailable. The official v0.57.0 Polaris update is now the source baseline; implementation scope and remaining gaps are recorded in NATIVE_UPSTREAM_RESULTS.md.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G9"
+      ],
+      "go_references": [
+        "internal/quaiapi/backend.go",
+        "internal/quaiapi/api.go",
+        "internal/quaiapi/quai_api.go",
+        "quai/api.go",
+        "quai/api_backend.go",
+        "quai/filters/api.go"
+      ],
+      "rust_sources": [
+        "crates/quai-rpc/src/lib.rs",
+        "crates/quai-store/src/logs.rs"
+      ],
+      "remaining": [
+        "Full runtime RPC discovery and namespace/alias inventory.",
+        "Native balances/UTXOs, calls/estimates/access lists, live logs/subscriptions and signed submission.",
+        "Resolve multi-block log order and coverage behavior without masking mismatches."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "compatibility/standalone.json",
+        "compatibility/methods.json",
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "client_abi",
+      "title": "Client/ABI libraries and wallet integration",
+      "status": "deferred",
+      "native_scope": "Pinned Quais.js read acceptance exists; no Rust client/ABI library or complete wallet flow.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G9",
+        "G11"
+      ],
+      "go_references": [
+        "interfaces.go",
+        "quaiclient/quaiclient.go",
+        "quai/abi/abi.go"
+      ],
+      "rust_sources": [],
+      "remaining": [
+        "External wallet/API compatibility is required; a literal port of Go client APIs is optional.",
+        "Pelagus signing/submission/confirmation, reconnect/reorg and contract/UTXO flows."
+      ],
+      "proposed_crate": null,
+      "evidence": [],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "node_runtime",
+      "title": "Node daemon, CLI, config and lifecycle",
+      "status": "partial",
+      "native_scope": "Default binaries remain a frozen-view read-only RPC service and bounded protocol checker. An optional separately packaged private-node runner composes early-profile native admission/selected state with actual peer acquisition in independent OS processes. It has persistent checksummed peer identity, bounded local JSON control, one acquisition/import worker, cancellation between atomic block commits and clean shutdown. It requires an explicit source address and announced head. A complete production validating daemon, global protocol replay, public target and live state RPC remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G0",
+        "G7",
+        "G10"
+      ],
+      "go_references": [
+        "node/node.go",
+        "node/config.go",
+        "cmd/go-quai/start.go",
+        "cmd/utils/hierarchical_coordinator.go",
+        "quai/backend.go"
+      ],
+      "rust_sources": [
+        "crates/quai-rpc/src/main.rs",
+        "crates/quai-network/src/private_sync.rs",
+        "crates/quai-network/examples/canonical-sync.rs",
+        "crates/quai-network/examples/private-node.rs",
+        "crates/quai-network/src/transport.rs",
+        "crates/quai-consensus/src/private_profile.rs",
+        "crates/quai-consensus/tests/genesis_runtime.rs",
+        "crates/quai-consensus/examples/check-genesis-stream.rs",
+        "crates/quai-network/src/private_sync/forward.rs"
+      ],
+      "remaining": [
+        "Wire native chain-spec, storage, consensus, execution, network and sync into a Rust node.",
+        "Datadir locks/migrations, shutdown, identity and truthful health/readiness."
+      ],
+      "proposed_crate": "quai-node",
+      "evidence": [
+        "NATIVE_CANONICAL_RESULTS.md",
+        "results/latest-canonical.json",
+        "fixtures/protocol/canonical-source.json",
+        "NATIVE_PROCESS_RESULTS.md",
+        "results/latest-private-processes.json",
+        "NATIVE_GENESIS_SYNC_RESULTS.md",
+        "configs/private-execution-v2.json",
+        "results/latest-genesis-replay.json",
+        "results/latest-forward-processes.json",
+        "NATIVE_PROOF_REUSE_RESULTS.md",
+        "results/proof-handoff-work-20261116T035653866226Z/summary.json",
+        "NATIVE_WORK_REUSE_RESULTS.md",
+        "results/work-reuse-20261116T044232200275Z/summary.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "mining",
+      "title": "Block/workshare construction, mining RPC and Stratum",
+      "status": "deferred",
+      "native_scope": "No native block producer or Stratum server. The official v0.57.0 Polaris update is now the source baseline; implementation scope and remaining gaps are recorded in NATIVE_UPSTREAM_RESULTS.md.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G11"
+      ],
+      "go_references": [
+        "core/worker.go",
+        "core/miner.go",
+        "stratum/server.go",
+        "stratum/kawpow.go"
+      ],
+      "rust_sources": [],
+      "remaining": [
+        "Template/transaction selection, workshares, mining jobs and Stratum.",
+        "Mining is outside the first non-mining validator/RPC target; import validation is not optional."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "NATIVE_UPSTREAM_RESULTS.md",
+        "compatibility/reference-baseline.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "crypto",
+      "title": "Other cryptographic primitives and precompile backends",
+      "status": "partial",
+      "native_scope": "Native ECDSA recovery, SHA256/RIPEMD160/identity, modular exponentiation, BN254 add/mul/pairing and Blake2F precompile backends plus exact MuHash3072 hashing. Complete protocol/domain and whole-client parity remain open.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G3",
+        "G4"
+      ],
+      "go_references": [
+        "crypto/crypto.go",
+        "crypto/signature_cgo.go",
+        "crypto/bn256/bn256_fast.go",
+        "crypto/blake2b/blake2b.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/transaction.rs",
+        "crates/quai-primitives/src/header.rs",
+        "crates/quai-execution/src/evm/precompile.rs",
+        "crates/quai-execution/src/muhash.rs"
+      ],
+      "remaining": [
+        "Required precompile/PoW/donor crypto and complete failure-domain qualification.",
+        "Profile pure-Rust ECDSA recovery separately from the faster Qi path."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "results/latest-transaction-pipeline.json",
+        "NATIVE_STATEFUL_RESULTS.md",
+        "results/latest-stateful.json"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "events",
+      "title": "Native event feeds and canonical notifications",
+      "status": "missing",
+      "native_scope": "No committed-chain event/subscription system.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G5",
+        "G9"
+      ],
+      "go_references": [
+        "event/feed.go",
+        "core/events.go"
+      ],
+      "rust_sources": [],
+      "remaining": [
+        "Publish committed head/log/pending/reorg notifications coherently and bound consumer queues."
+      ],
+      "proposed_crate": null,
+      "evidence": [],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "telemetry",
+      "title": "Metrics, logs, statistics and operations",
+      "status": "partial",
+      "native_scope": "Basic frozen-service health counters and benchmark instrumentation.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G10"
+      ],
+      "go_references": [
+        "metrics_config/metrics.go",
+        "log/logger.go",
+        "quaistats/quaistats.go",
+        "internal/telemetry/workshare_tracker.go"
+      ],
+      "rust_sources": [
+        "crates/quai-rpc/src/lib.rs"
+      ],
+      "remaining": [
+        "Native sync/validation/peer/database metrics, operational limits and sustained canary measurements."
+      ],
+      "proposed_crate": null,
+      "evidence": [],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "build_support",
+      "title": "Build, release and offline compatibility tooling",
+      "status": "support",
+      "native_scope": "Native Go-denied build/distribution and isolated offline Go oracle are implemented.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "B0",
+        "G10"
+      ],
+      "go_references": [
+        "build/ci.go",
+        "internal/build/archive.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/bin/quai-protocol-check.rs"
+      ],
+      "remaining": [
+        "Native node packaging/reproducibility and deployment qualification, beyond current two binaries."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "results/rust-no-go-build.json",
+        "scripts/build.py"
+      ],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "utilities",
+      "title": "Shared address/math/configuration helpers",
+      "status": "partial",
+      "native_scope": "Selected primitive helpers exist; reuse Rust libraries where behavior matches.",
+      "required_for_first_validating_node": true,
+      "milestones": [
+        "G1",
+        "G3",
+        "G4"
+      ],
+      "go_references": [
+        "common/address.go",
+        "common/types.go",
+        "common/big.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/src/lib.rs",
+        "crates/quai-primitives/src/transaction.rs"
+      ],
+      "remaining": [
+        "Qualify consensus-sensitive arithmetic and address/context helpers with vectors; no need for a literal translation of all utility APIs."
+      ],
+      "proposed_crate": null,
+      "evidence": [],
+      "whole_go_component_parity": false
+    },
+    {
+      "id": "test_support",
+      "title": "Go mocks, fuzz/support infrastructure",
+      "status": "support",
+      "native_scope": "Rust unit/differential/SDK harnesses cover bounded implemented subsets.",
+      "required_for_first_validating_node": false,
+      "milestones": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G6",
+        "G9"
+      ],
+      "go_references": [
+        "p2p/mocks/mockedHost.go",
+        "p2p/protocol/mocks/mockedQuaip2pNode.go"
+      ],
+      "rust_sources": [
+        "crates/quai-primitives/tests/foundation.rs",
+        "crates/quai-execution/tests/differential.rs"
+      ],
+      "remaining": [
+        "Port the behavioral/security cases, not generated Go mock implementations.",
+        "Line/function test coverage has not been measured and is distinct from this inventory."
+      ],
+      "proposed_crate": null,
+      "evidence": [
+        "results/latest-foundation.json"
+      ],
+      "whole_go_component_parity": false
+    }
+  ]
+}

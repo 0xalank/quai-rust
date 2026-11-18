@@ -1,0 +1,27 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "df2d90091f53925be51c82e5686da22c2239a08b9db21bb553b73e1b5ff90d49",
+  "driver_sha256": "6638fea021ce3c7ee5e63b42401bee9e01df5f4653581a8e4f8e402809956a72",
+  "oracle_sources": {
+    "reference/polaris/main.go": "b4320d94b69870abb1d5a0013892ddd20b87ca658348f8a9027cef9918ad1c9a",
+    "reference/polaris/core-export.go": "64844058cc881ccb68bfde21da695931f223a1250b0c42eb5beac67c7c6a1c1e",
+    "reference/header/core-export.go": "1af9581b7be85418012a82021a94f732f50f61440090cab9fc0865287fc88d4a",
+    "reference/history/core-export.go": "c20812523db8a523a7f7ee52f9b7fd7e18e45383ad2dac2a155d5555585aae51",
+    "reference/consensus/core-export.go": "5a5c20d220b18482547b0f4ebef53ce5f433c0a03225d7f5fab11c7f9c8e0c53"
+  },
+  "sources": {
+    "core/poem.go": "177c7de59c903b9470fa55ef0c52e7d5866be448b6f27e4e95d08b312aa8d65f",
+    "core/headerchain_validation.go": "6f412c112f2a675a7811be9fca32d1827257ad962c092d79ab4c3d607df5fdf8",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
+    "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",
+    "core/state/gen_allocs.go": "5d13fc2496da38e53f1bd81a7a7dabab214902385d1bfdf0b25c11f7e7616a24",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "params/founder_forfeiture_addresses.json": "c01ad27da05145b60a9834bf1bb77e6b01b9d2074528ca2fbea1dc5ffd566761",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "Actual all-height work-object binding, controlled-hash CalcOrder and donor PoW identity around Polaris. Signatures/real PoW, economic replay, founder allocations and canonical admission are separate."
+}

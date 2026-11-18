@@ -1,0 +1,7 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "recorded_report": "results/upstream-sdk-20261111T033215508187Z/summary.json",
+  "sdk_lock_sha256": "7a033f9cee7f8f34a1c693d31600093b78cb9dab6650edf73823421fab216bca",
+  "scope": "Actual official v0.57.0 Go handlers over disposable seeded state, checked through both pinned SDKs. Frozen expected values unchanged; no PoW/canonical validation or public network.",
+  "previous_reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072"
+}

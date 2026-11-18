@@ -1,0 +1,13 @@
+# Native parent economic controllers and all-ETX runtime
+
+The native library now composes stable conversion-slip ordering, filtering, exact Go binary cubic rounding, conversion quotes, token-choice updates and all four next-header economic fields. Parent/grandparent/window identities and override keys remain bound to the supplied branch. Missing history stays unavailable; pre-controller routing and count/encoded-byte budgets are explicit.
+
+The exact source passes **278 release tests**, **13 native transport tests** and **28 qualification steps**, including reduced builds with Go/protoc denied. It covers **223 Rust sources / 24 ordinary source assets**. Parent components match **1024 Go fields across 256 histories**, with **5120 native checks**; the oracle rejects **768 changed fields / 512 missing histories**, and Rust rejects **768 missing inputs / 1280 invalid bindings**. The separate cubic primitive matches **4096 Go results**. Existing controller arithmetic and 4000-entry windows retain their 3200 and 25296 direct Go comparisons.
+
+The optional private-execution-v3 node dispatches all seven defined incoming kinds. Its activated seven-kind cases use supplied history. Its actual independent-process genesis prefix covers **16 blocks / 15 assertions**, recovery and known-head zero I/O. Separate v2 fresh replay and independent-process synchronization cover **8192 genesis-linked blocks**. This does not qualify activated canonical ancestry across all kinds.
+
+Decoded-history reuse is retained under **32 entries / 16 MiB of encoded payload**, with fresh ancestry/version/payload verification before reuse across readers. Later corruption remains an error without changing HEAD. Encoded bytes are not heap/RSS. The historical G72-versus-F806 cache experiment measured medians of **625.616 -> 606.697 seconds** and **435.218 -> 414.840 native CPU seconds** over two runs per variant. Baseline wall times ranged **580.392–670.840 seconds**, overlapping the candidate's **606.094–607.300 seconds**. The speedup is **inconclusive** under shared-host variation. These timings do not measure this current source, activated workloads, p2p/RPC, allocations or memory.
+
+The completed 259216-block native source replay is separately pinned to older build 3cc680. It is historical evidence; the dependent receiver and current-source upgrade coverage require their own proof. Full controller admission, forward repricing/refunds, later/nonlocal/expansion consensus, global coordinator behavior and public synchronization remain unfinished. The default RPC chain view remains frozen/unverified. Disk formats and existing profile contracts are unchanged.
+
+Source-bound evidence: `results/prime-economics-work-20261116T160943614195Z/summary.json`.

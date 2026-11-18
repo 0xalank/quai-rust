@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "name": "quai-rust-execution-v3",
+  "kind": "private-native-genesis-all-etx-execution",
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "reference_version": "v0.57.0",
+  "chain_id": 1337,
+  "location": [
+    0,
+    0
+  ],
+  "active_hierarchy": [
+    [],
+    [
+      0
+    ],
+    [
+      0,
+      0
+    ]
+  ],
+  "genesis": {
+    "nonce": 0,
+    "timestamp": 1769112000,
+    "extra": "0x717561692d727573742d61646d697373696f6e2d7631",
+    "allocation_hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "gas_limit": 30000000,
+    "difficulty": "2",
+    "starting_expansion": 0,
+    "contexts": [
+      {
+        "body_hash": "0x2e76dad80e7c2f67eda94f722d54edf51b42eff949ba32b655fdb50b586fb080",
+        "hash": "0x53fc82ff80d79fb2f225ecc80fe9b5130dd9f1d248a6140f41096ce822fb10cd",
+        "location": []
+      },
+      {
+        "body_hash": "0x2e76dad80e7c2f67eda94f722d54edf51b42eff949ba32b655fdb50b586fb080",
+        "hash": "0x53fc82ff80d79fb2f225ecc80fe9b5130dd9f1d248a6140f41096ce822fb10cd",
+        "location": [
+          0
+        ]
+      },
+      {
+        "body_hash": "0x2e76dad80e7c2f67eda94f722d54edf51b42eff949ba32b655fdb50b586fb080",
+        "hash": "0x53fc82ff80d79fb2f225ecc80fe9b5130dd9f1d248a6140f41096ce822fb10cd",
+        "location": [
+          0,
+          0
+        ]
+      }
+    ]
+  },
+  "initial_allocations": [],
+  "initial_utxos": [],
+  "initial_etxs": [],
+  "fork_manifest": {
+    "source_sha256": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "polaris_prime": 2444574,
+    "kawpow_prime": 1171500,
+    "new_opcodes_zone": 3490000,
+    "max_grind_increase_zone": 1865000,
+    "transition_duration_prime": 129600,
+    "progpow_grace_end_prime": 1301100
+  },
+  "fee_profile": "official-upstream-no-local-fee-overlay",
+  "engines": {
+    "legacy": "progpow",
+    "post_kawpow": "kawpow-auxiliary"
+  },
+  "protocol_limits": {
+    "max_frame_bytes": 3145728,
+    "block_gas_limit": 30000000,
+    "state_limit": 5000000
+  },
+  "transport": {
+    "listen": "/ip4/127.0.0.1/tcp/0",
+    "bootstrap_peers": [],
+    "allow_public_peers": false,
+    "stream_protocol": "/quai/1.0.0",
+    "dht_protocol": "/quai"
+  },
+  "checkpoint": null,
+  "qualification": {
+    "genesis_payloads_verified_against_go": true,
+    "full_allocation_state_qualified": false,
+    "full_block_replay_qualified": false,
+    "private_sync_qualified": false,
+    "public_network_qualified": false
+  },
+  "confirmation_scope": {
+    "pre_transaction_only": false,
+    "start_from_genesis_only": true,
+    "supplied_checkpoint_allowed": false,
+    "max_prime_terminus_exclusive": 262000,
+    "native_contexts": [
+      0,
+      1,
+      2
+    ],
+    "runtime_transaction_types": [
+      0,
+      1,
+      2
+    ],
+    "runtime_incoming_types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "qualification": "experimental all-defined-ETX runtime; supplied checkpoint components do not establish canonical ancestry; no public target"
+  }
+}

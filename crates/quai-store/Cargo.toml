@@ -1,0 +1,13 @@
+[package]
+name = "quai-store"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["arbitrary_precision", "raw_value"] }
+sha2 = "=0.10.9"
+
+redb = "=4.5.0"
+quai-primitives = { path = "../quai-primitives" }

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "sources": {
+    "common/proto_common.proto": "c6a398b1a8daf40c8a7460e8220b0f4f3c248c8b462aa284fe3ae82f0c35c078",
+    "core/types/proto_block.proto": "56dc50f200e62d0ce18506983f5ae3738616e429facdcf6e631aa4cbcd42614e",
+    "core/rawdb/db.proto": "38165c6d888e77d418e6e8130c12bb9875251eb56784d04dc8435a2257303c42",
+    "p2p/pb/quai_messages.proto": "ccc1df3662e02d17c3a58dd7dd07057cd0091f8f1398f3c244d1d2b4e269b324",
+    "p2p/node/peerManager/peerdb/peer_info.proto": "1324bb0a2257106c9442a1c9656b7206ba8f19c3c3b59e0c1033b9e68bf50a48"
+  },
+  "generator": {
+    "scripts/gen_schema.py": "f01fc54aebfb48e1d48e41b420600036310b976c6c5125591b8ccc3c38b12ca3",
+    "reference/prost-schema/Cargo.toml": "e8896d2d86465acc26fbb0660d7be22f107a844fc45b5827301371527cc2dbbf",
+    "reference/prost-schema/Cargo.lock": "4557bcc09df0b0b975e834a2935a98390749eff2878d6cf95d221c202b36027f",
+    "reference/prost-schema/src/main.rs": "2f5a70842c29caf5fcd8d932547b49f85d7317f6f7d28c1ae71b8013d5cbd3ae"
+  },
+  "protoc": "libprotoc 34.1",
+  "generated": {
+    "crates/quai-primitives/src/schema/block.rs": "38bde2d9d67d20f6ddf58e70c58556c10bc666e6d0f09bdc3d78c7b2c28b0689",
+    "crates/quai-primitives/src/schema/common.rs": "10ab27209cff3e8b58a721520002eac2d40ce02eaa2a085b1da37c29d2bf0370",
+    "crates/quai-primitives/src/schema/db.rs": "7a4d2870c060c81975011da6d4851836eb91a3a379266c3f39406626644e609c",
+    "crates/quai-primitives/src/schema/descriptor.rs": "917b837b2e58c4580e16aeef10ef6103073e50875637dc754ae3d2edc062eec3",
+    "crates/quai-primitives/src/schema/peerdb.rs": "96d98ea0a205320918210fbf9ee224d376b2f6416a59ed5c30a83807403d1156",
+    "crates/quai-primitives/src/schema/quaiprotocol.rs": "ac5207cab6e5a63b595ebfa0e567dbaad3cc22ede82452b1e0b7d296023dd78e"
+  },
+  "scope": "All five pinned schemas; raw field bindings and bounded preflight descriptors, not complete semantic protocol validation. Go/protoc are absent from the default build."
+}

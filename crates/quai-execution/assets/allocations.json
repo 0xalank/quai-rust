@@ -1,0 +1,14 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "source_sha256": {
+    "params/genesis_alloc.json": "652f49600e4a1a9cab47eace536d6236eb778c0efb97166d90ca7c1f6297a1f9",
+    "params/forfeiture_addresses.json": "711f0b0380deec09a92402bf23795c38c8b2d62e318cf7631f8ca84a0bb84d34",
+    "params/founder_forfeiture_addresses.json": "c01ad27da05145b60a9834bf1bb77e6b01b9d2074528ca2fbea1dc5ffd566761"
+  },
+  "asset_sha256": "b667359bb778e747aa8db3d4ff3871488b3e7f426b8da95790846cb0862ad6f3",
+  "accounts": 16744,
+  "entries": 54752,
+  "format": "14-byte magic, u32be count, entries (u64be height, 20-byte address, u8 forfeiture flags, u256be amount), sorted by height and address",
+  "license": "GPL-3.0-only; official go-quai parameter data",
+  "driver_sha256": "ba57d17eaeec75874a3ea9ae427178b654014cfb55c191eef80d7cb7948a54f2"
+}

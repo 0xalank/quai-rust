@@ -1,0 +1,437 @@
+{
+  "schema": 1,
+  "audited_utc": "2026-11-16",
+  "scope": "First independent non-mining validator/RPC node; optional mining and client-library APIs tracked separately.",
+  "network_ready": false,
+  "runtime_go_allowed": false,
+  "target_template": "network-target.template.json",
+  "target_qualified": false,
+  "gates": [
+    {
+      "id": "B0",
+      "title": "Rust-only build and runtime boundary",
+      "depends_on": [],
+      "status": "passed",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Default build/distribution/runtime do not invoke or depend on Go; Go-backed flags are rejected.",
+        "Frozen-view compatibility runs without an upstream; output explicitly identifies unverified chain state."
+      ],
+      "proofs": [
+        "results/stateful-20261111T034753065531Z/no-go-build.json",
+        "results/rust-20261111T033008338583Z/summary.json",
+        "results/consensus-work-20261111T153712940009Z/rust-no-go-build.json",
+        "results/rust-20261111T152434489997Z/summary.json",
+        "results/confirmation-work-20261112T192223713248Z/rust-no-go-build.json",
+        "results/rust-20261112T191239375136Z/summary.json",
+        "results/uncles-work-20261112T201412245555Z/rust-no-go-build.json",
+        "results/rust-20261112T200451608950Z/summary.json",
+        "results/weakshares-work-20261112T204859886465Z/rust-no-go-build.json",
+        "results/rust-20261112T203724376786Z/summary.json",
+        "results/canonical-work-20261113T035743722472Z/rust-no-go-build.json",
+        "results/rust-20261113T035210548267Z/summary.json",
+        "results/process-work-20261113T051026074109Z/rust-no-go-build.json",
+        "results/rust-20261113T045850692816Z/summary.json",
+        "results/state-db-work-20261113T071929642297Z/rust-no-go-build.json",
+        "results/rust-20261113T071223763481Z/summary.json",
+        "results/state-db-work-20261113T072233097731Z/rust-no-go-build.json",
+        "results/canonical-db-work-20261113T083227773524Z/rust-no-go-build.json",
+        "results/rust-20261113T082355627360Z/summary.json",
+        "results/indexed-catalog-work-20261113T104125307298Z/rust-no-go-build.json",
+        "results/rust-20261113T103406417523Z/summary.json",
+        "results/lazy-qi-work-20261113T112905454596Z/rust-no-go-build.json",
+        "results/rust-20261113T112318512565Z/summary.json",
+        "results/state-lease-work-20261113T115740143688Z/rust-no-go-build.json",
+        "results/rust-20261113T115039068222Z/summary.json",
+        "results/lazy-world-work-20261113T130406469801Z/rust-no-go-build.json",
+        "results/rust-20261113T125702685937Z/summary.json",
+        "results/lazy-aux-work-20261113T140457474773Z/rust-no-go-build.json",
+        "results/rust-20261113T135735306328Z/summary.json",
+        "results/activation-work-20261113T145333159085Z/rust-no-go-build.json",
+        "results/rust-20261113T144903206955Z/summary.json",
+        "results/activation-work-20261113T152221476139Z/rust-no-go-build.json",
+        "results/rust-20261113T151700940807Z/summary.json",
+        "results/coincident-work-20261116T001208621057Z/rust-no-go-build.json",
+        "results/rust-20261116T000713978676Z/summary.json",
+        "results/genesis-sync-work-20261116T023212084722Z/rust-no-go-build.json",
+        "results/rust-20261116T022650858030Z/summary.json",
+        "results/rust-no-go-build.json",
+        "results/rust-20261116T035137383318Z/summary.json",
+        "results/rust-20261116T042617753954Z/summary.json",
+        "results/rust-20261116T055148936113Z/summary.json",
+        "results/rust-20261116T062122285924Z/summary.json",
+        "results/rust-20261116T064139282747Z/summary.json"
+      ]
+    },
+    {
+      "id": "G0",
+      "title": "Pinned network and fork contract",
+      "depends_on": [
+        "B0"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Use the reviewed official v0.57.0 source baseline, keep the archived local fee overlay inactive, and record immutable network/configuration hashes; source selection does not qualify a runtime target.",
+        "Pin chain ID, engine(s), prime/region/zone genesis, active hierarchy, fork rules and height contexts, activation schedule and protocol/resource limits.",
+        "Declare initial target and known checkpoint; a checkpoint does not bypass native validation of downloaded blocks.",
+        "Fill and qualify a separate target manifest; no unresolved null/placeholder values may enter a live configuration."
+      ],
+      "proofs": [
+        "results/polaris-20261111T033724599735Z/summary.json",
+        "results/genesis-20261111T033542894192Z/summary.json",
+        "results/latest-stateful.json"
+      ],
+      "partial_scope": "Official allocation data imported into a native height-indexed asset; 28 allocation-root comparisons include Singularity and Polaris forfeiture changes. Private chain 1337 source/config/genesis remain pinned. Public target and complete initialization qualification remain open."
+    },
+    {
+      "id": "G1",
+      "title": "Full protocol schemas and bounded wire decoding",
+      "depends_on": [
+        "G0"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Implement complete work-object header/body/views, transactions, receipts, auxiliary forms and network request/response/gossip envelopes.",
+        "Cross-client encode/decode/error/unknown-field tests match the selected profile; qualify maximum accepted values from the actual protocol.",
+        "Reject oversized/truncated streams and malformed nested messages within bounded CPU/memory; preserve required canonicalization and routing rules.",
+        "Track typed-RLP decoding for raw-transaction RPC in parallel; network work-object transport is Protobuf."
+      ],
+      "proofs": [
+        "results/foundation-20261111T033150342225Z/summary.json",
+        "results/placement-20261111T033507053124Z/summary.json",
+        "results/genesis-20261111T033542894192Z/summary.json"
+      ],
+      "partial_scope": "All raw schemas; bounded complete work-object reconstruction. Full semantic domains/auxiliary forms/limits remain open."
+    },
+    {
+      "id": "G2",
+      "title": "Complete block and commitment verification",
+      "depends_on": [
+        "G1"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Recompute every applicable block/header/body/transaction/receipt/uncle/ETX commitment for the selected fork context.",
+        "Compare accepted and rejected real complete blocks against the oracle, including auxiliary forms, multi-block batches and commitment mutations.",
+        "Define empty/nonempty encodings, ordering, duplicate handling and integer boundaries; do not treat existing bounded header hashes as full block validity."
+      ],
+      "proofs": [
+        "results/foundation-20261111T033150342225Z/summary.json",
+        "results/placement-20261111T033507053124Z/summary.json",
+        "results/genesis-20261111T033542894192Z/summary.json",
+        "results/confirmation-20261112T191407950486Z/summary.json",
+        "results/uncles-20261112T200541701060Z/summary.json",
+        "results/weakshares-20261112T203829632896Z/summary.json",
+        "results/etx-family-20261116T054446611765Z/summary.json",
+        "results/etx-family-work-20261116T055952448924Z/summary.json",
+        "results/etx-family-20261116T060705984950Z/summary.json",
+        "results/controller-work-20261116T064028341659Z/summary.json",
+        "results/etx-family-20261116T063421431656Z/summary.json",
+        "results/choice-window-work-20261116T070003552554Z/summary.json"
+      ],
+      "partial_scope": "Native branch-bound token-choice windows now preserve exact 4000-entry Go warmup, rollover, signed correction rounding and rate feedback. Native state transactions persist changed rows and metadata atomically, with fork/root binding and malformed/recovery rejection. The explicit supplied pre-controller seed does not establish canonical ancestry. Negative final difficulty and full controller/admission integration remain open. Runtime profiles and disk formats are unchanged; full consensus and public canonical sync remain unfinished."
+    },
+    {
+      "id": "G3",
+      "title": "Serial execution and economic state transitions",
+      "depends_on": [
+        "G2"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Execute Quai custom EVM opcodes, precompiles, gas, access-list rules, fees/rent, scope/address rules and forked fee features from identical pre-state.",
+        "Execute Qi ownership/signatures, UTXO spends/creation, double-spend rejection, fees, locks, conversions and hierarchy ETX effects.",
+        "Account/UTXO/ETX commitments, receipts/log order and multiplicity, gas, fees, rewards and emitted ETXs agree for before/at/after every relevant fork.",
+        "Full replay includes rejected blocks/transactions and long histories. A Rust EVM library is a component, not automatic Quai compatibility.",
+        "Keep execution serial until equivalence is established; later parallelism must validate all account, UTXO and ETX conflicts deterministically."
+      ],
+      "proofs": [
+        "results/foundation-20261111T033150342225Z/summary.json",
+        "results/vm-20261111T033256807935Z/summary.json",
+        "results/header-20261111T033418843443Z/summary.json",
+        "results/latest-stateful.json",
+        "results/consensus-work-20261111T153712940009Z/summary.json",
+        "results/confirmation-20261112T191407950486Z/summary.json",
+        "results/uncles-20261112T200541701060Z/summary.json",
+        "results/weakshares-20261112T203829632896Z/summary.json",
+        "results/canonical-20261113T035507464093Z/summary.json",
+        "results/activation-20261113T144324498695Z/summary.json",
+        "results/activation-20261113T151151594206Z/summary.json",
+        "results/coincident-20261116T000018268387Z/summary.json",
+        "results/coincident-20261116T021427547774Z/summary.json",
+        "results/genesis-replay-20261116T013854966690Z/summary.json",
+        "results/forward-processes-20261116T014417167978Z/summary.json",
+        "results/genesis-replay-20261116T030224548396Z/summary.json",
+        "results/forward-processes-20261116T031604935824Z/summary.json",
+        "results/genesis-processes-20261116T030601583863Z/summary.json",
+        "results/genesis-replay-20261116T034831544406Z/summary.json",
+        "results/forward-processes-20261116T040016726603Z/summary.json",
+        "results/genesis-processes-20261116T043105575658Z/summary.json",
+        "results/etx-family-20261116T054446611765Z/summary.json",
+        "results/etx-family-work-20261116T055952448924Z/summary.json",
+        "results/etx-family-20261116T060705984950Z/summary.json",
+        "results/controller-work-20261116T064028341659Z/summary.json",
+        "results/etx-family-20261116T063421431656Z/summary.json",
+        "results/choice-window-work-20261116T070003552554Z/summary.json"
+      ],
+      "partial_scope": "Native branch-bound token-choice windows now preserve exact 4000-entry Go warmup, rollover, signed correction rounding and rate feedback. Native state transactions persist changed rows and metadata atomically, with fork/root binding and malformed/recovery rejection. The explicit supplied pre-controller seed does not establish canonical ancestry. Negative final difficulty and full controller/admission integration remain open. Runtime profiles and disk formats are unchanged; full consensus and public canonical sync remain unfinished."
+    },
+    {
+      "id": "G4",
+      "title": "PoW, auxiliary validation and hierarchy fork choice",
+      "depends_on": [
+        "G2"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Validate supported ProgPoW/KAWPOW/SHA BTC/SHA BCH/Scrypt donor proofs, merge-mining commitments, coinbase/Merkle rules and auxiliary-template quorum signatures.",
+        "Match header/workshare/uncle rules, difficulty/entropy, PoEM fork choice, expansion, rewards and prime/region/zone ordering at declared fork boundaries.",
+        "Use competing branches, invalid proofs, malformed shares and cross-context vectors; imported PoW/reward validation is mandatory even for a non-mining node."
+      ],
+      "proofs": [
+        "results/polaris-20261111T033724599735Z/summary.json",
+        "results/consensus-20261111T033308946573Z/summary.json",
+        "results/auxiliary-20261111T033350174525Z/summary.json",
+        "results/history-20261111T033406567056Z/summary.json",
+        "results/header-20261111T033418843443Z/summary.json",
+        "results/hierarchy-20261111T033436724593Z/summary.json",
+        "results/placement-20261111T033507053124Z/summary.json",
+        "results/genesis-20261111T033542894192Z/summary.json",
+        "results/frontier-20261111T033613913811Z/summary.json",
+        "results/eligibility-20261111T033644662204Z/summary.json",
+        "results/coordinator-20261111T033658225439Z/summary.json",
+        "results/confirmation-20261112T191407950486Z/summary.json",
+        "results/uncles-20261112T200541701060Z/summary.json",
+        "results/weakshares-20261112T203829632896Z/summary.json",
+        "results/canonical-20261113T035507464093Z/summary.json",
+        "results/activation-20261113T144324498695Z/summary.json",
+        "results/activation-20261113T151151594206Z/summary.json",
+        "results/coincident-20261116T000018268387Z/summary.json",
+        "results/coincident-20261116T021427547774Z/summary.json",
+        "results/genesis-replay-20261116T013854966690Z/summary.json",
+        "results/forward-processes-20261116T014417167978Z/summary.json",
+        "results/genesis-replay-20261116T030224548396Z/summary.json",
+        "results/forward-processes-20261116T031604935824Z/summary.json",
+        "results/genesis-processes-20261116T030601583863Z/summary.json",
+        "results/genesis-replay-20261116T034831544406Z/summary.json",
+        "results/forward-processes-20261116T040016726603Z/summary.json",
+        "results/genesis-processes-20261116T043105575658Z/summary.json",
+        "results/etx-family-20261116T054446611765Z/summary.json",
+        "results/etx-family-work-20261116T055952448924Z/summary.json",
+        "results/etx-family-20261116T060705984950Z/summary.json",
+        "results/controller-work-20261116T064028341659Z/summary.json",
+        "results/etx-family-20261116T063421431656Z/summary.json",
+        "results/choice-window-work-20261116T070003552554Z/summary.json"
+      ],
+      "partial_scope": "Native branch-bound token-choice windows now preserve exact 4000-entry Go warmup, rollover, signed correction rounding and rate feedback. Native state transactions persist changed rows and metadata atomically, with fork/root binding and malformed/recovery rejection. The explicit supplied pre-controller seed does not establish canonical ancestry. Negative final difficulty and full controller/admission integration remain open. Runtime profiles and disk formats are unchanged; full consensus and public canonical sync remain unfinished."
+    },
+    {
+      "id": "G5",
+      "title": "Durable validated canonical state",
+      "depends_on": [
+        "G3",
+        "G4"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Atomically publish head, account/UTXO/ETX state, receipts, indexes and availability as one coherent generation.",
+        "Reorg/rollback, restart, interrupted commits, snapshots and pruning preserve exact roots and request-consistent generations.",
+        "Recover from injected crashes at commit boundaries without publishing partial or stale validated state.",
+        "Use a native schema with explicit migrations; direct reading of Go database files is optional and separately qualified."
+      ],
+      "proofs": [
+        "results/latest-stateful.json",
+        "results/stateful-20261111T034753065531Z/transport.json",
+        "results/confirmation-20261112T191407950486Z/summary.json",
+        "results/uncles-20261112T200541701060Z/summary.json",
+        "results/weakshares-20261112T203829632896Z/summary.json",
+        "results/canonical-20261113T035507464093Z/summary.json",
+        "results/private-processes-20261113T050448168865Z/summary.json",
+        "results/state-db-20261113T070714512879Z/summary.json",
+        "results/persistent-execution-20261113T081505297963Z/summary.json",
+        "results/canonical-20261113T081936664723Z/summary.json",
+        "results/private-processes-20261113T082331448428Z/summary.json",
+        "results/persistent-execution-20261113T102954200022Z/summary.json",
+        "results/canonical-20261113T103248227956Z/summary.json",
+        "results/private-processes-20261113T103333954837Z/summary.json",
+        "results/persistent-execution-20261113T111812181579Z/summary.json",
+        "results/canonical-20261113T112203775881Z/summary.json",
+        "results/private-processes-20261113T112247075649Z/summary.json",
+        "results/persistent-execution-20261113T114527776488Z/summary.json",
+        "results/canonical-20261113T114924271747Z/summary.json",
+        "results/private-processes-20261113T115007947294Z/summary.json",
+        "results/persistent-execution-20261113T125201935196Z/summary.json",
+        "results/canonical-20261113T125547755016Z/summary.json",
+        "results/private-processes-20261113T125631407799Z/summary.json",
+        "results/persistent-execution-20261113T135219238658Z/summary.json",
+        "results/canonical-20261113T135619961866Z/summary.json",
+        "results/private-processes-20261113T135703899221Z/summary.json",
+        "results/activation-20261113T144324498695Z/summary.json",
+        "results/persistent-execution-20261113T144339477294Z/summary.json",
+        "results/canonical-20261113T144742855973Z/summary.json",
+        "results/private-processes-20261113T144826686954Z/summary.json",
+        "results/activation-20261113T151151594206Z/summary.json",
+        "results/persistent-execution-20261113T151207595489Z/summary.json",
+        "results/canonical-20261113T151523745836Z/summary.json",
+        "results/private-processes-20261113T151615670967Z/summary.json",
+        "results/coincident-20261116T000018268387Z/summary.json",
+        "results/persistent-execution-20261116T000101173970Z/summary.json",
+        "results/canonical-20261116T000535400154Z/summary.json",
+        "results/private-processes-20261116T000640546197Z/summary.json",
+        "results/coincident-20261116T021427547774Z/summary.json",
+        "results/persistent-execution-20261116T021529626095Z/summary.json",
+        "results/canonical-20261116T021942463936Z/summary.json",
+        "results/private-processes-20261116T022634297853Z/summary.json",
+        "results/genesis-replay-20261116T013854966690Z/summary.json",
+        "results/forward-processes-20261116T014417167978Z/summary.json",
+        "results/genesis-replay-20261116T030224548396Z/summary.json",
+        "results/forward-processes-20261116T031604935824Z/summary.json",
+        "results/genesis-processes-20261116T030601583863Z/summary.json",
+        "results/genesis-replay-20261116T034831544406Z/summary.json",
+        "results/forward-processes-20261116T040016726603Z/summary.json",
+        "results/genesis-processes-20261116T043105575658Z/summary.json",
+        "results/etx-family-20261116T054446611765Z/summary.json",
+        "results/etx-family-work-20261116T055952448924Z/summary.json",
+        "results/etx-family-20261116T060705984950Z/summary.json",
+        "results/controller-work-20261116T064028341659Z/summary.json",
+        "results/etx-family-20261116T063421431656Z/summary.json",
+        "results/choice-window-work-20261116T070003552554Z/summary.json"
+      ],
+      "partial_scope": "Native branch-bound token-choice windows now preserve exact 4000-entry Go warmup, rollover, signed correction rounding and rate feedback. Native state transactions persist changed rows and metadata atomically, with fork/root binding and malformed/recovery rejection. The explicit supplied pre-controller seed does not establish canonical ancestry. Negative final difficulty and full controller/admission integration remain open. Runtime profiles and disk formats are unchanged; full consensus and public canonical sync remain unfinished."
+    },
+    {
+      "id": "G6",
+      "title": "Controlled Rust-Go peer interoperability",
+      "depends_on": [
+        "G1"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "On an isolated lab network, interoperate on peer identity, Noise/transport/mux negotiation, identify, DHT discovery, connection/resource management and explicit private bootnodes.",
+        "Match /quai/1.0.0 streams, four-byte big-endian length prefix, location/request correlation, genesis/location/type topics and selected GossipSub rules.",
+        "Exercise real header/block requests, gossip and auxiliary messages plus oversize, timeout, disconnect, invalid-peer and backpressure cases.",
+        "Until execution/consensus gates pass, all received content is unverified and cannot establish canonical authority or validated RPC."
+      ],
+      "proofs": [
+        "results/foundation-20261111T033150342225Z/summary.json",
+        "results/latest-stateful.json",
+        "results/stateful-20261111T034753065531Z/transport.json",
+        "results/canonical-20261113T035507464093Z/summary.json",
+        "results/private-processes-20261113T050448168865Z/summary.json"
+      ],
+      "partial_scope": "Optional Rust libp2p 0.56.0 Noise/Yamux persistent-stream transport with enrollment, IPv4-loopback filtering before TCP, stream/connection/frame limits and poisoned streams after I/O failure. Eight actual Go/Rust request pairs and three early Rust/Rust block deliveries passed; default RPC binaries do not enable transport. Raw object acquisition now exercises 38 requests and four malformed/disconnecting/state-invalid peer cases over actual Rust Noise/Yamux streams. The fixed early profile now passes separate Rust OS-process native peer acquisition/reorg, persistent identity, receiver/source restart, SIGKILL recovery and cancellation. Known heads need no network connection. Explicit source/head control and bounded local histories remain; broad/global/automatic production sync is unqualified."
+    },
+    {
+      "id": "G7",
+      "title": "Independent validated private-network sync",
+      "depends_on": [
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6"
+      ],
+      "status": "partial",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Start from declared genesis and synchronize over P2P while all canonical decisions are made by native Rust consensus/execution.",
+        "Match controlled Go peers on state/UTXO/ETX roots and fork choice across mined/replayed blocks, forks, disconnects, malicious peers and restarts.",
+        "Serve only locally validated canonical generations; verify block/body availability and bounded acquisition queues. No Go oracle or gateway at runtime."
+      ],
+      "proofs": [
+        "results/latest-stateful.json",
+        "results/stateful-20261111T034753065531Z/transport.json",
+        "results/canonical-20261113T035507464093Z/summary.json",
+        "results/private-processes-20261113T050448168865Z/summary.json",
+        "results/canonical-20261116T000535400154Z/summary.json",
+        "results/private-processes-20261116T000640546197Z/summary.json",
+        "results/genesis-replay-20261116T013854966690Z/summary.json",
+        "results/forward-processes-20261116T014417167978Z/summary.json",
+        "results/genesis-replay-20261116T030224548396Z/summary.json",
+        "results/forward-processes-20261116T031604935824Z/summary.json",
+        "results/genesis-processes-20261116T030601583863Z/summary.json",
+        "results/genesis-replay-20261116T034831544406Z/summary.json",
+        "results/forward-processes-20261116T040016726603Z/summary.json",
+        "results/genesis-processes-20261116T043105575658Z/summary.json"
+      ],
+      "partial_scope": "Exact native full-header proofs supply weaker inclusion/reward work, under the same immutable verifier and exact bytes. Scope-bound inclusion entries remain separate and cannot populate strong proofs. Native body/state/fork checks are unchanged. Completed qualification includes 8192-block fresh replay/independent-process sync, 96-block direct datadir bridge, a 1024-block live incremental oracle pilot, and a separate 1024-block independent receiver reusing that executed source. No supplied state/checkpoint is imported. The original 259216-block offline oracle and native follower are still active and grant no completed activation qualification. Full ETX/fork/expansion/coordinator/EVM/resource/public sync gates remain open."
+    },
+    {
+      "id": "G8",
+      "title": "Public shadow validation",
+      "depends_on": [
+        "G7"
+      ],
+      "status": "open",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Use an explicitly qualified public-network target, including release/fork profile, bootstrap and known checkpoints.",
+        "Replay archived fork boundaries and catch up through a declared public height/hash; compare roots, receipts, ETXs and head selection with independent Go observations.",
+        "Complete sustained shadow sync, reorg/restart and adversarial-peer drills with persisted divergence reports; do not promote unverified imports.",
+        "Record test durations, block ranges, chain contexts, hardware and acceptance thresholds before promotion; no duration/performance result exists yet."
+      ],
+      "proofs": []
+    },
+    {
+      "id": "G9",
+      "title": "Live RPC, wallet and transaction-pool compatibility",
+      "depends_on": [
+        "G3",
+        "G5",
+        "G7"
+      ],
+      "status": "open",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Discover methods actually exposed by selected modules/transports/context, beyond the current 67 selected candidate methods.",
+        "Implement native account/UTXO reads, proofs where promised, calls/estimates/access lists, full receipt/log/filter semantics and WebSocket/subscription reorg behavior.",
+        "Validate raw-transaction RLP ingress and externally signed transaction admission, replacement/fees, nonce/UTXO conflicts and bounded pool eviction.",
+        "Run both pinned Quais.js variants and Pelagus end-to-end against Rust-owned live state, including errors, reconnects, transaction gossip and mined outcomes."
+      ],
+      "proofs": []
+    },
+    {
+      "id": "G10",
+      "title": "Production RPC canary and whole-client qualification",
+      "depends_on": [
+        "G8",
+        "G9"
+      ],
+      "status": "open",
+      "required_for_first_production_rpc_node": true,
+      "acceptance": [
+        "Define and pass sustained Linux block replay/sync/RPC/pool/P2P workload SLOs: correctness, CPU, peak RSS, disk growth, p50/p95/p99 and throughput.",
+        "Measure malformed traffic, queue bounds, slow disks/peers, reorgs, crash recovery, pruning and overload behavior with observable availability.",
+        "Exercise release/reproducible-build/dependency/license review, operational telemetry, upgrade, rollback, repair and explicit canary expansion criteria.",
+        "Publish immutable evidence for a small RPC canary before broad production service; signature microbenchmarks cannot close this gate."
+      ],
+      "proofs": []
+    },
+    {
+      "id": "G11",
+      "title": "Optional mining and remaining compatibility",
+      "depends_on": [
+        "G10"
+      ],
+      "status": "open",
+      "required_for_first_production_rpc_node": false,
+      "acceptance": [
+        "Implement and qualify mining work/template generation, Stratum and any additional Go client/admin/debug APIs promised by the selected product profile.",
+        "Track APIs and operating systems excluded from the first non-mining RPC-node target explicitly; never defer imported-block PoW, rewards or hierarchy validation."
+      ],
+      "proofs": []
+    }
+  ],
+  "promotion_rule": "A gate passes only with immutable acceptance evidence and passed dependencies. Documentation and component file counts alone cannot pass a runtime gate.",
+  "network_access_performed_in_this_audit": false,
+  "private_development_profile": "configs/private-native-v1.json",
+  "private_development_full_consensus_qualified": false,
+  "private_loopback_tests_performed": true
+}

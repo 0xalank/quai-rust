@@ -1,0 +1,22 @@
+[package]
+name = "quai-execution"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+
+[dependencies]
+crypto-bigint = { version = "=0.5.5", default-features = false }
+quai-primitives = { path = "../quai-primitives" }
+quai-store = { path = "../quai-store" }
+sha2 = "=0.10.9"
+k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "std"] }
+ripemd = "=0.1.3"
+num-bigint = "=0.4.6"
+substrate-bn = "=0.6.0"
+blake2 = "=0.10.6"
+chacha20 = "=0.9.1"
+
+[dev-dependencies]
+prost = "=0.14.4"
+serde_json = { version = "=1.0.154", features = ["arbitrary_precision"] }

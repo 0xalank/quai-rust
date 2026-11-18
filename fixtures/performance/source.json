@@ -1,0 +1,5 @@
+{
+  "reference_run": "results/20261105T172254Z-standalone-speed",
+  "reference_revision": "db42af74d31f25390236ffeca14cca2cba7de639",
+  "scope": "Frozen block, receipt and log results recorded from pinned Go API; batch envelopes follow native JSON-RPC ordering and read-only errors. Not state execution."
+}

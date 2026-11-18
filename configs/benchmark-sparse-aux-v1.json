@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "kind": "synthetic-etx-lockup-transition",
+  "parent_queued_etxs": 5000,
+  "parent_lockups": 5000,
+  "popped_etxs": 2,
+  "pushed_etxs": 1,
+  "lockup_deletes": 1,
+  "lockup_overwrites": 1,
+  "lockup_inserts": 1,
+  "economic_metadata_updates": 1,
+  "backends": [
+    "materialized",
+    "sparse"
+  ],
+  "timing_pairs": 5,
+  "separate_allocation_pairs": 3,
+  "included": [
+    "snapshot",
+    "restore",
+    "clone",
+    "queue_pop_push",
+    "metadata_and_lockup_updates",
+    "durable_commit"
+  ],
+  "excluded": [
+    "database_cache_initialization",
+    "parent_generation_commit",
+    "expected_state_construction",
+    "final_full_export_checks",
+    "cleanup"
+  ],
+  "required_equal": [
+    "queue_order_and_transactions",
+    "queue_indexes_and_metadata",
+    "lockup_records",
+    "consensus_roots",
+    "root_set_digest",
+    "version_id"
+  ],
+  "native_block_admission": false,
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072"
+}

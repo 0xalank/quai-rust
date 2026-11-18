@@ -1,0 +1,29 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "32af5dc081e5ce301886b34b8145cbba50e9940eb5e6760cfd3b62d64983f193",
+  "oracle_source_sha256": "a9ecdb96166721836a9d7042124f411c2e65fe344c4504fde87e41bbb67d50f2",
+  "adapter_sha256": "211c035b0d7293dd55ffefa3c4f7709f8c1999a2534703e2922c3f626126091c",
+  "harness_sha256": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928",
+  "driver_sha256": "1486ec76f421d71dd6f3881f50486d62944ffcdc81b8f21aeae8bde3f5886e20",
+  "go_sources": {
+    "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
+    "core/headerchain_validation.go": "6f412c112f2a675a7811be9fca32d1827257ad962c092d79ab4c3d607df5fdf8",
+    "core/evm.go": "157aada56069cfd339ae5044959cf2fec43607a028a71784f8bccc9516ebbdc0",
+    "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",
+    "core/state/statedb.go": "84bece787e5207237c612a7d2659a3692e4c6a1686f7e89343642444b5427f3e",
+    "core/state/state_object.go": "27a03b98f4653612788c5374e33fc1f574fa2ef5a0220faf5f41fe3a20ebdb89",
+    "core/state/gen_allocs.go": "5d13fc2496da38e53f1bd81a7a7dabab214902385d1bfdf0b25c11f7e7616a24",
+    "core/rawdb/accessors_chain.go": "917b3c97845995643557d06096c2722e0f4f00f9b66d9a4a8d2e09e7f702a2e7",
+    "core/types/receipt.go": "6a0dbc7fc21a960e44b92b0365a72b2c7fc27a1162c8303e0e91f10294ee1c3e",
+    "core/types/utxo.go": "e6789ad476704e88cee846b12f27d00132175299d3119e0c5eefa9b8dfded498",
+    "core/types/transaction_signing.go": "461dee6e4a35d56ee380a2060c236d3744d2eb06e398a8bff4de6c8673a842b1",
+    "core/types/transaction.go": "a629fe1c32e8e4e73091540fed92c8aa0c20e070332a565708e0a5c91890f169",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "Actual StateProcessor.Process on three linked early private blocks, including CREATE, SSTORE, receipts, state/ETX/UTXO roots, gas/state counters and empty allocations. No incoming ETXs, reward-depth payouts, header proof/order admission or public network."
+}

@@ -1,0 +1,35 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors": [
+    {
+      "absent_response": "0x120a080712040a0200003200",
+      "block_absent_response": "0x120a080712040a0200002200",
+      "block_request": "0x0a0c080712040a02000022002a00",
+      "hash": "0x53fc82ff80d79fb2f225ecc80fe9b5130dd9f1d248a6140f41096ce822fb10cd",
+      "height": 0,
+      "id": 7,
+      "present_response": "0x122c080712040a02000032220a2053fc82ff80d79fb2f225ecc80fe9b5130dd9f1d248a6140f41096ce822fb10cd",
+      "request": "0x0a0c080712040a02000022004200"
+    },
+    {
+      "absent_response": "0x120a081112040a0200003200",
+      "block_absent_response": "0x120a081112040a0200002200",
+      "block_request": "0x0a0d081112040a0200002201012a00",
+      "hash": "0x14f6d483600bb9730eddb66534840e28d4bba2020d57a8f957cb470c23ddc9e9",
+      "height": 1,
+      "id": 17,
+      "present_response": "0x122c081112040a02000032220a2014f6d483600bb9730eddb66534840e28d4bba2020d57a8f957cb470c23ddc9e9",
+      "request": "0x0a0d081112040a0200002201014200"
+    },
+    {
+      "absent_response": "0x120a081b12040a0200003200",
+      "block_absent_response": "0x120a081b12040a0200002200",
+      "block_request": "0x0a11081b12040a020000220501000000012a00",
+      "hash": "0x0000000000000000000000000000000000000000000000000000000000001234",
+      "height": 4294967297,
+      "id": 27,
+      "present_response": "0x122c081b12040a02000032220a200000000000000000000000000000000000000000000000000000000000001234",
+      "request": "0x0a11081b12040a020000220501000000014200"
+    }
+  ]
+}

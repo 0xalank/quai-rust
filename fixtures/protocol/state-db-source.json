@@ -1,0 +1,21 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "7087a08f5408abf95876f6e620569b83b8aad8dd9f6c7c0020992b581033115f",
+  "driver_sha256": "c36a55b2d77e807be3bc48c4b0dc6a0832ac1830afce0313a234823b6dd8a874",
+  "oracle_sha256": "6136658b0687a48bf99ee2c05c4c62c780b825407609c767848d702414e0da6e",
+  "go_sources": {
+    "trie/trie.go": "bf0b35ddb3be32f51788699b9028e34635eca52ebaf1a7feb2578130b1f972ba",
+    "trie/node.go": "5069986f79b289a41727c18d48e184bac7ede827a703607a7fae58f0203fc82d",
+    "trie/encoding.go": "1be8ab469acd89e0e371954cae256298e0074c9441dd09072ffed048c76033ee",
+    "trie/hasher.go": "29d6b76d7356b7dda02bf7c75fa0445ce44a2d507e67a1cd709a93c496026eac",
+    "trie/stacktrie.go": "a3fe91733160e80bd9506ab750da970bfffcd079e57089d80de8f9141f776194",
+    "trie/database.go": "4c41486236a490aad64bc0cbdbd3ea7ea7f8d34f67481e165859b130a5743397",
+    "crypto/crypto.go": "9198d5adf3aafaf5f0ec930f2def0db7a198a09e8fe3c6cffdc431e69a2baf86",
+    "core/rawdb/database.go": "eaa2f0a7c880d04717c266b090423c00cadf17a0502b08cda8fc6fb48e4884d6",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "scope": "Actual Go TryUpdate/TryDelete/TryGet/Hash on secure and fixed hashed keys; storage primitives only, not block consensus or network synchronization.",
+  "public_network": false,
+  "runtime_go_dependency": false
+}

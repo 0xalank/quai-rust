@@ -1,0 +1,100 @@
+{
+  "report": "../results/acceptance-20261104T224522222711Z/summary.json",
+  "scope": "Materialized RPC read models from trusted Go exports; no Rust consensus validation.",
+  "methods": {
+    "quai_getBlockByHash": {
+      "modes": [
+        "hybrid",
+        "snapshot"
+      ],
+      "view": "immutable exported block",
+      "evidence": [
+        "real local full-node genesis",
+        "seeded typed blocks",
+        "retained orphan blocks",
+        "SDK decoding",
+        "mined local Blake3 blocks",
+        "automatically ingested canonical and orphan blocks"
+      ]
+    },
+    "quai_getBlockByNumber": {
+      "modes": [
+        "snapshot"
+      ],
+      "view": "frozen exported canonical mapping; hybrid forwards to Go"
+    },
+    "quai_getTransactionReceipt": {
+      "modes": [
+        "snapshot",
+        "hybrid with native-canonical-reads"
+      ],
+      "view": "Frozen snapshot or positive covered receipt behind two live identity/head barriers; misses forward to Go.",
+      "types": [
+        "Quai",
+        "external",
+        "Qi"
+      ]
+    },
+    "quai_chainId": {
+      "modes": [
+        "snapshot"
+      ],
+      "view": "export identity"
+    },
+    "quai_blockNumber": {
+      "modes": [
+        "snapshot"
+      ],
+      "view": "indexed frozen head"
+    },
+    "quai_nodeLocation": {
+      "modes": [
+        "snapshot"
+      ],
+      "view": "export identity"
+    },
+    "quai_listRunningChains": {
+      "modes": [
+        "snapshot"
+      ],
+      "view": "export identity"
+    },
+    "quai_getLogs": {
+      "modes": [
+        "snapshot",
+        "hybrid with native-canonical-reads"
+      ],
+      "view": "Covered canonical log queries preserving exact single-block ordering; multi-block nonempty results forward to Go.",
+      "filters": [
+        "blockHash",
+        "covered range",
+        "address",
+        "topic AND/OR",
+        "null/empty wildcards"
+      ],
+      "limits": {
+        "canonical_log_records": 200000,
+        "selected_candidates_per_query": 50000,
+        "returned_logs": 10000
+      }
+    }
+  },
+  "sdk_comparisons": 120,
+  "strict_rpc_comparisons": 59,
+  "full_node_scope": "Standard local Blake3 mined blocks; funded local fixture with custom allocation/genesis and TimeToStartTx=0, signed Quai transfer, database-restored replacement branch and restart. No P2P fork-choice or mainnet consensus replay claim.",
+  "live_ingestion_report": "../results/latest-live.json",
+  "ingestion": {
+    "language": "Rust",
+    "mode": "hybrid opt-in follower",
+    "canonical_window_blocks": "1..1024",
+    "durable_checkpoint": true,
+    "native_live_receipts": "opt-in, positive covered receipts with per-request barriers",
+    "native_live_block_number": false,
+    "native_live_logs": "opt-in covered single-contributing-block or empty results with per-request barriers",
+    "qi_etx_mining": "uncovered; typed scenarios remain seeded"
+  },
+  "canonical_read_report": "../results/latest-fresh.json",
+  "canonical_read_guide": "../CANONICAL_READS.md",
+  "active_standalone_profile": "standalone.json",
+  "historical_profile_note": "The gateway/hybrid fields and counters in this inventory describe the isolated reference profile; the shipping build excludes Go-backed modes."
+}

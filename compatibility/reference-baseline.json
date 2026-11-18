@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "profile": "official-upstream",
+  "revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "version": "v0.57.0",
+  "repository": "https://github.com/dominant-strategies/go-quai",
+  "branch": "main",
+  "merged_pull_requests": [
+    2757,
+    2753
+  ],
+  "verified_utc": "2026-11-10",
+  "previous_revision": "db42af74d31f25390236ffeca14cca2cba7de639",
+  "local_fee_overlay": {
+    "revision": "db42af74d31f25390236ffeca14cca2cba7de639",
+    "preserved_branch": "backup/pre-polaris-fees-20261110",
+    "active_in_reference": false
+  },
+  "polaris_prime_block": 2444574,
+  "founder_forfeiture_sha256": "c01ad27da05145b60a9834bf1bb77e6b01b9d2074528ca2fbea1dc5ffd566761",
+  "runtime_go_dependency": false,
+  "full_consensus": false,
+  "network_ready": false
+}

@@ -1,0 +1,19 @@
+[package]
+name = "quai-rpc"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+reference-gateway = ["dep:reqwest"]
+
+[dependencies]
+quai-store = { path = "../quai-store" }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+futures-util = "=0.3.34"
+reqwest = { optional = true, version = "=0.13.5", default-features = false, features = ["json", "stream"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version = "=1.0.154", features = ["arbitrary_precision"] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "time", "sync", "signal"] }
+

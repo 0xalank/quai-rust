@@ -1,0 +1,298 @@
+{
+  "base256emoji 1.0.2": {
+    "file": "licenses/upstream/base256emoji-1.0.2-DECLARED-MIT.txt",
+    "manifest_sha256": "b3992cebc64caf18ef80bf4d9e3488e78ffb70e1860d519a6b2afe0968722673",
+    "name": "base256emoji",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "",
+    "repository": "https://github.com/Jorropo/base256emoji/",
+    "revision": "f7cf4ae2c15123376d6634ca7aed005034b396ec",
+    "sha256": "f115d4420ce219065b165d146c46b94dde642213a98a43f9e0dda41ba5d207b9",
+    "url": null,
+    "version": "1.0.2"
+  },
+  "base45 3.2.0": {
+    "file": "licenses/upstream/base45-3.2.0-DECLARED-MIT.txt",
+    "manifest_sha256": "c879aa7b3c00d09e0b3cb19752b06c0d6f3802949bbaca633ed0b4c1b06c8e22",
+    "name": "base45",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "",
+    "repository": "https://github.com/opendevtools/base45",
+    "revision": "b9959a71143e0bd7b5f6ce547fe3c65f2031ad97",
+    "sha256": "116abee5974bf28a5ebe36088bb1e02b74e9b921b284d930e5e4c016f79ba747",
+    "url": null,
+    "version": "3.2.0"
+  },
+  "const-str 0.4.3": {
+    "file": "licenses/upstream/const-str-0.4.3-LICENSE",
+    "name": "const-str",
+    "path_in_vcs": "const-str",
+    "repository": "https://github.com/Nugine/const-str",
+    "revision": "a549b512ced97f5ec6569823dbce08916cd611f3",
+    "sha256": "565aacda8f5ea53f937f867ed49a0ac7e6828b60b4568803185cd0a13297d4e4",
+    "url": "https://raw.githubusercontent.com/Nugine/const-str/a549b512ced97f5ec6569823dbce08916cd611f3/LICENSE",
+    "version": "0.4.3"
+  },
+  "futures-bounded 0.2.4": {
+    "file": "licenses/upstream/futures-bounded-0.2.4-DECLARED-MIT.txt",
+    "manifest_sha256": "e68b83031135b1cdf365cd6854308455931ba286b63d616ff17defe8adb80f2a",
+    "name": "futures-bounded",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "",
+    "repository": "https://github.com/thomaseizinger/rust-futures-bounded",
+    "revision": "7a9b5a96663835c1234df5251fe88df75d26fb86",
+    "sha256": "06d2d222592f7b1fe36eaf4edccbde3592f54f7a99e84b8f1beef8fcf9c3e8e8",
+    "url": null,
+    "version": "0.2.4"
+  },
+  "if-watch 3.2.2": {
+    "file": "licenses/upstream/if-watch-3.2.2-DECLARED-MIT.txt",
+    "manifest_sha256": "143b35b4cc0514c3250bd6a93a400a247c620e0362deecbc4dbded53c5fc5a07",
+    "name": "if-watch",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "",
+    "repository": "https://github.com/libp2p/if-watch",
+    "revision": "f6271229b3505bb1e245aad3d078bf571bb4e20e",
+    "sha256": "135a2dbda35c761f20f7310c8fe2dc4649210781d4e1ccf26b69f6967453dbeb",
+    "url": null,
+    "version": "3.2.2"
+  },
+  "libp2p 0.56.0": {
+    "file": "licenses/upstream/libp2p-0.56.0-LICENSE",
+    "name": "libp2p",
+    "path_in_vcs": "libp2p",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "2ac0ca97a82e161a4bf56ecdfc3a46dd69af302c",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/2ac0ca97a82e161a4bf56ecdfc3a46dd69af302c/LICENSE",
+    "version": "0.56.0"
+  },
+  "libp2p-allow-block-list 0.6.0": {
+    "file": "licenses/upstream/libp2p-allow-block-list-0.6.0-LICENSE",
+    "name": "libp2p-allow-block-list",
+    "path_in_vcs": "misc/allow-block-list",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
+    "version": "0.6.0"
+  },
+  "libp2p-connection-limits 0.6.0": {
+    "file": "licenses/upstream/libp2p-connection-limits-0.6.0-LICENSE",
+    "name": "libp2p-connection-limits",
+    "path_in_vcs": "misc/connection-limits",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
+    "version": "0.6.0"
+  },
+  "libp2p-core 0.43.2": {
+    "file": "licenses/upstream/libp2p-core-0.43.2-LICENSE",
+    "name": "libp2p-core",
+    "path_in_vcs": "core",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "e10ce4c1704a529161f62e8538e55a106e4ec2d6",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/e10ce4c1704a529161f62e8538e55a106e4ec2d6/LICENSE",
+    "version": "0.43.2"
+  },
+  "libp2p-gossipsub 0.49.5": {
+    "file": "licenses/upstream/libp2p-gossipsub-0.49.5-DECLARED-MIT.txt",
+    "manifest_sha256": "988b744acf13c79eb12ac3a5f0e2bd6477435b048cf5b8f62af14459679f89eb",
+    "name": "libp2p-gossipsub",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "protocols/gossipsub",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "d6a16b6a88959d1b25e9807d89959b2f9127724c",
+    "sha256": "743b3c7c421cb29a032ac116879a44d1eef167966f27229cb4b2e9285f349926",
+    "url": null,
+    "version": "0.49.5"
+  },
+  "libp2p-identify 0.47.0": {
+    "file": "licenses/upstream/libp2p-identify-0.47.0-LICENSE",
+    "name": "libp2p-identify",
+    "path_in_vcs": "protocols/identify",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "c9bd92ba2d4727d79b0c2623c20c998a4e60995a",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/c9bd92ba2d4727d79b0c2623c20c998a4e60995a/LICENSE",
+    "version": "0.47.0"
+  },
+  "libp2p-identity 0.2.14": {
+    "file": "licenses/upstream/libp2p-identity-0.2.14-LICENSE",
+    "name": "libp2p-identity",
+    "path_in_vcs": "identity",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "817ed75a388f11b48c5e305492871c13a3c021e9",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/817ed75a388f11b48c5e305492871c13a3c021e9/LICENSE",
+    "version": "0.2.14"
+  },
+  "libp2p-kad 0.48.0": {
+    "file": "licenses/upstream/libp2p-kad-0.48.0-LICENSE",
+    "name": "libp2p-kad",
+    "path_in_vcs": "protocols/kad",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
+    "version": "0.48.0"
+  },
+  "libp2p-noise 0.46.1": {
+    "file": "licenses/upstream/libp2p-noise-0.46.1-LICENSE",
+    "name": "libp2p-noise",
+    "path_in_vcs": "transports/noise",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "d92dabcbb87c4796d46e3d312b7fa042af10279a",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/d92dabcbb87c4796d46e3d312b7fa042af10279a/LICENSE",
+    "version": "0.46.1"
+  },
+  "libp2p-request-response 0.29.0": {
+    "file": "licenses/upstream/libp2p-request-response-0.29.0-LICENSE",
+    "name": "libp2p-request-response",
+    "path_in_vcs": "protocols/request-response",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
+    "version": "0.29.0"
+  },
+  "libp2p-stream 0.4.0-alpha": {
+    "file": "licenses/upstream/libp2p-stream-0.4.0-alpha-LICENSE",
+    "name": "libp2p-stream",
+    "path_in_vcs": "protocols/stream",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
+    "version": "0.4.0-alpha"
+  },
+  "libp2p-swarm 0.47.1": {
+    "file": "licenses/upstream/libp2p-swarm-0.47.1-LICENSE",
+    "name": "libp2p-swarm",
+    "path_in_vcs": "swarm",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "4682e735cbdfd8f2b59f5478591a4e8ae552fa68",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/4682e735cbdfd8f2b59f5478591a4e8ae552fa68/LICENSE",
+    "version": "0.47.1"
+  },
+  "libp2p-swarm-derive 0.35.1": {
+    "file": "licenses/upstream/libp2p-swarm-derive-0.35.1-LICENSE",
+    "name": "libp2p-swarm-derive",
+    "path_in_vcs": "swarm-derive",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "d92dabcbb87c4796d46e3d312b7fa042af10279a",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/d92dabcbb87c4796d46e3d312b7fa042af10279a/LICENSE",
+    "version": "0.35.1"
+  },
+  "libp2p-tcp 0.44.1": {
+    "file": "licenses/upstream/libp2p-tcp-0.44.1-LICENSE",
+    "name": "libp2p-tcp",
+    "path_in_vcs": "transports/tcp",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "4682e735cbdfd8f2b59f5478591a4e8ae552fa68",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/4682e735cbdfd8f2b59f5478591a4e8ae552fa68/LICENSE",
+    "version": "0.44.1"
+  },
+  "libp2p-yamux 0.47.0": {
+    "file": "licenses/upstream/libp2p-yamux-0.47.0-LICENSE",
+    "name": "libp2p-yamux",
+    "path_in_vcs": "muxers/yamux",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "9736aacf814eb7b9df0372c5f9adcffba8a4b212",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/9736aacf814eb7b9df0372c5f9adcffba8a4b212/LICENSE",
+    "version": "0.47.0"
+  },
+  "match-lookup 0.1.3": {
+    "file": "licenses/upstream/match-lookup-0.1.3-DECLARED-MIT.txt",
+    "manifest_sha256": "36f5b8266905f7a1ca27c7a0397c2b22f14ace47a41e1667c14d6dad2f71e3bc",
+    "name": "match-lookup",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "match_lookup",
+    "repository": "https://github.com/mriise/smol-base-x",
+    "revision": "d524fb7c1e6ec08ca043f1f2011802791f010189",
+    "sha256": "2754df8873560f391aaf135ab748e06a514cc775acfebd70a117c6be9f2e2fdb",
+    "url": null,
+    "version": "0.1.3"
+  },
+  "multistream-select 0.13.0": {
+    "file": "licenses/upstream/multistream-select-0.13.0-LICENSE",
+    "name": "multistream-select",
+    "path_in_vcs": "misc/multistream-select",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "42566869b2ab3d1903d164c84da3308e7e890b8b",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/42566869b2ab3d1903d164c84da3308e7e890b8b/LICENSE",
+    "version": "0.13.0"
+  },
+  "quick-protobuf 0.8.1": {
+    "file": "licenses/upstream/quick-protobuf-0.8.1-DECLARED-MIT.txt",
+    "manifest_sha256": "0bb0b42b7df646f84ab299f9ddf6d38aa05cf388ae41e6932fccd5262b8b46f7",
+    "name": "quick-protobuf",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "quick-protobuf",
+    "repository": "https://github.com/tafia/quick-protobuf",
+    "revision": "3db41b4b6b42e69cb20ee0857f6898f053ed8ee7",
+    "sha256": "daf15696725926b9865dd742747fedebac682ebe95248629366af8ae800ce1c7",
+    "url": null,
+    "version": "0.8.1"
+  },
+  "quick-protobuf-codec 0.3.1": {
+    "file": "licenses/upstream/quick-protobuf-codec-0.3.1-LICENSE",
+    "name": "quick-protobuf-codec",
+    "path_in_vcs": "misc/quick-protobuf-codec",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "ce24938048cdb9c29f0b8218364557783cecd44a",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/ce24938048cdb9c29f0b8218364557783cecd44a/LICENSE",
+    "version": "0.3.1"
+  },
+  "rw-stream-sink 0.4.0": {
+    "file": "licenses/upstream/rw-stream-sink-0.4.0-LICENSE",
+    "name": "rw-stream-sink",
+    "path_in_vcs": "misc/rw-stream-sink",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "42566869b2ab3d1903d164c84da3308e7e890b8b",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/42566869b2ab3d1903d164c84da3308e7e890b8b/LICENSE",
+    "version": "0.4.0"
+  },
+  "uint 0.10.2": {
+    "file": "licenses/upstream/uint-0.10.2-LICENSE-MIT",
+    "name": "uint",
+    "path_in_vcs": "uint",
+    "repository": "https://github.com/paritytech/parity-common",
+    "revision": "d2817a6d9118ee985805c37b2a44c0f2c9ae3e93",
+    "sha256": "4fd70c448a560ab3226168373907c277e610a6cc21f8d618decee144421070ca",
+    "url": "https://raw.githubusercontent.com/paritytech/parity-common/d2817a6d9118ee985805c37b2a44c0f2c9ae3e93/LICENSE-MIT",
+    "version": "0.10.2"
+  },
+  "yamux 0.12.1": {
+    "file": "licenses/upstream/yamux-0.12.1-LICENSE-MIT",
+    "name": "yamux",
+    "path_in_vcs": "yamux",
+    "repository": "https://github.com/paritytech/yamux",
+    "revision": "b2528d836fdcd16d40452caee651bf05e1f62a0d",
+    "sha256": "ec353d4fecf7963b4c054384557e5dbc3c7a717997eb4a3815b315721a6aa75a",
+    "url": "https://raw.githubusercontent.com/paritytech/yamux/b2528d836fdcd16d40452caee651bf05e1f62a0d/LICENSE-MIT",
+    "version": "0.12.1"
+  },
+  "yamux 0.13.10": {
+    "file": "licenses/upstream/yamux-0.13.10-DECLARED-MIT.txt",
+    "manifest_sha256": "866482868478228a220e9dede0c823ac16fb5b3bf58f342157535ae258cf65fc",
+    "name": "yamux",
+    "origin": "Packaged MIT declaration and source copyright notices; standard MIT grant text",
+    "path_in_vcs": "yamux",
+    "repository": "https://github.com/paritytech/yamux",
+    "revision": "38e9944f8fbb723a3a4df575cfb15109efcb2d24",
+    "sha256": "96d0399a8b41fe504c3bc0afdedd128b152570401606afc10daf37b046adb925",
+    "url": null,
+    "version": "0.13.10"
+  }
+}

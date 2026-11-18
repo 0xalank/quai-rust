@@ -1,0 +1,19 @@
+[package]
+name = "quai-tx-pipeline-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = []
+alloc-count = []
+
+[dependencies]
+quai-primitives = { path = "../../crates/quai-primitives" }
+serde_json = { version = "=1.0.154", features = ["arbitrary_precision"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

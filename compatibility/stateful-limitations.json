@@ -1,0 +1,120 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "full_evm": false,
+  "full_consensus": false,
+  "canonical_native_sync": false,
+  "scope": "Known qualification work beyond the frozen stateful component corpus; passing current cases does not qualify these domains.",
+  "execution_followups": [
+    "Broaden the general zone execution composition beyond the qualified 16 early private blocks: mixed signed Quai/Qi/incoming sequences, workshares, official allocation histories and every fork boundary. Fee feedback/reward arithmetic has separate 486-case projection evidence, not full network qualification.",
+    "Broaden valid magnitude, memory, steps, account/slot, trace and transaction size domains; native capability limits remain distinct from protocol-invalid inputs.",
+    "Qualify legacy long Qi output addresses before Polaris; native settlement retains an explicit capability error for that historical domain.",
+    "Replace bounded snapshot MPT recomputation and map copy-on-write with persistent incremental account/storage state for production-scale histories."
+  ],
+  "integration_followups": [
+    "Broaden native pre-fork share/scoring qualification beyond the early private profile, all historical/auxiliary forks, nonlocal/sibling rollups and mixed transaction execution.",
+    "Extend the pinned early single-zone mixed-order confirmation profile to nonlocal sibling histories, all ETX kinds integrated with execution, expansion, workshares and every fork. General full admission remains unavailable.",
+    "Replace the unconditional full-block Unsupported boundary only after proof, hierarchy, PoEM/fork choice and every execution commitment compose correctly.",
+    "Extend the private complete state/receipt/history journal into production canonical branch commits with durable indexes/pruning, verified hierarchy, PoEM selection and general native sync before live-state RPC.",
+    "Qualify persistent peer identities, peer databases/scoring, discovery, backpressure, hostile-peer resource behavior and production platform coverage."
+  ],
+  "completed_component_qualification": [
+    {
+      "scope": "nested nonlocal CALL, STATICCALL state-gas, CREATE storage/size reset and lockup raw-batch rollback across historical forks",
+      "corpus": "fixtures/protocol/stateful.json",
+      "cases": 1548,
+      "checks": 20124
+    },
+    {
+      "scope": "incoming ETX dispatch and repeated transactions in the same block, including block-deferred account size",
+      "corpus": "fixtures/protocol/incoming.json",
+      "cases": 423,
+      "checks": 6336
+    },
+    {
+      "scope": "official allocation roots, historical Quai redemptions and fork-specific UTXO trim semantics",
+      "corpus": "fixtures/protocol/historical.json",
+      "cases": 60,
+      "checks": 160
+    },
+    {
+      "scope": "authority state transition at the authenticated-message boundary; public signature checks remain mandatory",
+      "corpus": "fixtures/protocol/authority.json",
+      "cases": 21,
+      "checks": 189
+    },
+    {
+      "scope": "exact official fee feedback and reward-depth branch with controlled work across selected forks/locations",
+      "corpus": "fixtures/protocol/payouts.json",
+      "cases": 486,
+      "checks": 1350
+    },
+    {
+      "scope": "actual Process on linked private blocks, native proofs, payouts/incoming coinbases and complete local image restoration after every block",
+      "corpus": "fixtures/protocol/zone-blocks.json",
+      "cases": 16,
+      "checks": 336,
+      "forged_execution_blocks_rejected_atomically": 112
+    },
+    {
+      "scope": "two Go-derived private branches with native work, complete image/receipt/history recovery, explicit private head switches, stale/corrupt rejection; separate process-exit tests remain bounded",
+      "corpus": "fixtures/protocol/private-branches.json",
+      "unique_blocks": 24,
+      "oracle_rows": 32,
+      "checks": 289,
+      "full_consensus": false,
+      "canonical_sync": false
+    },
+    {
+      "scope": "native local-zone pre-transaction header/body/manifest/PCRC and atomic execution/commit against actual Go validation; higher-order confirmation and global admission remain open",
+      "corpus": "fixtures/protocol/admission.json",
+      "unique_blocks": 24,
+      "oracle_rows": 32,
+      "valid_work_mutations_rejected": 31,
+      "checks": 284,
+      "full_consensus": false,
+      "canonical_sync": false
+    },
+    {
+      "scope": "mixed native prime/region/zone early component admission and confirmed rollups, derived incoming coinbases and complete branch recovery with authenticated context witnesses",
+      "corpus": "fixtures/protocol/confirmation.json",
+      "unique_blocks": 24,
+      "oracle_rows": 32,
+      "native_context_components": 38,
+      "executed_inbound_etxs": 16,
+      "filter_cases": 29,
+      "invalid_confirmation_inputs_rejected": 3,
+      "checks": 430,
+      "full_consensus": false,
+      "canonical_sync": false
+    },
+    {
+      "scope": "native pre-KAWPOW full-target uncles, integer distance-discounted entropy, payouts and confirmed incoming coinbases on two mixed-order private branches",
+      "corpus": "fixtures/protocol/uncles.json",
+      "unique_blocks": 24,
+      "oracle_rows": 32,
+      "native_context_components": 38,
+      "full_target_uncle_inclusions": 13,
+      "executed_inbound_etxs": 24,
+      "go_invalid_inclusion_cases": 8,
+      "go_valid_weak_share_capability_cases": 1,
+      "checks": 505,
+      "full_consensus": false,
+      "canonical_sync": false
+    },
+    {
+      "scope": "native early strong/weak share entropy and scoring, rewards and confirmed incoming execution on two three-context branches; controlled arithmetic has separate qualification",
+      "corpus": "fixtures/protocol/weakshares.json",
+      "unique_blocks": 24,
+      "native_context_components": 38,
+      "weak_shares": 10,
+      "full_target_uncle_inclusions": 13,
+      "executed_inbound_etxs": 30,
+      "native_candidate_scores": 15,
+      "block_checks": 760,
+      "arithmetic_cases": 5875,
+      "arithmetic_checks": 5877,
+      "full_consensus": false,
+      "canonical_sync": false
+    }
+  ]
+}

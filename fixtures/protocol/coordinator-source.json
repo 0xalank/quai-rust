@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "oracle_sources": {
+    "reference/coordinator/main.go": "f1b64e2f19a213a4f5059f2b59ff3cfea5a06f0cdf11fa51e9df0fda30bce5ae",
+    "reference/coordinator/coordinator-export.go": "1e379c0a6a782c31a85a2de15cf39e85639ffad97e54d92f655ea9e9a22b4dc5",
+    "reference/frontier/coordinator-export.go": "724b1b138cbccf22cc1b07d630951feb973387f748848c654bfa4d2e5e3ee1c6",
+    "reference/eligibility/coordinator-export.go": "6deba6f03e96f8a8209c8dac0d27ad15ebe28006d8c658ed6beee11cd659406f"
+  },
+  "driver_sha256": "1e257c8872c86c8e25982a71b90924a1b545eb7ec0974b75014809ad6cd3246b",
+  "input_eligibility_sha256": "628159c3d6522d205a865e807ad09baa9bd1d3fc5e8fa9eec9394e90c7610723",
+  "input_eligibility_source_sha256": "47fe626d3430be9152f4ec2e35aed755d44b5ef9555dff72a290193a8aa12200",
+  "sources": {
+    "cmd/utils/hierarchical_coordinator.go": "be7911ec187b79adae05d786ecc282a958bd6c12a9ff68e85028099a255b1336",
+    "common/types.go": "7bc526e37b42e1a33adb096d652f0eed153eea4239e73f9cff3b7a207a854912",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "instrumented_source_sha256": "40a150f01d337446a703d31dc977c7ce79896564b12ae05d84305f32840e48ef",
+  "toolchain_sort_sources": {
+    "src/sort/zsortfunc.go": "35cdbcbc3a63372e12eebc815c249adfd420e9d783a99b0405998a7ccb00ac1a",
+    "src/sort/sort.go": "a82d2838fe721533bd3a1fb865c2aa772def6f04b822f198605182625a4356e2",
+    "src/sort/slice.go": "842b1095d5a97a239e0d88726de1e7a7bbcf5bb7417e2d6a4dd7706dd6645ae9"
+  },
+  "go_version": "go version go1.24.5 darwin/arm64",
+  "observation_only_search_hooks": true,
+  "virtual_clock": true,
+  "worker_dispatch_suppressed": true,
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "Bounded recent-cache/leader ordering, actual PendingHeadersMap search with observation hooks, actual BuildPendingHeaders replay with worker dispatch suppressed, and virtual-time ReapplicationLoop. Imported metadata remains unverified; no generation workers, canonical state or sync.",
+  "vectors_sha256": "fe8e48df7d6d7ef9a36945839d46793249c3648299894f0284512db048d53b64"
+}

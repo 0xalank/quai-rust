@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "kind": "planning-template-not-runtime-config",
+  "qualified": false,
+  "proposed_initial_product": "non-mining validator/RPC node",
+  "proposed_public_target": {
+    "network": "Colosseum mainnet",
+    "chain_id": 9,
+    "zone_location": [
+      0,
+      0
+    ],
+    "confirmed": false
+  },
+  "development_first": "isolated private network, then public shadow only after native validation gates",
+  "oracle_source_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "public_release_candidate": {
+    "tag": "v0.56.1",
+    "revision": "5917bf5e2ced1d3f1cafdde6bc6fa3345fb71c3e"
+  },
+  "selected_consensus_reference_revision": null,
+  "network": null,
+  "chain_id": null,
+  "location": null,
+  "genesis_by_context": null,
+  "active_hierarchy": null,
+  "pow_engines_by_fork": null,
+  "fork_manifest": null,
+  "fork_manifest_sha256": null,
+  "resource_limits": null,
+  "fee_feature_policy": null,
+  "checkpoint": null,
+  "private_bootnodes": null,
+  "public_bootnodes": null,
+  "pinned_network_dependencies": null,
+  "captured_protocol_transcript": null,
+  "review_note": "Resolve all required fields in a separately qualified target. Do not load this planning template as node configuration. The oracle is official v0.57.0 source; the prior local fee overlay is preserved separately and inactive. The published release candidate is historical and has not been selected as the runtime target."
+}

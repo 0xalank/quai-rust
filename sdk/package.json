@@ -1,0 +1,9 @@
+{
+  "name": "quai-rust-sdk-acceptance",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "quais57": "npm:quais@1.0.0-alpha.57",
+    "quais58": "npm:quais@1.0.0-alpha.58"
+  }
+}

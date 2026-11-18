@@ -1,0 +1,18 @@
+/target/
+/bin/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+
+
+/run/
+/sdk/node_modules/
+
+/reference-build/
+/dist/
+
+/reference-artifacts/
+
+# Run output: local evidence only. Scripts still read and write it in place.
+/results/

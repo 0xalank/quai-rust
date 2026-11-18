@@ -1,0 +1,48 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "driver_sha256": "bec38e4937235dcce79aea0ffecc83b6c93d62280c222487c44ecb0eeaa6739c",
+  "oracle_sources": {
+    "reference/prime-forward/main.go": "8e4ed66abf47d526aecea5fa959eb9858f0fd1610839e73bbdc9720ec4d75d8d",
+    "reference/prime-forward/core-template.go": "2827efdd873d6dd759237d3e2f67f5af0db5d0041692a16fff4539883b443431",
+    "reference/prime-forward/LICENSE": "e57f1c320b8cf8798a7d2ff83a6f9e06a33a03585f6e065fea97f1d86db84052",
+    "reference/prime-forward/NOTICE.md": "4f7a90cff4dff5dd1445a30b44740022e118e7b0a8c7535ad0aa4d1d7eb52867",
+    "results/prime-forward-reference-core.go": "fedc1e7f2eccc5dbbb539d8a77dd4ad1916da35ca8d48b120d9a944ce325a3c7"
+  },
+  "sources": {
+    "core/slice.go": "26f207c053321734a2cc33631b4039b66686f36ef16d86178e15dbd920d2cf1f",
+    "core/exchange_controller.go": "c5650ca79940652cacfb46844b334a24219e9843d07ee3bfca26c11b6ab1f236",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "common/big.go": "51adfacf59cc8707e028aa8bc728a508811239ac6f88a01da33b1dea5208c0e5",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "core/bodydb.go": "19c7f7238fa89f0d24cc1b886a1ba1c202b65a8c8565793888aa79c41e860368",
+    "core/types/block.go": "10003cdf3743c35e3fd42c089887f5dae7f1aafe2ab80ea691ef6d86e1169e11",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "scope": "Linked supplied-history prime conversion outputs and token choices through the exact official Slice.Append economic branch. Header fields are accepted by the unmodified parent verifier. A one-write parent probe supplies the initial choice state. Proof work, full append acceptance and canonical ancestry are not established.",
+  "runtime_go_dependency": false,
+  "canonical_authority": false,
+  "cases": 256,
+  "linked_forward_steps": 1024,
+  "undefined_zero_probe_cases": 240,
+  "append_branch_range_chars": [
+    11765,
+    26351
+  ],
+  "append_branch_sha256": "5ab0a112a298a46020e040f76c19d7ecc9fcf13830def8c4fc8119e28aee622a",
+  "append_branch_byte_identical": true,
+  "parent_probe_range_chars": [
+    69182,
+    82241
+  ],
+  "parent_original_sha256": "7d2d2fe685c74ccf3bffaa0f8cfa5dff6ab8801b5a9cb473fe957c260e0a9b97",
+  "parent_probe_sha256": "d2e35d76b428a669e4764e7be6c6265690278284edc88a9927f67e1b3e1d67f5",
+  "parent_probe_changes": [
+    "Rename the method",
+    "One test-only token-choice write to supply the initial parent seed"
+  ],
+  "unmodified_parent_verifier_also_executed": true,
+  "vectors_sha256": "ff03ea1020cca016bfbd4bb406bf817eb511a8296e2514e9be0612f4be856fe4"
+}

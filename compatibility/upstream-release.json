@@ -1,0 +1,10 @@
+{
+  "tag": "v0.57.0",
+  "revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "source": "https://github.com/dominant-strategies/go-quai/releases/tag/v0.57.0",
+  "commit_source": "https://github.com/dominant-strategies/go-quai/commit/33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "checked_utc": "2026-11-13",
+  "release_date": "2026-11-11",
+  "source_observation": "Official release page identifies this tag, commit and release date; the checked source pin is unchanged.",
+  "changes_reference_pin": false
+}

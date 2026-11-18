@@ -1,0 +1,12 @@
+[workspace]
+members = ["crates/quai-rpc", "crates/quai-store", "crates/quai-primitives", "crates/quai-network", "crates/quai-execution", "crates/quai-consensus"]
+resolver = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+
+# Keep full 3072-bit commitment fixtures practical in the debug test suite.
+[profile.test.package.num-bigint]
+opt-level = 2

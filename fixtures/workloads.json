@@ -1,0 +1,13 @@
+{
+  "train": [
+    {"name":"small-read","method":"bench_echo","requests":2048,"concurrency":8,"batch":1},
+    {"name":"payload-batch","method":"bench_payload","requests":256,"concurrency":4,"batch":16},
+    {"name":"waiting-batch","method":"bench_delay","requests":48,"concurrency":4,"batch":8,"delay_ms":2}
+  ],
+  "holdout": [
+    {"name":"payload-single","method":"bench_payload","requests":2048,"concurrency":4,"batch":1},
+    {"name":"payload-batch32","method":"bench_payload","requests":128,"concurrency":4,"batch":32},
+    {"name":"waiting-batch16","method":"bench_delay","requests":32,"concurrency":4,"batch":16,"delay_ms":3}
+  ],
+  "scope":"Synthetic responses and explicit async waits. Waiting workloads represent scheduling opportunities, not measurements of real Quai database/EVM work."
+}

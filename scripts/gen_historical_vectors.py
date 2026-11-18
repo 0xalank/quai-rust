@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+"""Explicit official-source historical economic oracle."""
+import argparse,json,os,subprocess,tempfile
+from pathlib import Path
+from gen_foundation_vectors import ROOT,PIN,checked_reference,sha
+p=argparse.ArgumentParser();p.add_argument('--go-quai',required=True);m=p.add_mutually_exclusive_group(required=True);m.add_argument('--write',action='store_true');m.add_argument('--check',action='store_true');a=p.parse_args();go=Path(a.go_quai).resolve();checked_reference(go)
+# Reuse only the small deterministic setup utilities, not incoming dispatch.
+helpers=(ROOT/'reference/incoming/core-template.go').read_text();helpers=helpers[helpers.index('func niU('):helpers.index('func niOne(')]
+imports='package core\nimport("math/big";"encoding/hex";"github.com/dominant-strategies/go-quai/common";"github.com/dominant-strategies/go-quai/core/types";"google.golang.org/protobuf/proto")\n'
+with tempfile.TemporaryDirectory(prefix='quai-historical-')as directory:
+ d=Path(directory);utility=d/'utility.go';utility.write_text(imports+helpers+'\nfunc niMarshal(t *types.Transaction)([]byte,error){p,e:=t.ProtoEncode();if e!=nil{return nil,e};return proto.Marshal(p)}\n');overlay=d/'overlay.json';binary=d/'oracle';files={'cmd/quai-historical-vectors/main.go':ROOT/'reference/historical/main.go','core/native_historical.go':ROOT/'reference/historical/core-export.go','core/native_historical_harness.go':ROOT/'reference/early-blocks/harness.go','core/native_historical_utilities.go':utility};overlay.write_text(json.dumps({'Replace':{str(go/k):str(v)for k,v in files.items()}}));env={**os.environ,'GOPROXY':'off','GOTOOLCHAIN':'local'};subprocess.run(['go','build','-overlay',str(overlay),'-ldflags','-X main.referenceRevision='+PIN,'-o',str(binary),'./cmd/quai-historical-vectors'],cwd=go,env=env,check=True);output=subprocess.check_output([str(binary),str(go)],cwd=d,env=env);(ROOT/'results/historical-oracle-raw.log').write_bytes(output);v=json.loads(output.splitlines()[-1])
+assert v['reference_revision']==PIN and len(v['allocations'])==28 and len(v['redemptions'])==24 and len(v['trims'])==8
+path=ROOT/'fixtures/protocol/historical.json';encoded=(json.dumps(v,sort_keys=True,indent=2)+'\n').encode();e={'reference_revision':PIN,'vectors_sha256':__import__('hashlib').sha256(encoded).hexdigest(),'driver_sha256':sha(Path(__file__).resolve()),'oracle_sources':{str(x.relative_to(ROOT)):sha(x)for x in [ROOT/'reference/historical/main.go',ROOT/'reference/historical/core-export.go',ROOT/'reference/early-blocks/harness.go',ROOT/'reference/incoming/core-template.go',Path(__file__).resolve()]},'go_sources':{n:sha(go/n)for n in ['core/state/gen_allocs.go','core/state_processor.go','core/headerchain_validation.go','params/protocol_params.go','params/genesis_alloc.json','params/forfeiture_addresses.json','params/founder_forfeiture_addresses.json']},'full_consensus':False,'public_network':False};target=ROOT/'fixtures/protocol/historical-source.json'
+if a.write:path.write_bytes(encoded);target.write_text(json.dumps(e,indent=2)+'\n')
+elif path.read_bytes()!=encoded or json.loads(target.read_text())!=e:raise SystemExit('Historical oracle differs')
+print(json.dumps({'passed':True,'cases':60}))

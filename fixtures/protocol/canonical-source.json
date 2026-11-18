@@ -1,0 +1,25 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "fa8db2abc8da4f4f9f12b529d4272ee9f8147c5570500a8702111a17dba67b77",
+  "input_corpus_sha256": "28da862a88719cf41c3df2e24c3be9d18399444f9d269b9afc0a7fb0abc3a148",
+  "input_evidence_sha256": "742de9e14ed060c69dd022e01f4d2ce9c07540672e98e1fdcea103ec816ec523",
+  "profile_sha256": "9a4c0c39a0044e0eca91c30667e002003d0b6a10e1e24e9a3fa7176a0b7fac8b",
+  "driver_sha256": "15ed24ca7167b65a6735221c86428d1ce3190b725e6c3c1cb48b2686ebfd604b",
+  "oracle_sources": {
+    "reference/canonical/coordinator.go": "a336a6468f20a9a0ea82e49dd8e75f0c6e0349cf644658c6b0e4ed64d765ca55",
+    "reference/canonical/main.go": "aa5c562e38b93ea8af50798efd77d7ce04a30e883525d967f3b711a595792ebb",
+    "reference/canonical/topology.go": "d1ce9bbe32a543aa73766fe6c62f6c106fabfeca1dd73f429c5cbe23b6ec31d4"
+  },
+  "go_sources": {
+    "cmd/utils/hierarchical_coordinator.go": "be7911ec187b79adae05d786ecc282a958bd6c12a9ff68e85028099a255b1336",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "core/bodydb.go": "19c7f7238fa89f0d24cc1b886a1ba1c202b65a8c8565793888aa79c41e860368",
+    "core/rawdb/accessors_chain.go": "917b3c97845995643557d06096c2722e0f4f00f9b66d9a4a8d2e09e7f702a2e7",
+    "core/poem.go": "177c7de59c903b9470fa55ef0c52e7d5866be448b6f27e4e95d08b312aa8d65f",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false
+}

@@ -1,0 +1,5 @@
+{
+  "workers": 4,
+  "batch_concurrency": 8,
+  "encoding": "raw"
+}

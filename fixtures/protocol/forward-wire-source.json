@@ -1,0 +1,16 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "ae5020c333107a25a39e499e84b6ce9f74d46eebb46b8bc1a65666caceb402d0",
+  "driver_sha256": "2637824d069285f7920ff00993c1ec9a86cabee8a3acad5924a70d9472f33db4",
+  "oracle_source_sha256": "692e92bb104ccdd4273377de6a5ea0858dcbb70fe44fac63bf56a8ed4677e4ef",
+  "go_sources": {
+    "p2p/pb/proto_services.go": "893fd06334b803cdd0dfcb3c5b288642b350c2b942ba14a9d7248427d23d3210",
+    "p2p/pb/quai_messages.pb.go": "f99f288d6c07f8586e0fa32647488a3936ccb7fadb7e4f2346029a6a86075ba3",
+    "p2p/pb/quai_messages.proto": "ccc1df3662e02d17c3a58dd7dd07057cd0091f8f1398f3c244d1d2b4e269b324",
+    "common/proto_common.proto": "c6a398b1a8daf40c8a7460e8220b0f4f3c248c8b462aa284fe3ae82f0c35c078",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "scope": "Actual pinned Go EncodeQuaiRequest/EncodeQuaiResponse canonical number/hash bytes, including zero height, multi-byte height and typed absence; service semantics and native admission are checked separately."
+}

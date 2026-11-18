@@ -1,0 +1,25 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "driver_sha256": "7462165d7014313e79b1fc308a2ca9b651e11afc4ac801e773a8b13fe7dace40",
+  "oracle_sources": {
+    "reference/controllers/main.go": "fa11d752f29dc648dc909e7794dab6c7970cefdb67266fdc944f64ef386357cd",
+    "reference/controllers/core-export.go": "0a940d9e75f60801f967b039bd57a5ce8c7124e8c14a08708506d6c8e34c3180"
+  },
+  "sources": {
+    "core/exchange_controller.go": "c5650ca79940652cacfb46844b334a24219e9843d07ee3bfca26c11b6ab1f236",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "common/big.go": "51adfacf59cc8707e028aa8bc728a508811239ac6f88a01da33b1dea5208c0e5",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "core/bodydb.go": "19c7f7238fa89f0d24cc1b886a1ba1c202b65a8c8565793888aa79c41e860368",
+    "core/types/block.go": "10003cdf3743c35e3fd42c089887f5dae7f1aafe2ab80ea691ef6d86e1169e11",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "scope": "Controlled economic arithmetic through unmodified official HeaderChain methods. Historical rates are supplied; no block acceptance, checkpoint authority or canonical synchronization.",
+  "runtime_go_dependency": false,
+  "canonical_authority": false,
+  "cases": 3200,
+  "vectors_sha256": "e5864e43713348948233872bb102a46ac0672d47cfac1089415fec8324b51bae"
+}

@@ -1,0 +1,14 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "170a89ddeacd2120657672ceddce0ae20c10708cff35c754245b8ee8a208fd2f",
+  "oracle_source_sha256": "34032c3b3714f458c4f3839bcf5fbe25634c47b8fbe42f8fe3688ce74f11750f",
+  "driver_sha256": "ce3229370ba8ce15f178ec7811cfe9a770c3d71940d98d9b51d8e7dbacaf7677",
+  "go_sources": {
+    "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",
+    "core/state/statedb.go": "84bece787e5207237c612a7d2659a3692e4c6a1686f7e89343642444b5427f3e",
+    "core/types/transaction.go": "a629fe1c32e8e4e73091540fed92c8aa0c20e070332a565708e0a5c91890f169",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09"
+  },
+  "scope": "Authenticated-message authority transition, not signature recovery. Rust production entrypoint still requires signature recovery.",
+  "public_network": false
+}

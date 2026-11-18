@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "10fa8f3e4ec4d1aa8c27b76cac879cc8758fab8d33a0d12e45d3f0bcd29ac9af",
+  "oracle_sources": {
+    "reference/placement/main.go": "64fceb3c44a0869e5ba5c69ba4e91511bd926a3289f9bd5b52cd353c685e02eb",
+    "reference/placement/core-export.go": "c144c11b4bd41d6163f4461c0d6644d6046f209954a643e8e3b5e3dfcf4a5c2c",
+    "reference/consensus/core-export.go": "5a5c20d220b18482547b0f4ebef53ce5f433c0a03225d7f5fab11c7f9c8e0c53",
+    "reference/history/core-export.go": "c20812523db8a523a7f7ee52f9b7fd7e18e45383ad2dac2a155d5555585aae51",
+    "reference/header/core-export.go": "1af9581b7be85418012a82021a94f732f50f61440090cab9fc0865287fc88d4a",
+    "reference/hierarchy/core-export.go": "416f633f09aeb0d068a4c422f2b490632b089671d606737389717a8c7bb4c52a"
+  },
+  "driver_sha256": "b3806e7887403fb06bb66a55aa106ce16a32d7b5075d2f8f8988541e66face1f",
+  "sources": {
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "core/core.go": "13da03e9b45895043ba0f41616a8888726ef659b7b7a50bc975e924231a0745c",
+    "core/slice.go": "26f207c053321734a2cc33631b4039b66686f36ef16d86178e15dbd920d2cf1f",
+    "core/headerchain_validation.go": "6f412c112f2a675a7811be9fca32d1827257ad962c092d79ab4c3d607df5fdf8",
+    "core/poem.go": "177c7de59c903b9470fa55ef0c52e7d5866be448b6f27e4e95d08b312aa8d65f",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "core/types/auxpow.go": "7dae048253ab1c71628d65272a40bc5aefe135d6fee5ca5c8d25dba10582f984",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "common/big.go": "51adfacf59cc8707e028aa8bc728a508811239ac6f88a01da33b1dea5208c0e5",
+    "common/types.go": "7bc526e37b42e1a33adb096d652f0eed153eea4239e73f9cff3b7a207a854912",
+    "core/types/block.go": "10003cdf3743c35e3fd42c089887f5dae7f1aafe2ab80ea691ef6d86e1169e11",
+    "core/block_validator.go": "4e74a5cab3879494e5b0651905b01efc1a85565d4fc7a985ae5f34089c9016c4",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "consensus/misc/statefee.go": "7a0e0dcdb610292679979877b2475249da4efe3833af4f2b5fc5e3f53caae49d",
+    "consensus/progpow/progpow.go": "f63ba78005f3c58df24070c2b5cf63a854e90a4d0b15d138019b2f1f412edd69",
+    "consensus/progpow/algorithm.go": "2259a68d60ca695edcc76b355444cbefbdf51bfa0152e22ede9aefcf14a60093",
+    "consensus/kawpow/kawpow.go": "6c3c218e56034d5626d38dbc0891d12d0e0da20b2a358f0bd5ca5df1f0a9c05b",
+    "consensus/kawpow/algorithm.go": "245cd96a9f85fdc63f46e91cc4c3ba227548e657b56670acd8c60be991123cf7",
+    "consensus/kawpow/algorithm_kawpow.go": "aafcb9b8086daf18ee2a6db849039050c28f4bc05c6c4cf0e1f2d39d4441750e",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "go_version": "go version go1.24.5 darwin/arm64",
+  "scope": "Bounded candidate order/routing, parent manifest/interlink commitments, manifest/interlink advancement and PCRC. Controlled work projections and cached-header ancestry projections are distinct from actual native proof/header/body append preparation. All imported history remains unverified; no canonical or economic state publication.",
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "manifest_semantics": "Compare rawdb persisted next manifests. First-call CalculateManifest returns nil because of Go variable shadowing; returned_manifest records that separately. Stored empty manifests are unavailable to AppendHeader outside prime context."
+}

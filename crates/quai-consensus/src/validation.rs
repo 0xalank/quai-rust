@@ -1,0 +1,602 @@
+//! Candidate ancestry and header/inclusion checks. No canonical chain authority.
+use crate::{
+    history::{History, Record},
+    rules,
+    rules::Uint,
+    share_rules::{self, Classification, Triple},
+    verifier::{VerifiedWork, Verifier},
+    Error,
+};
+use crypto_bigint::Encoding;
+use quai_primitives::{Hash, Header};
+use std::collections::BTreeSet;
+pub fn internal_address(address: &[u8], location: &[u8]) -> bool {
+    location.len() == 2 && address.len() == 20 && address[0] == (location[0] << 4 | location[1])
+}
+fn header_id(h: &Header) -> Result<Hash, Error> {
+    h.block_hash()
+        .map_err(|_| Error::Unsupported("header hash domain"))
+}
+fn prime(h: &Header) -> Result<u64, Error> {
+    share_rules::number(h.wire().prime_terminus_number.as_deref().unwrap())
+}
+fn num(h: &Header) -> Result<u64, Error> {
+    share_rules::number(h.wire().number.as_deref().unwrap())
+}
+fn diff(h: &Header) -> Result<Uint, Error> {
+    share_rules::uint(h.wire().difficulty.as_deref().unwrap())
+}
+fn parent(h: &Header) -> Hash {
+    h.wire()
+        .parent_hash
+        .as_ref()
+        .unwrap()
+        .value
+        .as_slice()
+        .try_into()
+        .unwrap()
+}
+pub fn data_policy(
+    header: &Header,
+    qi_restriction_height: u64,
+    early_lock: bool,
+) -> Result<(), Error> {
+    let h = header.wire();
+    let address = &h.primary_coinbase.as_ref().unwrap().value;
+    if address[1] > 127 && qi_restriction_height < 262_000 {
+        return Err(Error::Invalid("Qi coinbase before controller activation"));
+    }
+    if h.data.is_empty() {
+        return Err(Error::Invalid("empty header data"));
+    }
+    if h.data[0] > 3 {
+        return Err(Error::Invalid("header data lock byte"));
+    }
+    let location = &h.location.as_ref().unwrap().value;
+    if h.data.len() >= 21 && (!internal_address(&h.data[1..21], location) || h.data[2] > 127) {
+        return Err(Error::Invalid("lockup contract scope"));
+    }
+    if h.data.len() == 41 && !internal_address(&h.data[21..41], location) {
+        return Err(Error::Invalid("beneficiary scope"));
+    }
+    if early_lock && num(header)? < 2 * rules::BLOCKS_PER_MONTH && h.lock.unwrap() != 0 {
+        return Err(Error::Invalid("early header lock"));
+    }
+    Ok(())
+}
+#[derive(Clone)]
+pub struct Profile {
+    pub location: Vec<u8>,
+    pub minimum_difficulty: Uint,
+    pub duration: u64,
+    pub gas_ceiling: u64,
+    pub p2p_threshold: u16,
+    pub genesis: BTreeSet<Hash>,
+    pub default_genesis: Option<Hash>,
+}
+impl Profile {
+    pub fn validate(&self) -> Result<(), Error> {
+        if self.location.len() != 2 || self.location.iter().any(|n| *n > 15) {
+            return Err(Error::Unsupported("zone ancestry profile required"));
+        }
+        if self.duration == 0
+            || self.minimum_difficulty == Uint::ZERO
+            || self.p2p_threshold == 0
+            || self.p2p_threshold > 255
+            || self.genesis.len() > 256
+        {
+            return Err(Error::Invalid("history profile"));
+        }
+        Ok(())
+    }
+}
+pub fn expected_difficulty(
+    history: &History,
+    parent: &Record,
+    profile: &Profile,
+) -> Result<Uint, Error> {
+    if profile.genesis.contains(&parent.id) {
+        let value = crate::initialization::genesis_difficulty(
+            parent,
+            parent.object.header().wire().expansion_number.unwrap() as u8,
+            profile.default_genesis,
+        )?;
+        if value.bits_vartime() > 256 {
+            return Err(Error::Unsupported(
+                "genesis difficulty exceeds header domain",
+            ));
+        }
+        return Ok(value.resize());
+    }
+    let grand = match history.get(&parent.parents[2]) {
+        Ok(v) => v,
+        Err(Error::Unavailable(_)) => return parent.difficulty(),
+        Err(e) => return Err(e),
+    };
+    if profile.genesis.contains(&grand.id) {
+        return parent.difficulty();
+    }
+    rules::adjust_difficulty(
+        parent.difficulty()?,
+        profile.minimum_difficulty,
+        parent.header.wire().time.unwrap(),
+        grand.header.wire().time.unwrap(),
+        profile.duration,
+    )
+}
+#[derive(Clone, Debug, Default)]
+pub struct AlgoCounts {
+    pub kawpow: u32,
+    pub sha: u32,
+    pub uncled_sha: u32,
+    pub scrypt: u32,
+    pub uncled_scrypt: u32,
+}
+pub fn count_algorithms(headers: &[Header], location: &[u8]) -> Result<AlgoCounts, Error> {
+    let mut out = AlgoCounts::default();
+    if headers.len() > 4096 {
+        return Err(Error::ResourceLimit("share count"));
+    }
+    for h in headers {
+        let id = h
+            .wire()
+            .aux_pow
+            .as_ref()
+            .map(|b| crate::auxiliary::Auxiliary::decode(b).map(|a| a.id()))
+            .transpose()?
+            .unwrap_or(0);
+        let external =
+            !internal_address(&h.wire().primary_coinbase.as_ref().unwrap().value, location);
+        match id {
+            0 | 1 => out.kawpow += 1,
+            2 | 3 => {
+                out.sha += 1;
+                if external {
+                    out.uncled_sha += 1;
+                }
+            }
+            4 => {
+                out.scrypt += 1;
+                if external {
+                    out.uncled_scrypt += 1;
+                }
+            }
+            _ => return Err(Error::Invalid("unknown share algorithm")),
+        }
+    }
+    Ok(out)
+}
+/// Fields updated from the parent's *included* workshares, not the candidate list.
+pub fn expected_share_triples(
+    parent: &Record,
+    prime: u64,
+    location: &[u8],
+) -> Result<(Triple, Triple), Error> {
+    let counts = count_algorithms(&parent.uncles()?, location)?;
+    let p = parent.header.wire();
+    Ok((
+        share_rules::next_pow_triple(
+            parent.difficulty()?,
+            &Triple::from_header(&parent.header, true)?,
+            share_rules::uint(p.sha_share_target.as_deref().unwrap_or_default())?,
+            counts.sha,
+            counts.uncled_sha,
+            prime,
+            true,
+        )?,
+        share_rules::next_pow_triple(
+            parent.difficulty()?,
+            &Triple::from_header(&parent.header, false)?,
+            share_rules::uint(p.scrypt_share_target.as_deref().unwrap_or_default())?,
+            counts.scrypt,
+            counts.uncled_scrypt,
+            prime,
+            false,
+        )?,
+    ))
+}
+/// Cheap structural checks against the supplied parent/grandparent snapshot.
+/// Other header entropy/controller/fork checks are explicitly not implied.
+pub fn check_header_ancestry(
+    history: &History,
+    header: &Record,
+    profile: &Profile,
+    now: u64,
+    uncle: bool,
+) -> Result<HeaderAncestry, Error> {
+    profile.validate()?;
+    let parent = history.get(&header.parents[2])?;
+    let w = header.header.wire();
+    let b = header.object.header().wire();
+    if b.extra.as_deref().unwrap_or_default().len() > 32 {
+        return Err(Error::Invalid("extra data size"));
+    }
+    if w.header_hash.as_ref().unwrap().value.as_slice() != header.object.header().hash() {
+        return Err(Error::Invalid("body header commitment"));
+    }
+    if !uncle && w.time.unwrap() > now.saturating_add(15) {
+        return Err(Error::Invalid("future block"));
+    }
+    if w.time.unwrap() < parent.header.wire().time.unwrap() {
+        return Err(Error::Invalid("older block time"));
+    }
+    let expected = expected_difficulty(history, &parent, profile)?;
+    if header.difficulty() != Ok(expected) {
+        return Err(Error::Invalid("header difficulty"));
+    }
+    let location = &w.location.as_ref().unwrap().value;
+    let n = location.len().min(profile.location.len());
+    if location[..n] != profile.location[..n] {
+        return Err(Error::Invalid("header location"));
+    }
+    data_policy(&header.header, header.prime, true)?;
+    if !internal_address(
+        &w.primary_coinbase.as_ref().unwrap().value,
+        &profile.location,
+    ) {
+        return Err(Error::Invalid("coinbase scope"));
+    }
+    if b.gas_limit.unwrap() > i64::MAX as u64 || b.gas_used.unwrap() > b.gas_limit.unwrap() {
+        return Err(Error::Invalid("gas use/limit"));
+    }
+    if b.gas_limit.unwrap()
+        != rules::next_limit(
+            parent.numbers[2],
+            parent.object.header().wire().gas_limit.unwrap(),
+            profile.gas_ceiling,
+        )
+    {
+        return Err(Error::Invalid("gas limit schedule"));
+    }
+    if b.state_used.unwrap() > b.state_limit.unwrap()
+        || b.state_limit.unwrap()
+            != rules::next_limit(
+                parent.numbers[2],
+                parent.object.header().wire().state_limit.unwrap(),
+                50_000_000,
+            )
+    {
+        return Err(Error::Invalid("state limit schedule"));
+    }
+    let number = if profile.genesis.contains(&parent.id) {
+        0
+    } else {
+        parent.numbers[2]
+    };
+    if header.numbers[2]
+        != number
+            .checked_add(1)
+            .ok_or(Error::Unsupported("number overflow"))?
+    {
+        return Err(Error::Invalid("header number"));
+    }
+    let id = w
+        .aux_pow
+        .as_ref()
+        .map(|b| crate::auxiliary::Auxiliary::decode(b).map(|a| a.id()))
+        .transpose()?;
+    if !rules::pow_id_valid(header.prime, id, false) {
+        return Err(Error::Invalid("block proof ID"));
+    }
+    Ok(HeaderAncestry {
+        parent: parent.id,
+        number: header.numbers[2],
+        fully_validated: false,
+    })
+}
+#[derive(Clone, Debug)]
+pub struct HeaderAncestry {
+    pub parent: Hash,
+    pub number: u64,
+    pub fully_validated: bool,
+}
+#[derive(Clone, Debug)]
+pub struct InclusionReport {
+    pub checked: usize,
+    pub distances: Vec<u64>,
+    pub classifications: Vec<Classification>,
+    pub external_donor_exception_eligible: usize,
+    pub fully_validated: bool,
+    pub history_verified: bool,
+}
+/// Runtime inclusion path: proof facts are privately constructed by the native
+/// verifier. A controlled hash projection cannot enter this API.
+pub fn verify_inclusions(
+    verifier: &mut Verifier,
+    history: &History,
+    block: &Record,
+    profile: &Profile,
+) -> Result<InclusionReport, Error> {
+    profile.validate()?;
+    let headers = block.uncles()?;
+    if headers.len() > share_rules::count_limits(block.prime).0 {
+        return Err(Error::Invalid("too many uncles"));
+    }
+    block
+        .object
+        .verify_commitments(quai_primitives::work::Context::Zone)
+        .map_err(|_| Error::Invalid("body commitments"))?;
+    let mut works = Vec::with_capacity(headers.len());
+    for h in &headers {
+        works.push(verifier.work_for_inclusion(h, &profile.location)?);
+    }
+    check_inclusions_verified(verifier, history, block, profile, &headers, &works)
+}
+fn check_inclusions_verified(
+    verifier: &mut Verifier,
+    history: &History,
+    block: &Record,
+    profile: &Profile,
+    headers: &[Header],
+    works: &[VerifiedWork],
+) -> Result<InclusionReport, Error> {
+    for (h, w) in headers.iter().zip(works) {
+        if header_id(h)? != w.header() {
+            return Err(Error::Invalid("work/header binding"));
+        }
+    }
+    check_inclusions_projection(
+        history,
+        block,
+        profile,
+        headers,
+        &works.iter().map(VerifiedWork::hash).collect::<Vec<_>>(),
+        |p| Ok(native_parent_metrics(verifier, history, p, profile)?.order),
+    )
+}
+pub(crate) fn native_parent_metrics(
+    verifier: &mut Verifier,
+    history: &History,
+    parent: &Record,
+    profile: &Profile,
+) -> Result<crate::zone_header::ParentEntropyProjection, Error> {
+    parent.verify_binding()?;
+    let id = parent
+        .header
+        .wire()
+        .aux_pow
+        .as_ref()
+        .map(|b| crate::auxiliary::Auxiliary::decode(b).map(|a| a.id()))
+        .transpose()?;
+    if !rules::pow_id_valid(parent.prime, id, false) {
+        return Err(Error::Invalid("parent proof-ID policy"));
+    }
+    if parent.numbers[2] == 0 {
+        if !profile.genesis.contains(&parent.id) {
+            return Err(Error::Unsupported("unqualified zero-height parent"));
+        }
+        return Ok(crate::zone_header::ParentEntropyProjection {
+            order: 0,
+            total: Uint::ZERO,
+            delta: Uint::ZERO,
+            uncled_delta: Uint::ZERO,
+        });
+    }
+
+    let proof = verifier.verify_header_proof(&parent.header)?;
+    let b = parent.object.header().wire();
+    let arr = |v: &[Vec<u8>]| -> Result<[Uint; 3], Error> {
+        v.iter()
+            .map(|b| share_rules::uint(b))
+            .collect::<Result<Vec<_>, _>>()?
+            .try_into()
+            .map_err(|_| Error::Invalid("entropy array"))
+    };
+    let pre_work = if parent.prime < rules::KAWPOW_FORK {
+        crate::prefork_shares::native_components(verifier, history, parent)?.workshares
+    } else {
+        Uint::ZERO
+    };
+    let mut entropy = rules::entropy(&rules::EntropyInput {
+        hash: proof.hash(),
+        difficulty: parent.difficulty()?,
+        expansion: b.expansion_number.unwrap() as u8,
+        parent_entropy: arr(&b.parent_entropy)?,
+        parent_delta: arr(&b.parent_delta_entropy)?,
+        parent_uncled_delta: arr(&b.parent_uncled_delta_entropy)?,
+        uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap())?,
+        postfork_share_count: if parent.prime >= rules::KAWPOW_FORK {
+            Some(parent.uncles()?.len() as u32)
+        } else {
+            None
+        },
+        node_context: 2,
+    })?;
+    rules::add_pre_fork_work(&mut entropy, pre_work)?;
+    Ok(crate::zone_header::ParentEntropyProjection {
+        order: entropy.order,
+        total: if profile.genesis.contains(&parent.id) {
+            Uint::ZERO
+        } else {
+            entropy.total
+        },
+        delta: if profile.genesis.contains(&parent.id) {
+            Uint::ZERO
+        } else {
+            entropy.delta
+        },
+        uncled_delta: if profile.genesis.contains(&parent.id) {
+            Uint::ZERO
+        } else {
+            entropy.uncled_delta
+        },
+    })
+}
+/// Testable controlled-hash policy projection. It does not verify PoW and never
+/// returns a token accepted by the native runtime inclusion path.
+pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
+    history: &History,
+    block: &Record,
+    profile: &Profile,
+    headers: &[Header],
+    hashes: &[Hash],
+    mut parent_order: F,
+) -> Result<InclusionReport, Error> {
+    profile.validate()?;
+    if headers.len() != hashes.len() {
+        return Err(Error::Invalid("proof projection count"));
+    }
+    let (total, sha_max, scrypt_max) = share_rules::count_limits(block.prime);
+    if headers.len() > total {
+        return Err(Error::Invalid("too many uncles"));
+    }
+    if headers.is_empty() {
+        return Ok(InclusionReport {
+            checked: 0,
+            distances: vec![],
+            classifications: vec![],
+            external_donor_exception_eligible: 0,
+            fully_validated: false,
+            history_verified: false,
+        });
+    }
+    let mut ancestors = BTreeSet::new();
+    let mut banned = BTreeSet::new();
+    let mut ancestor_work = BTreeSet::new();
+    let mut banned_work = BTreeSet::new();
+    let identity = |h: &Header| {
+        h.pow_identity()
+            .map_err(|_| Error::Unsupported("proof identity"))
+    };
+    let mut p = block.parents[2];
+    for _ in 0..share_rules::inclusion_depth(block.prime) {
+        let ancestor = history.get(&p)?;
+        ancestors.insert(p);
+        if block.prime >= rules::POLARIS_FORK {
+            ancestor_work.insert(identity(ancestor.header())?);
+        }
+        for uncle in ancestor.uncles()? {
+            banned.insert(header_id(&uncle)?);
+            if block.prime >= rules::POLARIS_FORK {
+                banned_work.insert(identity(&uncle)?);
+            }
+        }
+        p = ancestor.parents[2];
+    }
+    ancestors.insert(block.id);
+    banned.insert(block.id);
+    if block.prime >= rules::POLARIS_FORK {
+        ancestor_work.insert(identity(block.header())?);
+        for h in headers {
+            let id = identity(h)?;
+            if !banned_work.insert(id) {
+                return Err(Error::Invalid("duplicate uncle proof identity"));
+            }
+            if ancestor_work.contains(&id) {
+                return Err(Error::Invalid("uncle proof is ancestor"));
+            }
+        }
+    }
+    let (mut sha, mut scrypt) = (0, 0);
+    let mut distances = vec![];
+    let mut classifications = vec![];
+    let mut exceptions = 0;
+    for (h, pow) in headers.iter().zip(hashes) {
+        let id = header_id(h)?;
+        if !banned.insert(id) {
+            return Err(Error::Invalid("duplicate uncle"));
+        }
+        data_policy(h, block.prime, false)?;
+        if ancestors.contains(&id) {
+            return Err(Error::Invalid("uncle is ancestor"));
+        }
+        let classification = share_rules::classify(h, *pow, profile.p2p_threshold)?;
+        let workshare = if block.prime < rules::KAWPOW_FORK {
+            !quai_primitives::meets_blake3_target(pow, &diff(h)?.to_be_bytes())
+                .map_err(|_| Error::Invalid("difficulty"))?
+        } else {
+            match classification {
+                Classification::Block => false,
+                Classification::Valid => true,
+                _ => return Err(Error::Invalid("uncle proof classification")),
+            }
+        };
+        let aux = h
+            .wire()
+            .aux_pow
+            .as_ref()
+            .map(|b| crate::auxiliary::Auxiliary::decode(b))
+            .transpose()?;
+        let algo = aux.as_ref().map(|a| a.id());
+        if !rules::pow_id_valid(prime(h)?, algo, workshare) {
+            return Err(Error::Invalid("uncle proof ID"));
+        }
+        if block.prime >= rules::KAWPOW_FORK {
+            if matches!(algo, Some(2 | 3)) {
+                sha += 1;
+                if sha > sha_max {
+                    return Err(Error::Invalid("too many SHA shares"));
+                }
+            }
+            if algo == Some(4) {
+                scrypt += 1;
+                if scrypt > scrypt_max {
+                    return Err(Error::Invalid("too many scrypt shares"));
+                }
+            }
+        }
+        if !ancestors.contains(&parent(h)) || (!workshare && parent(h) == block.parents[2]) {
+            return Err(Error::Invalid("dangling uncle"));
+        }
+        distances.push(history.workshare_distance(block, h)?);
+        data_policy(h, block.prime, true)?;
+        if let Some(aux) = &aux {
+            let external = !internal_address(
+                &h.wire().primary_coinbase.as_ref().unwrap().value,
+                &profile.location,
+            );
+            // Runtime work computation checks bindings and this exact exception; the
+            // projection does not infer that supplied hashes establish signature validity.
+            if matches!(aux.id(), 2..=4) && external {
+                exceptions += 1;
+            }
+        }
+        let parent = history.get(&parent(h))?;
+        if diff(h)? != expected_difficulty(history, &parent, profile)? {
+            return Err(Error::Invalid("uncle difficulty"));
+        }
+        if block.prime >= rules::KAWPOW_FORK {
+            let order = parent_order(&parent)?;
+            let expected = if order == 0 || profile.genesis.contains(&parent.id) {
+                parent.numbers[0]
+            } else {
+                parent.prime
+            };
+            if prime(h)? != expected {
+                return Err(Error::Invalid("uncle prime terminus"));
+            }
+            if prime(h)? >= rules::KAWPOW_FORK {
+                let (sha, scrypt) = expected_share_triples(&parent, prime(h)?, &profile.location)?;
+                let actual = Triple::from_header(h, true)?;
+                if actual.difficulty != sha.difficulty || actual.count != sha.count {
+                    return Err(Error::Invalid("uncle SHA controller"));
+                }
+                let actual = Triple::from_header(h, false)?;
+                if actual.difficulty != scrypt.difficulty || actual.count != scrypt.count {
+                    return Err(Error::Invalid("uncle scrypt controller"));
+                }
+            }
+        }
+        let pn = if profile.genesis.contains(&parent.id) {
+            0
+        } else {
+            parent.numbers[2]
+        };
+        if num(h)?
+            != pn
+                .checked_add(1)
+                .ok_or(Error::Unsupported("uncle number overflow"))?
+        {
+            return Err(Error::Invalid("uncle number"));
+        }
+        classifications.push(classification);
+    }
+    Ok(InclusionReport {
+        checked: headers.len(),
+        distances,
+        classifications,
+        external_donor_exception_eligible: exceptions,
+        fully_validated: false,
+        history_verified: false,
+    })
+}

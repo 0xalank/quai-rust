@@ -1,0 +1,12 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "generator_sha256": "78d116bb3c5c5c62b22c379dccc693e9c4a0e8f01853084b6089bdd230c30381",
+  "vectors_sha256": "2e14e6eaf1c8c0c6085774e0285c3eea8445d8be7dd428ebacfd36590ccd66e6",
+  "sources": {
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "core/types/proto_block.proto": "56dc50f200e62d0ce18506983f5ae3738616e429facdcf6e631aa4cbcd42614e",
+    "common/proto_common.proto": "c6a398b1a8daf40c8a7460e8220b0f4f3c248c8b462aa284fe3ae82f0c35c078",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09"
+  },
+  "scope": "Bounded work-header codec/commitment and Blake3 target comparisons. Not ProgPoW/KAWPOW mining verification or complete block validation."
+}

@@ -8,9 +8,11 @@
 # Environment:
 #   QUAI_MAINNET_DIR  data root (default: ~/quai-data/mainnet-v0.57.0)
 #   GO_QUAI_BIN       binary to pin on first start (default: ../go-quai/build/bin/go-quai)
-#   MIN_FREE_GB       the disk guard stops the node below this free space (default: 25)
+#   MIN_FREE_GB       the guard stops the node below this free space (default: 25)
+#   ALLOW_METERED     set to 1 to run on an iPhone hotspot (default: refused)
 #
 # UPnP port mapping and telemetry are off. RPC listens on localhost only.
+# scripts/mainnet/node_guard.sh stops the node on low disk or a metered link.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -50,6 +52,15 @@ start)
 		echo "only ${free_gb} GiB free; need more than ${MIN_FREE_GB} GiB" >&2
 		exit 1
 	fi
+	gateway=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
+	case "$gateway" in
+	172.20.10.*)
+		if [ "${ALLOW_METERED:-0}" != 1 ]; then
+			echo "default gateway $gateway is an iPhone hotspot; set ALLOW_METERED=1 to sync over it" >&2
+			exit 1
+		fi
+		;;
+	esac
 	# go-quai writes nodelogs/ under its working directory.
 	cd "$DATA"
 	nohup "$DATA/bin/go-quai" start \
@@ -61,10 +72,10 @@ start)
 		--node.telemetry=false \
 		>> "$DATA/logs/node.out" 2>&1 < /dev/null &
 	echo $! > "$NODE_PID"
-	nohup "$ROOT/scripts/mainnet/disk_guard.sh" "$(cat "$NODE_PID")" "$DATA" "$MIN_FREE_GB" \
-		>> "$DATA/logs/disk-guard.log" 2>&1 < /dev/null &
+	nohup "$ROOT/scripts/mainnet/node_guard.sh" "$(cat "$NODE_PID")" "$DATA" "$MIN_FREE_GB" \
+		>> "$DATA/logs/node-guard.log" 2>&1 < /dev/null &
 	echo $! > "$GUARD_PID"
-	echo "started go-quai pid $(cat "$NODE_PID"); data $DATA; guard stops it below ${MIN_FREE_GB} GiB free"
+	echo "started go-quai pid $(cat "$NODE_PID"); data $DATA; guard stops it below ${MIN_FREE_GB} GiB free or on a hotspot"
 	;;
 stop)
 	if running "$NODE_PID"; then
@@ -77,10 +88,10 @@ stop)
 	;;
 status)
 	if running "$NODE_PID"; then echo "go-quai running: pid $(cat "$NODE_PID")"; else echo "go-quai not running"; fi
-	if running "$GUARD_PID"; then echo "disk guard running: pid $(cat "$GUARD_PID")"; fi
+	if running "$GUARD_PID"; then echo "node guard running: pid $(cat "$GUARD_PID")"; fi
 	du -sh "$DATA/db" 2>/dev/null || true
 	df -h "$DATA" 2>/dev/null | tail -1
-	tail -n 2 "$DATA/logs/disk-guard.log" 2>/dev/null || true
+	tail -n 2 "$DATA/logs/node-guard.log" 2>/dev/null || true
 	;;
 *)
 	echo "usage: $0 start|stop|status" >&2

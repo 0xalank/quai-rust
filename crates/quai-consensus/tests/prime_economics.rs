@@ -25,7 +25,10 @@ fn parent_controller_scope_is_explicit_and_inbound_lists_are_unbounded_as_in_go(
         Transaction::decode(&decode_hex(row["inbound"][0].as_str().unwrap()).unwrap()).unwrap();
     // core/slice.go Append prices any number of inbound ETXs; the former
     // 8,192-ETX and 32 MiB caps were Rust-only.
-    let many = prime_economics::conversions(&parent, &vec![tx.clone(); 8193], None).unwrap();
+    let old = Some(quai_consensus::rules::Uint::from_u128(
+        row["old_exchange"].as_str().unwrap().parse().unwrap(),
+    ));
+    let many = prime_economics::conversions(&parent, &vec![tx.clone(); 8193], old).unwrap();
     assert_eq!(many.etxs.len(), 8193);
     let Kind::External(mut large) = tx.kind().clone() else {
         unreachable!()
@@ -33,7 +36,7 @@ fn parent_controller_scope_is_explicit_and_inbound_lists_are_unbounded_as_in_go(
     large.data = vec![7; 128 * 1024];
     let large = Transaction::external(large).unwrap();
     assert_eq!(
-        prime_economics::conversions(&parent, &vec![large; 257], None)
+        prime_economics::conversions(&parent, &vec![large; 257], old)
             .unwrap()
             .etxs
             .len(),

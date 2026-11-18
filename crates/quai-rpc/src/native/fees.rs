@@ -78,9 +78,44 @@ pub fn gas_price(base_fee: &U256) -> U256 {
     out
 }
 
+/// `big.Int.String()` of a big-endian magnitude of up to 256 bits.
+pub fn decimal(bytes: &[u8]) -> String {
+    let mut word = [0u8; 32];
+    let b = &bytes[bytes.len().saturating_sub(32)..];
+    word[32 - b.len()..].copy_from_slice(b);
+    let mut digits = vec![];
+    let mut limbs = [0u32; 8];
+    for (i, c) in word.chunks(4).enumerate() {
+        limbs[i] = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
+    }
+    while limbs.iter().any(|l| *l != 0) {
+        let mut rem = 0u64;
+        for l in limbs.iter_mut() {
+            let cur = rem << 32 | *l as u64;
+            *l = (cur / 10) as u32;
+            rem = cur % 10;
+        }
+        digits.push(b'0' + rem as u8);
+    }
+    if digits.is_empty() {
+        return "0".into();
+    }
+    digits.reverse();
+    String::from_utf8(digits).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::gas_price;
+    use super::{decimal, gas_price};
+    #[test]
+    fn decimal_matches_big_int_string() {
+        assert_eq!(decimal(&[]), "0");
+        assert_eq!(decimal(&[0x3b, 0x9a, 0xca, 0x00]), "1000000000");
+        assert_eq!(
+            decimal(&[0xff; 32]),
+            "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+        );
+    }
     #[test]
     fn gas_price_is_six_fifths_rounded_down() {
         let mut v = [0u8; 32];

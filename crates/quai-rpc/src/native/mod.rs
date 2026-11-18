@@ -2,12 +2,15 @@
 //! of go-quai v0.57.0 for the same block (`internal/quaiapi`,
 //! `quai/filters`). Each handler names the Go function it follows.
 //!
-//! Not served here (they need a live head or a transaction pool, Phase 2.3
-//! and 3.2): `quai_newFilter`, `quai_newBlockFilter`,
-//! `quai_newPendingTransactionFilter`, `quai_getFilterChanges`,
-//! `quai_getFilterLogs`, `quai_uninstallFilter`, `quai_subscribe`,
-//! `quai_sendRawTransaction`. `ChainView::head_events` and
-//! `ChainView::submit_transaction` are their hooks.
+//! The transaction pool's methods (`quai_sendRawTransaction`,
+//! `quai_receiveTxFromPoolSharingClient`, the "pending" nonce, pool
+//! transactions in `quai_getTransactionByHash`, `txpool_*`) answer through
+//! the view's pool hooks; a view without a pool refuses them.
+//!
+//! Not served here (they need the live head, Phase 2.3): `quai_newFilter`,
+//! `quai_newBlockFilter`, `quai_getFilterChanges`, `quai_getFilterLogs`,
+//! `quai_uninstallFilter`, `quai_subscribe`. `ChainView::head_events` is
+//! their hook.
 pub mod args;
 pub mod fees;
 pub mod json;
@@ -108,6 +111,12 @@ pub const METHODS: &[&str] = &[
     "quai_estimateGas",
     "quai_createAccessList",
     "quai_gasPrice",
+    "quai_sendRawTransaction",
+    "quai_receiveTxFromPoolSharingClient",
+    "txpool_content",
+    "txpool_contentFrom",
+    "txpool_status",
+    "txpool_inspect",
 ];
 
 /// Answer one call. View calls do disk reads and proof-of-work, so they run
@@ -213,9 +222,56 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
             let a = Args::new(params, 1)?;
             let hash = a.get(0, args::hash)?;
             let Some((block, index)) = locate(view, &hash)? else {
-                return Ok(Value::Null);
+                // newRPCPendingTransaction of a pool transaction.
+                return Ok(view
+                    .pool_transaction(&hash)
+                    .map_or(Value::Null, |p| json::transaction(&p.tx, &p.hash, None)));
             };
             Ok(tx_at(&block, index))
+        }
+        "quai_sendRawTransaction" => {
+            let a = Args::new(params, 1)?;
+            let raw = a.get(0, args::bytes)?;
+            Ok(json::hash_hex(&view.submit_transaction(&raw)?))
+        }
+        "quai_receiveTxFromPoolSharingClient" => {
+            let a = Args::new(params, 1)?;
+            let raw = a.get(0, args::bytes)?;
+            view.submit_transaction(&raw)?;
+            Ok(Value::Null)
+        }
+        "txpool_status" => {
+            Args::new(params, 0)?;
+            let (pending, queued, qi) = pool(view.pool_stats())?;
+            Ok(json!({
+                "pending": json::u64_hex(pending),
+                "queued": json::u64_hex(queued),
+                "qi": json::u64_hex(qi),
+            }))
+        }
+        "txpool_content" | "txpool_inspect" => {
+            Args::new(params, 0)?;
+            let content = pool(view.pool_content(None))?;
+            let inspect = method == "txpool_inspect";
+            let section = |lists: &[(Address, Vec<crate::view::PoolTransaction>)]| {
+                let mut out = Map::new();
+                for (account, txs) in lists {
+                    out.insert(json::checksum(account), pool_dump(txs, inspect));
+                }
+                Value::Object(out)
+            };
+            Ok(json!({"pending": section(&content.pending), "queued": section(&content.queued)}))
+        }
+        "txpool_contentFrom" => {
+            let a = Args::new(params, 1)?;
+            let address = a.get(0, args::address)?;
+            let content = pool(view.pool_content(Some(&address)))?;
+            let first = |lists: &[(Address, Vec<crate::view::PoolTransaction>)]| {
+                lists
+                    .first()
+                    .map_or(Value::Object(Map::new()), |(_, txs)| pool_dump(txs, false))
+            };
+            Ok(json!({"pending": first(&content.pending), "queued": first(&content.queued)}))
         }
         "quai_getTransactionByBlockNumberAndIndex" => {
             let a = Args::new(params, 2)?;
@@ -280,11 +336,15 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
             let at = a.get(1, args::block_ref)?;
             check_checksum(&address, &original)?;
             if at == BlockRef::Number(BlockNumber::Pending) {
-                // GetPoolNonce: without a transaction pool, the head state nonce.
-                let head = head_block(view)?;
+                // GetPoolNonce (core.Core.Nonce): 0 outside the zone's Quai
+                // ledger; without a transaction pool, the head state nonce.
                 if !internal(view, &address) || qi(&address) {
                     return Ok(json::u64_hex(0));
                 }
+                if let Some(n) = view.pool_nonce(&address) {
+                    return Ok(json::u64_hex(n));
+                }
+                let head = head_block(view)?;
                 return Ok(json::u64_hex(view.state(&head)?.nonce(&address)?));
             }
             let Some((_, state)) = state_at(view, at)? else {
@@ -477,6 +537,37 @@ fn tx_at(block: &BlockData, index: u64) -> Value {
             index,
         }),
     )
+}
+/// The pool, or the error of a view without one.
+fn pool<T>(v: Option<T>) -> R<T> {
+    v.ok_or_else(|| ViewError::Unavailable("this node has no transaction pool".into()).into())
+}
+/// `txpool_content` (newRPCPendingTransaction) or `txpool_inspect` (its
+/// one-line summary) of one account's transactions, keyed by nonce.
+fn pool_dump(txs: &[crate::view::PoolTransaction], inspect: bool) -> Value {
+    use quai_primitives::transaction::Kind;
+    let mut out = Map::new();
+    for p in txs {
+        let Kind::Quai(q) = p.tx.kind() else {
+            continue;
+        };
+        let value = if inspect {
+            let amounts = format!(
+                "{} wei + {} gas \u{d7} {} wei",
+                fees::decimal(&q.value),
+                q.gas,
+                fees::decimal(&q.gas_price)
+            );
+            Value::String(match &q.to {
+                Some(to) => format!("{}: {amounts}", json::checksum(to)),
+                None => format!("contract creation: {amounts}"),
+            })
+        } else {
+            json::transaction(&p.tx, &p.hash, None)
+        };
+        out.insert(q.nonce.to_string(), value);
+    }
+    Value::Object(out)
 }
 /// `rawdb.ReadTransaction`.
 fn locate(view: &dyn ChainView, hash: &Hash) -> R<Option<(Arc<BlockData>, u64)>> {

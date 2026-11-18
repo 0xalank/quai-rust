@@ -35,6 +35,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -4203,6 +4205,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -5340,6 +5344,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -6318,6 +6324,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -6703,6 +6711,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -7084,6 +7094,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -7434,6 +7446,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -7788,6 +7802,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -8390,6 +8406,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -8697,6 +8715,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -8908,6 +8928,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -9097,6 +9119,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -9757,6 +9781,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -10249,6 +10275,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -10640,6 +10668,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -11332,6 +11362,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -12812,6 +12844,8 @@
     "qi_pool_size": 3,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -13084,6 +13118,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -13411,6 +13447,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -13835,6 +13873,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -13951,6 +13991,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -14061,6 +14103,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -14156,6 +14200,8 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 0,
+    "sharing_endpoints": [],
+    "sharing_replies": [],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -14329,6 +14375,61 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 2,
+    "sharing_endpoints": [
+     "http://sharing-client-0",
+     "http://sharing-client-1"
+    ],
+    "sharing_replies": [
+     [
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"nope\"}}",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "boom",
+       "delay_ms": 0,
+       "status": 500
+      },
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "not json",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 2500,
+       "status": 200
+      }
+     ],
+     [
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 0,
+       "status": 200
+      }
+     ]
+    ],
     "sync_tx_with_return": true
    },
    "genesis": null,
@@ -14845,6 +14946,23 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 1,
+    "sharing_endpoints": [
+     "http://sharing-client-0"
+    ],
+    "sharing_replies": [
+     [
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}",
+       "delay_ms": 0,
+       "status": 200
+      },
+      {
+       "body": "{\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"nope\"}}",
+       "delay_ms": 0,
+       "status": 200
+      }
+     ]
+    ],
     "sync_tx_with_return": false
    },
    "genesis": null,
@@ -15072,6 +15190,10 @@
     "qi_pool_size": 10024,
     "qi_tx_lifetime_s": 1800,
     "sharing_clients": 1,
+    "sharing_endpoints": [
+     "http://127.0.0.1:1"
+    ],
+    "sharing_replies": [],
     "sync_tx_with_return": true
    },
    "genesis": null,

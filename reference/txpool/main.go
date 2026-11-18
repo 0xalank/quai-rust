@@ -573,7 +573,25 @@ func (e *env) start(headName, utxoSet string, conf core.TxPoolConfig, tracked ..
 	for _, s := range conf.SharingClientsEndpoints {
 		sharing = append(sharing, s)
 	}
-	e.config = obj{"account_slots": conf.AccountSlots, "global_slots": conf.GlobalSlots, "account_queue": conf.AccountQueue, "global_queue": conf.GlobalQueue, "price_bump": conf.PriceBump, "price_limit": conf.PriceLimit, "lifetime_s": int64(conf.Lifetime / time.Second), "qi_pool_size": conf.QiPoolSize, "qi_tx_lifetime_s": int64(conf.QiTxLifetime / time.Second), "no_locals": conf.NoLocals, "sync_tx_with_return": conf.SyncTxWithReturn, "sharing_clients": len(conf.SharingClientsEndpoints)}
+	endpoints := []interface{}{}
+	for _, url := range conf.SharingClientsEndpoints {
+		name := url
+		for i, sh := range e.sharers {
+			if sh.srv.URL == url {
+				name = fmt.Sprintf("http://sharing-client-%d", i)
+			}
+		}
+		endpoints = append(endpoints, name)
+	}
+	replies := []interface{}{}
+	for _, sh := range e.sharers {
+		rs := []interface{}{}
+		for _, r := range sh.replies {
+			rs = append(rs, obj{"status": r.status, "body": r.body, "delay_ms": r.delay.Milliseconds()})
+		}
+		replies = append(replies, rs)
+	}
+	e.config = obj{"sharing_endpoints": endpoints, "sharing_replies": replies, "account_slots": conf.AccountSlots, "global_slots": conf.GlobalSlots, "account_queue": conf.AccountQueue, "global_queue": conf.GlobalQueue, "price_bump": conf.PriceBump, "price_limit": conf.PriceLimit, "lifetime_s": int64(conf.Lifetime / time.Second), "qi_pool_size": conf.QiPoolSize, "qi_tx_lifetime_s": int64(conf.QiTxLifetime / time.Second), "no_locals": conf.NoLocals, "sync_tx_with_return": conf.SyncTxWithReturn, "sharing_clients": len(conf.SharingClientsEndpoints)}
 	locals := []interface{}{}
 	for _, l := range conf.Locals {
 		locals = append(locals, hx(l[:]))

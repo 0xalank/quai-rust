@@ -2216,6 +2216,32 @@ impl Processor {
     pub fn tip(&self) -> Option<&Tip> {
         self.tip.as_ref()
     }
+    /// A gossip workshare against the zone window: go-quai's intake rules
+    /// (`worker.AddWorkShare`) and the uncle rules that do not depend on an
+    /// including block (`validation::verify_workshare`).
+    pub fn check_workshare(
+        &mut self,
+        header: &quai_primitives::Header,
+    ) -> Result<quai_consensus::validation::WorkshareReport, Failure> {
+        let c = &mut self.checker;
+        let w = header.wire();
+        let number = share_rules::number(w.number.as_deref().unwrap_or_default()).ok();
+        quai_consensus::validation::verify_workshare(
+            &mut c.verifier,
+            &c.histories[2],
+            header,
+            &c.chain.zone_profile(),
+        )
+        .map_err(|e| Failure {
+            zone_height: number,
+            context: "zone".into(),
+            number,
+            hash: header.block_hash().ok(),
+            check: format!("workshare: {}", block::message(&e)),
+            expected: "a valid workshare (go-quai AddWorkShare and the uncle rules)".into(),
+            actual: describe(&e),
+        })
+    }
     /// Check a block of the tip against its parent's context, let go-quai's
     /// head choice decide and move the head, with a reorg when the choice
     /// leaves the canonical chain.

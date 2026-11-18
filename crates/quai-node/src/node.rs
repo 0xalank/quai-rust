@@ -322,6 +322,11 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             *log,
         ) {
             Ok(gossip) => {
+                let mut detector = crate::divergence::Detector::new(
+                    Some(o.datadir.join("node").join("divergences.jsonl")),
+                    Some(metrics.clone()),
+                    *log,
+                );
                 let followed = crate::tip::follow(
                     &mut processor,
                     runtime.handle(),
@@ -329,11 +334,15 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                     gossip,
                     &stop,
                     log,
+                    &mut detector,
+                    Some(metrics.clone()),
+                    stats.clone(),
                 );
                 match followed {
                     Ok(t) => log.info(&format!(
-                        "tip: {} offered, {} accepted, {} rejected, {} fetched, {} reorgs ({} blocks, deepest {}), {} refused by the horizon; gossip {} blocks, {} workshares",
-                        t.offered, t.accepted, t.rejected, t.fetched, t.reorgs, t.reorged_blocks, t.deepest, t.refused,
+                        "tip: blocks {} offered, {} accepted, {} rejected, {} below the tip base, {} fetched; {} reorgs ({} blocks, deepest {}), {} refused by the horizon; workshares {} valid, {} valid without the parent rules, {} rejected, {} too old; gossip {} blocks, {} workshares",
+                        t.offered, t.accepted, t.rejected, t.below_base, t.fetched, t.reorgs, t.reorged_blocks, t.deepest, t.refused,
+                        t.shares_valid, t.shares_parent_unknown, t.shares_rejected, t.shares_old,
                         stats.blocks.load(Ordering::Relaxed), stats.workshares.load(Ordering::Relaxed)
                     )),
                     Err(e) => result = Err(e),

@@ -29,7 +29,8 @@ use quai_network::public::{
 };
 use quai_network::TopicKind;
 use quai_primitives::schema::{
-    block::ProtoWorkObjectBlockView, quaiprotocol::quai_response_message as rs,
+    block::{ProtoWorkObjectBlockView, ProtoWorkObjectShareView},
+    quaiprotocol::quai_response_message as rs,
 };
 use quai_primitives::{encode_hex, Hash};
 use std::collections::{HashMap, VecDeque};
@@ -53,16 +54,21 @@ pub struct GossipStats {
     pub workshares: AtomicU64,
     pub ignored: AtomicU64,
 }
+/// A zone work object that go-quai's gossip validators accepted.
+pub enum Gossip {
+    Block(Vec<u8>),
+    Workshare(Vec<u8>),
+}
 
-/// Subscribe to slice [0 0] and forward the zone blocks go-quai's validators
-/// accept; count the workshares.
+/// Subscribe to slice [0 0] and forward the zone blocks and workshares
+/// go-quai's validators accept.
 pub fn subscribe(
     runtime: &tokio::runtime::Handle,
     node: Arc<PublicNode>,
     stop: Arc<AtomicBool>,
     stats: Arc<GossipStats>,
     log: Log,
-) -> Result<Receiver<Vec<u8>>, String> {
+) -> Result<Receiver<Gossip>, String> {
     let genesis = quai_network::public::colosseum_topic_genesis();
     let topics = slice_topic_names(&genesis, [0, 0])?;
     for t in &topics {
@@ -98,6 +104,13 @@ pub fn subscribe(
             match (t.kind, t.context()) {
                 (TopicKind::Workshares, 2) => {
                     stats.workshares.fetch_add(1, Ordering::Relaxed);
+                    let Ok(view) = ProtoWorkObjectShareView::decode(data.as_slice()) else {
+                        continue;
+                    };
+                    let Some(wo) = view.work_object else { continue };
+                    if tx.try_send(Gossip::Workshare(wo.encode_to_vec())).is_err() {
+                        stats.ignored.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 (TopicKind::Blocks, 2) => {
                     let Ok(view) = ProtoWorkObjectBlockView::decode(data.as_slice()) else {
@@ -105,7 +118,7 @@ pub fn subscribe(
                     };
                     let Some(wo) = view.work_object else { continue };
                     stats.blocks.fetch_add(1, Ordering::Relaxed);
-                    if tx.try_send(wo.encode_to_vec()).is_err() {
+                    if tx.try_send(Gossip::Block(wo.encode_to_vec())).is_err() {
                         stats.ignored.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -249,33 +262,174 @@ pub struct TipStats {
     pub reorged_blocks: u64,
     pub deepest: u64,
     pub refused: u64,
+    pub below_base: u64,
+    pub shares_valid: u64,
+    pub shares_parent_unknown: u64,
+    pub shares_rejected: u64,
+    pub shares_old: u64,
+}
+/// go-quai's AddWorkShare ignores shares this far below its head
+/// (2 * params.NewWorkSharesInclusionDepth).
+const SHARE_DISTANCE: u64 = 8;
+/// Hashes the follower stops offering: rejected blocks, their descendants
+/// and blocks that fork below the tip base.
+const DEAD: usize = 4096;
+/// Time between comparisons with the peers' canonical chain.
+const CHECK_EVERY: Duration = Duration::from_secs(30);
+/// Peers asked per comparison.
+const CHECK_PEERS: usize = 4;
+
+/// A bounded set of hashes, oldest out first.
+#[derive(Default)]
+struct Recent {
+    set: std::collections::HashSet<Hash>,
+    order: VecDeque<Hash>,
+    cap: usize,
+}
+impl Recent {
+    fn new(cap: usize) -> Self {
+        Self {
+            cap,
+            ..Self::default()
+        }
+    }
+    fn contains(&self, h: &Hash) -> bool {
+        self.set.contains(h)
+    }
+    /// False when it was there already.
+    fn insert(&mut self, h: Hash) -> bool {
+        if !self.set.insert(h) {
+            return false;
+        }
+        self.order.push_back(h);
+        while self.order.len() > self.cap {
+            if let Some(old) = self.order.pop_front() {
+                self.set.remove(&old);
+            }
+        }
+        true
+    }
+}
+/// The answers of a comparison with the peers.
+enum Check {
+    Head {
+        number: u64,
+        ours: Hash,
+        answers: Vec<(libp2p::PeerId, Option<Hash>)>,
+    },
+    Lag {
+        head: u64,
+        answers: Vec<(libp2p::PeerId, Option<Hash>)>,
+    },
+    Block {
+        rejected: crate::divergence::Rejected,
+        answers: Vec<(libp2p::PeerId, Option<Hash>)>,
+    },
+}
+/// The canonical zone hash at `number` of each of `peers`.
+async fn ask(
+    node: Arc<PublicNode>,
+    peers: Vec<libp2p::PeerId>,
+    number: u64,
+) -> Vec<(libp2p::PeerId, Option<Hash>)> {
+    let tasks: Vec<_> = peers
+        .into_iter()
+        .map(|p| {
+            let node = node.clone();
+            tokio::spawn(async move {
+                (
+                    p,
+                    crate::peers::peer_hash_at(&node, p, 2, number)
+                        .await
+                        .ok()
+                        .flatten(),
+                )
+            })
+        })
+        .collect();
+    let mut out = vec![];
+    for t in tasks {
+        if let Ok(v) = t.await {
+            out.push(v);
+        }
+    }
+    out
+}
+/// The block hashes of a block's uncles (workshares included).
+fn uncle_hashes(block: &Block) -> Vec<Hash> {
+    quai_consensus::history::Record::decode(&block.raw)
+        .and_then(|r| r.uncles())
+        .map(|u| u.iter().filter_map(|h| h.block_hash().ok()).collect())
+        .unwrap_or_default()
 }
 
-/// Follow the head with the processor in tip mode until `stop`.
+/// Follow the head with the processor in tip mode until `stop`: every
+/// gossip block through every stateless check and go-quai's head choice,
+/// every gossip workshare through go-quai's intake and the uncle rules, and
+/// the canonical chain compared with the peers' (`divergence.rs`).
+#[allow(clippy::too_many_arguments)]
 pub fn follow(
     processor: &mut Processor,
     runtime: &tokio::runtime::Handle,
     node: Arc<PublicNode>,
-    gossip: Receiver<Vec<u8>>,
+    gossip: Receiver<Gossip>,
     stop: &AtomicBool,
     log: &Log,
+    detector: &mut crate::divergence::Detector,
+    metrics: Option<Arc<crate::metrics::Metrics>>,
+    gossip_stats: Arc<GossipStats>,
 ) -> Result<TipStats, String> {
     processor.enable_tip()?;
     let caches = Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?);
     let mut verifier = Verifier::with_shared_caches(caches);
     let mut stats = TipStats::default();
     let mut last_poll = Instant::now();
+    let mut last_check = Instant::now();
+    let mut last_report = Instant::now();
+    let mut dead = Recent::new(DEAD);
+    let mut shares_seen = Recent::new(16_384);
+    let (check_tx, check_rx) = std::sync::mpsc::channel::<Check>();
+    let bump = |f: fn(&crate::metrics::Metrics) -> &AtomicU64| {
+        if let Some(m) = &metrics {
+            f(m).fetch_add(1, Ordering::Relaxed);
+        }
+    };
     log.info(&format!(
         "tip: following the head through gossip from {}",
         processor.tip().map_or(0, |t| t.head().1)
     ));
     while !stop.load(Ordering::Relaxed) {
+        // Answers of the comparisons with the peers.
+        while let Ok(c) = check_rx.try_recv() {
+            match c {
+                Check::Head {
+                    number,
+                    ours,
+                    answers,
+                } => detector.head_verdict(number, ours, &answers),
+                Check::Lag { head, answers } => detector.lag_verdict(head, &answers),
+                Check::Block { rejected, answers } => detector.block_verdict(rejected, &answers),
+            }
+        }
+        if let Some(m) = &metrics {
+            m.gossip_blocks
+                .store(gossip_stats.blocks.load(Ordering::Relaxed), Ordering::Relaxed);
+            m.gossip_workshares
+                .store(gossip_stats.workshares.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
         let mut queue: VecDeque<Block> = VecDeque::new();
         match gossip.recv_timeout(Duration::from_secs(1)) {
-            Ok(raw) => {
-                if let Ok(b) = decode_block(raw, 2) {
-                    queue.push_back(b);
+            Ok(Gossip::Block(raw)) => match decode_block(raw, 2) {
+                Ok(b) => {
+                    if let Some(m) = &metrics {
+                        m.note_peer_head(b.number);
+                    }
+                    queue.push_back(b)
                 }
+                Err(e) => log.warn(&format!("tip: gossip block the Rust codec refuses: {e}")),
+            },
+            Ok(Gossip::Workshare(raw)) => {
+                workshare(processor, &raw, detector, &mut shares_seen, &mut stats, log);
             }
             Err(RecvTimeoutError::Timeout) => {}
             // The gossip task ends on a stop signal before this loop sees it.
@@ -293,11 +447,50 @@ pub fn follow(
                 }
             }
         }
+        // Compare with the peers' canonical chain, off this thread.
+        if last_check.elapsed() >= CHECK_EVERY {
+            last_check = Instant::now();
+            if let Some(tip) = processor.tip() {
+                let (_, head) = tip.head();
+                let probe = head
+                    .checked_sub(crate::divergence::DEPTH)
+                    .filter(|n| *n >= tip.base().1)
+                    .and_then(|n| tip.canonical_at(n).map(|h| (n, h)));
+                let due = detector.due(head);
+                let peers: Vec<_> = node
+                    .verified_peers()
+                    .into_iter()
+                    .take(CHECK_PEERS)
+                    .collect();
+                let (node, tx) = (node.clone(), check_tx.clone());
+                runtime.spawn(async move {
+                    if let Some((number, ours)) = probe {
+                        let answers = ask(node.clone(), peers.clone(), number).await;
+                        let _ = tx.send(Check::Head {
+                            number,
+                            ours,
+                            answers,
+                        });
+                    }
+                    let answers =
+                        ask(node.clone(), peers.clone(), head + crate::divergence::STALL_BLOCKS).await;
+                    let _ = tx.send(Check::Lag { head, answers });
+                    for rejected in due {
+                        let answers = ask(node.clone(), peers.clone(), rejected.number).await;
+                        let _ = tx.send(Check::Block { rejected, answers });
+                    }
+                });
+            }
+        }
         while let Some(block) = queue.pop_front() {
             let mut chain = vec![block];
             while let Some(top) = chain.last().cloned() {
                 if stop.load(Ordering::Relaxed) {
                     break;
+                }
+                if dead.contains(&top.hash) {
+                    chain.pop();
+                    continue;
                 }
                 let height = match height_of(runtime, &node, &mut verifier, top.clone()) {
                     Ok(h) => h,
@@ -311,8 +504,20 @@ pub fn follow(
                     }
                 };
                 stats.offered += 1;
+                bump(|m| &m.tip_offered);
                 match processor.offer(height, log)? {
                     Offer::NeedParent(p) => {
+                        if dead.contains(&p) {
+                            dead.insert(top.hash);
+                            log.warn(&format!(
+                                "tip: block {} at {} descends from rejected block {}",
+                                hex(&top.hash),
+                                top.number,
+                                hex(&p)
+                            ));
+                            chain.pop();
+                            continue;
+                        }
                         if chain.len() >= MAX_ANCESTORS {
                             log.warn("tip: too many missing ancestors; waiting for the next block");
                             break;
@@ -335,6 +540,7 @@ pub fn follow(
                         refused,
                     } => {
                         stats.accepted += 1;
+                        detector.block_included(top.hash, top.number, &uncle_hashes(&top));
                         if refused {
                             stats.refused += 1;
                         }
@@ -342,6 +548,10 @@ pub fn follow(
                             stats.reorgs += 1;
                             stats.reorged_blocks += removed.len() as u64;
                             stats.deepest = stats.deepest.max(removed.len() as u64);
+                            if let Some(m) = &metrics {
+                                m.deepest_reorg
+                                    .fetch_max(removed.len() as u64, Ordering::Relaxed);
+                            }
                             log.info(&format!(
                                 "tip: reorg to {} at {}: {} blocks removed ({})",
                                 hex(&head.0),
@@ -355,14 +565,107 @@ pub fn follow(
                             ));
                         }
                     }
-                    Offer::Rejected(_) => stats.rejected += 1,
-                    Offer::Known | Offer::TooFar | Offer::BelowBase => {}
+                    Offer::Rejected(f) => {
+                        stats.rejected += 1;
+                        dead.insert(top.hash);
+                        detector.block_rejected(top.hash, top.number, f);
+                    }
+                    Offer::BelowBase => {
+                        stats.below_base += 1;
+                        dead.insert(top.hash);
+                        log.info(&format!(
+                            "tip: block {} at {} forks below the tip base; not offered again",
+                            hex(&top.hash),
+                            top.number
+                        ));
+                    }
+                    Offer::Known | Offer::TooFar => {}
                 }
                 chain.pop();
             }
         }
+        if last_report.elapsed() >= Duration::from_secs(300) {
+            last_report = Instant::now();
+            let head = processor.tip().map_or((Hash::default(), 0), |t| t.head());
+            log.info(&format!(
+                "tip: head {} at {}; blocks {} offered, {} accepted, {} rejected; workshares {} valid, {} valid without the parent rules, {} rejected, {} older than go-quai takes; {} reorgs (deepest {})",
+                hex(&head.0),
+                head.1,
+                stats.offered,
+                stats.accepted,
+                stats.rejected,
+                stats.shares_valid,
+                stats.shares_parent_unknown,
+                stats.shares_rejected,
+                stats.shares_old,
+                stats.reorgs,
+                stats.deepest
+            ));
+        }
     }
     Ok(stats)
+}
+/// One gossip workshare through go-quai's intake (`worker.AddWorkShare`)
+/// and the uncle rules that do not depend on an including block.
+fn workshare(
+    processor: &mut Processor,
+    raw: &[u8],
+    detector: &mut crate::divergence::Detector,
+    seen: &mut Recent,
+    stats: &mut TipStats,
+    log: &Log,
+) {
+    let schedule = quai_consensus::verifier::PINNED_SCHEDULE;
+    let header = match quai_primitives::work::WorkObject::decode_auxiliary(raw, schedule)
+        .and_then(|o| o.auxiliary_work_header(schedule))
+    {
+        Ok(h) => h,
+        Err(e) => {
+            stats.shares_rejected += 1;
+            let failure = crate::processor::Failure {
+                zone_height: None,
+                context: "zone".into(),
+                number: None,
+                hash: None,
+                check: "workshare: decode".into(),
+                expected: "a work object the Rust codec accepts".into(),
+                actual: e,
+            };
+            detector.share_rejected([0; 32], 0, &failure);
+            return;
+        }
+    };
+    let Ok(hash) = header.block_hash() else {
+        return;
+    };
+    if !seen.insert(hash) {
+        return;
+    }
+    let number = share_rules::number(header.wire().number.as_deref().unwrap_or_default()).unwrap_or(0);
+    let head = processor.tip().map_or(0, |t| t.head().1);
+    if number + SHARE_DISTANCE < head {
+        stats.shares_old += 1;
+        detector.count_old();
+        return;
+    }
+    match processor.check_workshare(&header) {
+        Ok(r) if r.parent_checked => {
+            stats.shares_valid += 1;
+            detector.count_share(true);
+        }
+        Ok(_) => {
+            stats.shares_parent_unknown += 1;
+            detector.count_share(false);
+            log.debug(&format!(
+                "workshare {} at {number}: parent unknown, parent rules not run",
+                hex(&hash)
+            ));
+        }
+        Err(f) => {
+            stats.shares_rejected += 1;
+            detector.share_rejected(hash, number, &f);
+        }
+    }
 }
 
 /// One block the observer knows.
@@ -416,8 +719,8 @@ pub fn observe(seconds: u64, log: &Log) -> Result<i32, String> {
     let mut last_check = Instant::now();
     while !stop.load(Ordering::Relaxed) && started.elapsed() < Duration::from_secs(seconds) {
         let raw = match gossip.recv_timeout(Duration::from_secs(1)) {
-            Ok(raw) => raw,
-            Err(RecvTimeoutError::Timeout) => continue,
+            Ok(Gossip::Block(raw)) => raw,
+            Ok(Gossip::Workshare(_)) | Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         };
         let Ok(first) = decode_block(raw, 2) else {

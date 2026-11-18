@@ -10,6 +10,7 @@ pub mod bootstrap;
 pub mod checkpoint;
 pub mod cli;
 pub mod config;
+pub mod divergence;
 pub mod forkchoice;
 pub mod log;
 pub mod metrics;

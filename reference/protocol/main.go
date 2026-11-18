@@ -103,8 +103,10 @@ func main() {
 		}
 		legacy := decoded.WoProgpowHash()
 		valid := new(big.Int).SetBytes(legacy.Bytes()).Cmp(new(big.Int).Div(common.Big2e256, decoded.Difficulty())) <= 0
-		fullSupported := !decoded.KawpowActivationHappened() || decoded.IsTransitionProgPowBlock()
-		vectors = append(vectors, map[string]interface{}{"id": fmt.Sprintf("header-%03d", i), "input": hx(raw), "canonical": hx(canonicalBytes), "seal_bytes": hx(sealBytes), "seal_hash": decoded.SealHash().Hex(), "legacy_hash": legacy.Hex(), "block_hash_supported": fullSupported, "blake3_target_valid": valid})
+		// WorkObjectHeader.Hash: the ProgPoW hash before KawPow and for transition
+		// headers without AuxPow, otherwise blake3 of the protobuf AuxPow, which
+		// is empty without one (a ProgPoW header at the last transition height).
+		vectors = append(vectors, map[string]interface{}{"id": fmt.Sprintf("header-%03d", i), "input": hx(raw), "canonical": hx(canonicalBytes), "seal_bytes": hx(sealBytes), "seal_hash": decoded.SealHash().Hex(), "legacy_hash": legacy.Hex(), "block_hash": decoded.Hash().Hex(), "blake3_target_valid": valid})
 	}
 	bad := []interface{}{}
 	base := vectors[0].(map[string]interface{})

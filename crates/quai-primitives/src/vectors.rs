@@ -47,14 +47,8 @@ pub fn verify(bytes: &[u8]) -> Result<Value, String> {
         }
         checks += 1;
         let hash = header.block_hash();
-        if vector["block_hash_supported"] == true {
-            if hash.as_ref().map(|h| encode_hex(h)).ok().as_deref()
-                != vector["legacy_hash"].as_str()
-            {
-                failures.push(json!({"id":vector["id"],"field":"block_hash"}));
-            }
-        } else if hash.is_ok() {
-            failures.push(json!({"id":vector["id"],"field":"unsupported block hash accepted"}));
+        if hash.as_ref().map(|h| encode_hex(h)).ok().as_deref() != vector["block_hash"].as_str() {
+            failures.push(json!({"id":vector["id"],"field":"block_hash"}));
         }
     }
     for vector in corpus["rejected"].as_array().ok_or("missing rejections")? {

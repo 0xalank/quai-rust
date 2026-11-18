@@ -7,14 +7,17 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 686,009** (2026-11-18), the end of the public peer
-export. The run goes on toward zone 1,250,000 on a longer export. The long
-replay executes mainnet zone blocks from the colosseum genesis, and every root
-equals go-quai: EVM state, ETX set, UTXO, receipts, outbound ETXs, gas and
-state counters, account count. It passed zone 259,200, where user
-transactions start, so Rust executes real mainnet user transactions with equal
-roots. Binaries: `f841a74` for 0–180,000, `e1f4cfb` from checkpoint 180,000.
-A single-binary run from genesis is still to do.
+Current value: **zone 1,250,000** (2026-11-18), the end of
+`peer-export-1250k`. The long replay executes mainnet zone blocks from the
+colosseum genesis, and every root equals go-quai: EVM state, ETX set, UTXO,
+receipts, outbound ETXs, gas and state counters, account count. It passed
+zone 259,200 (the first user transactions), CoinbaseLockupPrecompile at zone
+604,800, QiActivation at zone 1,220,000 and ControllerKickInBlock (prime
+262,000, at zone 1,223,601), with the first Quai-to-Qi conversions and the
+first feedback exchange rate (prime 266,001). Binaries: `f841a74` for
+0–180,000, `e1f4cfb` for 180,000–686,009, `d207b70` (the `controllers`
+branch, merged as `c466449`) for 686,009–1,250,000. A single-binary run from
+genesis is still to do.
 Earlier value: zone 27,406, rerun from genesis on the Go export (with receipts)
 by the coordinator.
 
@@ -150,14 +153,14 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        | Fork | Go gates | Rust | Vectors | Status |
        |---|---|---|---|---|
        | lock start z 1,036,800 | lock byte, gas and state ramp (hcv:399, :719; block_validator.go:455) | validation.rs:64; rules.rs:234 | header v11, consensus limits (both); uncle lock: before only | equal |
-       | ControllerKickIn p 262,000 | prime controllers, token choices, rates (slice.go:323-655, 1724-2020; exchange_controller.go; hc:1950-2006) | confirmation.rs:222 (CB) stops `Unsupported`; the CB components match Go but are not wired | controllers, prime-economics, prime-forward, choice-window | after the controllers merge |
+       | ControllerKickIn p 262,000 | prime controllers, token choices, rates (slice.go:323-655, 1724-2020; exchange_controller.go; hc:1950-2006) | prime_controller.rs; confirmation.rs; block.rs (`c466449`) | prime-transition (9 linked segments), controllers, prime-economics, prime-forward, choice-window; mainnet replay through zone 1,223,601 | equal (merged) |
        | ControllerKickIn | Qi coinbase, conversions (sp:566, :839; vm/evm.go:715; instructions.go:1112; hcv:317, :682) | incoming.rs; etx.rs; validation.rs:47 | incoming, stateful, settlement `conversion-*` (new), history v20, header v26 (both); p2p checks (block_validator.go:188, 319, 369) none | equal |
        | QiActivation z 1,220,000 | OneOverKqi (protocol_params.go:437) | economics.rs:29 | header quotes (both) | equal |
-       | ConversionSlipChange p 285,000 | cubic discount order (slice.go:456, 524, 1841, 1908) | prime_economics.rs:114 (CB) | prime-economics, prime-forward (both) | equal; after the controllers merge |
+       | ConversionSlipChange p 285,000 | cubic discount order (slice.go:456, 524, 1841, 1908) | prime_economics.rs:114 | prime-economics, prime-forward, prime-transition (both) | equal (merged) |
        | MaxGrindIncrease z 1,865,000 | 1,000 → 10,000 grind salts (vm/evm.go:667) | calls.rs:307 | stateful `create-grind-*` (new, both) | equal |
        | MaxCodeSize z 3,490,000 | code size 24,576 → 32,768 (vm/evm.go:574); new opcodes (interpreter.go:178) | calls.rs:396; mod.rs:548 | stateful `create-code-*` (new), serial-vm (both) | equal |
        | MaxCodeSize | no reorg past 60 zone blocks (hc:966) | none | none | missing; part of the Phase 2.3 head switch |
-       | KQuaiChange p 752,000 | kQuai table, holds, increase / 3 (exchange_controller.go:30-69; rewards.go:199) | controllers.rs:106, 149 (CB) | controllers (both) | equal; after the controllers merge |
+       | KQuaiChange p 752,000 | kQuai table, holds, increase / 3 (exchange_controller.go:30-69; rewards.go:199) | controllers.rs:106, 149 | controllers, prime-transition (both) | equal (merged) |
        | KawPow p 1,171,500 | share fields, AuxPoW, PoW ids, share targets, KawPoW difficulty, entropy, payout slots, 20,000-block conversion hold (hc, hcv, poem.go, types/wo.go, sp:1168-1241, :2129, rewards.go:219-238, vm/evm.go:725, instructions.go:1118) | zone_header.rs, share_rules.rs, rules.rs, validation.rs, payouts.rs, economics.rs, etx.rs, qi_settlement.rs | work-headers, header, history, consensus, payouts, stateful, qi-settlement, settlement (both) | equal |
        | KawPow grace end p 1,301,100 | ProgPoW still valid at it (hc:727; progpow.go:525); its hash is blake3 of the empty AuxPow (types/wo.go:1451, 1474) | header.rs `block_hash` | work-headers (both, new) | fixed `ce6f8e9` |
        | KawPow | AuxPow without donor header or transaction dropped on decode (types/wo.go:1652) | header.rs:102 keeps a header-only AuxPow, rejects one without header | none | gap: peer data only; the history corpus has header-only AuxPows that Go would drop |
@@ -206,10 +209,16 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        data, uncle, manifest and interlink caps. `Verifier::validate_block`
        validates a block against an explicit parent context (spec, history
        windows, state handle) and `quai-node replay` calls it at every height.
-       Open: prime controllers after ControllerKickIn (prime 262,000) stop with
-       `Unsupported("prime controllers after ControllerKickInBlock are not
-       ported")`; legacy long Qi output addresses before Polaris stop
-       explicitly; `trie::MAX_LIST_ITEMS` (65,536 items / 64 MiB), the ETX
+       The prime controllers after ControllerKickIn (prime 262,000) are
+       ported (`c466449`): `prime_controller.rs` checks each prime block as
+       go-quai `verifyParentExchangeRateAndFlowAmount` (slice.go:1724-2018)
+       and prices its newly confirmed ETXs as the Append prime branch
+       (slice.go:347-655); checkpoints carry an optional prime section. Where
+       go-quai panics (division by zero, zero log, discount above 100,000)
+       Rust stops with `Unsupported`. A stateless checkpoint of an older
+       binary has no region rollups and cannot resume past the next prime
+       block; checkpoints with state resume. Open: legacy long Qi output
+       addresses before Polaris stop explicitly; `trie::MAX_LIST_ITEMS` (65,536 items / 64 MiB), the ETX
        auxiliary entry bounds and the auxiliary.rs field caps are still
        Rust-only; the region inbound path assumes one slice (correct for
        expansion 0).
@@ -395,4 +404,6 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1.2, 1.3 | Rolling replay (`0d9c640`, `5efbbb5`, `e051bc7`): pruned segments in the QEX1 manifest, `peer-export prune` and `status`, `scripts/mainnet/rolling_replay.sh`. On clones of the long replay (checkpoint 670,000): replay 680,000–710,000 PASS across zone 700,000 on blocks downloaded after the prune, 710,000–715,000 PASS after a second prune; 19/19 quai-node and 6/6 peer-export tests. Merge `83e5d64`; coordinator rerun on merged main: 347/347 workspace in 65 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 3.3 | `quai-execution`, `quai-rpc`: non-test unwrap 127 to 0, expect 9 to 6, counted by `scripts/count_panics.py` (`4357880`, `0c7e159`, `add3bd3`, `7fdf0bd`); none was reachable from input. Deep call chains (about 700 frames at 50,000,000 gas) overflowed a 2 MiB stack and aborted the process; they now run again on a 128 MiB stack (`6d4d695`); Go vector `deep-calls` aborts `a69aa7a`. 347/347 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,398 s). Merge `f8a18b9`; coordinator rerun on merged main: 350/350 workspace in 66 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1.4 | Fork audit (`fork-audit`; table in step 4): every v0.57.0 fork gate above zone 790,000 / prime 170,000. Fixed with Go vectors on both sides: opETX memory gas from SecurityHardening (`0bd0abe`; 7 of 15 new vectors failed before), the hash of a ProgPoW header at prime terminus 1,301,100 (`ce6f8e9`; 48 vectors). New Go vectors where Rust already matched: MaxGrindIncrease and MaxCodeSize (`faf33a9`), conversion transactions across the kick-in and both holds (`6c5db59`), incoming ETX gas before SecurityHardening (`5f80e11`), lockup reward years (`0e1036c`). Open: prime controllers (controllers branch), reorg horizon (Phase 2.3), partial AuxPow decode, long Qi addresses before Polaris. 350/350 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,410 s). Merge `6b27112`; coordinator rerun on merged main: 350/350 workspace in 66 suites, 45/45 `quai-network --features native-transport`, fmt clean |
-| 2026-11-18 | Phase 3.1 | Native RPC on replayed state (`b69422e`, `4b2cb40`, `1c6ef5a`, and the commit of this row): `ChainView`, `--mode native` (30 read methods, go-quai JSON and errors), `quai-node rpc`. Replay of the Go export 0-27,406 with `--state` PASS (1,358 s) as the view's state. Live against go-quai v0.57.0: fixture 617/625 equal, 8 documented differences, 0 failed; the 600 equal vectors asked again live 600/600; 1,000 random heights 4,770/4,770. Offline zone 0-8 test 253/253. 358/358 workspace tests in 67 suites (23.6 min), fmt clean, clippy without errors |
+| 2026-11-18 | Phase 3.1 | Native RPC on replayed state (`b69422e`, `4b2cb40`, `1c6ef5a`, and the commit of this row): `ChainView`, `--mode native` (30 read methods, go-quai JSON and errors), `quai-node rpc`. Replay of the Go export 0-27,406 with `--state` PASS (1,358 s) as the view's state. Live against go-quai v0.57.0: fixture 617/625 equal, 8 documented differences, 0 failed; the 600 equal vectors asked again live 600/600; 1,000 random heights 4,770/4,770. Offline zone 0-8 test 253/253. 358/358 workspace tests in 67 suites (23.6 min), fmt clean, clippy without errors. Merge `417f48e`; coordinator rerun on merged main: 358/358 workspace in 67 suites, 45/45 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 1.4, 1.6 | Prime controllers after ControllerKickInBlock ported (`4bf54f9`); Go oracle prime-transition (`bb66950`): 73 linked blocks, 584 + 124 Go-rejected changes, 146 Go-accepted, all equal. Mainnet replay of the branch binary `d207b70` from checkpoint 686,009: PASS to zone 1,250,000 (end of `peer-export-1250k`; kick-in at zone 1,223,601, first conversions at 1,223,711, first feedback rate at prime 266,001), every root equal, 38.8 blocks/s. Merge `c466449`; coordinator rerun on merged main: 361/361 workspace in 68 suites, 45/45 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 1 | Two runs with the merged binary `c466449` (sha256 `db24ef65…`): `scripts/mainnet/rolling_replay.sh` continues from checkpoint 1,250,000 toward the head (`replay-public`, log `logs/rolling.log`); a single-binary replay from genesis on a clone of `peer-export-1250k` (`replay-genesis-c466449`) checks today's execution changes on zone 0–1,250,000 |

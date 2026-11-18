@@ -330,6 +330,13 @@ Mining, block templates and Stratum come last.
   written back; the average on line 67 misses the division by 100 for its first
   term; `minPeriod` is computed but not used. Other bounds remain: 100 queued
   messages and 16 MiB per stream, 256 MiB in total.
+- `core/types/wo.go:750-754` `IsTransitionProgPowBlock` ends the transition
+  with `<` KawPowForkBlock + KawPowTransitionPeriod (prime terminus
+  1,301,100), but the ProgPoW checks (`core/headerchain.go:727`,
+  `consensus/progpow/progpow.go:525`) refuse only `>`. A ProgPoW header at
+  exactly 1,301,100 is therefore valid, and `WorkObjectHeader.Hash` names it
+  `WoCustomPowHash` of a nil AuxPow: blake3 of no bytes. Every such header
+  has the same hash. Rust copies this (`ce6f8e9`) so that hashes stay equal.
 
 ## Execution log
 

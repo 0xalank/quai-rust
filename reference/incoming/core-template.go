@@ -291,6 +291,31 @@ func NativeIncomingVectors() []interface{} {
 			}
 			rows = append(rows, niOne(c))
 		}
+		// The same ETXs before SecurityHardeningForkBlock: an ETX gas limit above
+		// GasLimit / MinimumEtxGasDivisor and an ETX below its intrinsic gas make
+		// TransitionDb return an error, so the block is invalid
+		// (core/state_transition.go:240, 329, 360).
+		for _, variant := range []string{"oversize", "intrinsic-short"} {
+			c := nativeIncomingCase{ID: fmt.Sprintf("incoming-%x-%s-prime-2316999", []byte(loc), variant), Location: loc, Number: 4000000, Parent: 3999999, Prime: 2316999, Gas: 6000001, Pool: 30000000, Value: 100006, Type: 0, Qi: false, Queued: true, Listed: true}
+			if variant == "intrinsic-short" {
+				c.Gas = 20999
+			}
+			rows = append(rows, niOne(c))
+		}
 	}
+	// The lockup reward multiple (params.CalculateLockupByteRewardsMultiple,
+	// params/protocol_params.go:389) is fixed in the first year, falls linearly
+	// in years 1 to 4 and is fixed again from year 5 (BlocksPerYear = 6,307,200
+	// zone blocks). Qi coinbases turn the reward into UTXOs; a contract coinbase
+	// adds it to a coinbase lockup.
+	loc := common.Location{0, 0}
+	for _, number := range []uint64{6307199, 6307200, 9000000, 31535999, 31536000} {
+		for _, lock := range []byte{1, 2, 3} {
+			c := nativeIncomingCase{ID: fmt.Sprintf("incoming-%x-qi-coinbase-lock-%d-zone-%d", []byte(loc), lock, number), Location: loc, Number: number, Parent: number - 1, Prime: 2444574, Gas: 200000, Pool: 30000000, Value: 100006, Type: 1, Qi: true, Queued: true, Listed: true, Data: append([]byte{lock}, make([]byte, 32)...)}
+			rows = append(rows, niOne(c))
+		}
+	}
+	c := nativeIncomingCase{ID: fmt.Sprintf("incoming-%x-contract-coinbase-lock-2-zone-9000000", []byte(loc)), Location: loc, Number: 9000000, Parent: 8999999, Prime: 2444574, Gas: 200000, Pool: 30000000, Value: 100006, Type: 1, Qi: true, Queued: true, Listed: true, Data: append(append([]byte{2}, niAddress(loc, 2, false).Bytes()...), make([]byte, 32)...)}
+	rows = append(rows, niOne(c))
 	return rows
 }

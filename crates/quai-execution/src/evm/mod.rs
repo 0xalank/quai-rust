@@ -14,7 +14,11 @@
 //!   gas here too. One frame with 50,000,000 gas reaches at most 159,233 words
 //!   (5,095,456 bytes). Live frames share the gas of one transaction and the
 //!   cost is convex, so all 1,025 possible frames together hold at most
-//!   1,025 × 4,288 words (140,646,400 bytes).
+//!   1,025 × 4,288 words (140,646,400 bytes). One exception, as in Go: before
+//!   SecurityHardening, opETX grows memory to the sum of its two ranges
+//!   without gas (core/vm/interpreter.go:77-82). There Go calls
+//!   `Memory.Resize` with no ceiling; Rust stops at `0x1FFFFFFFE0` bytes
+//!   with out of gas, where Go would fail to allocate.
 //! - Steps: Go counts steps only to poll `evm.abort` (core/vm/interpreter.go).
 //!   Between two taken jumps the program counter only moves forward, so a
 //!   frame runs at most `code.len() + 1` steps per segment, and each taken
@@ -349,12 +353,30 @@ impl Machine<'_> {
         let len = uint(length).ok_or(Fault::GasOverflow)?;
         Ok(off.checked_add(len).ok_or(Fault::GasOverflow)?)
     }
-    fn needed_memory(&self, op: u8) -> Result<u64, Stop> {
+    /// Whether opETX pays for its memory. Before SecurityHardening the ETX
+    /// operation has `memoryETX` and no dynamic gas (core/vm/jump_table.go):
+    /// memory grows to the sum of the data and access-list ranges for free.
+    /// From the fork, `NewEVMInterpreter` (core/vm/interpreter.go:77-82)
+    /// installs `memoryETXFixed`, the larger of the two ranges, and
+    /// `pureMemoryGascost`. Go decides it once per EVM from the block's prime
+    /// terminus number.
+    fn etx_memory_charged(&self) -> Result<bool, Stop> {
+        let prime = self
+            .state
+            .prime_number
+            .ok_or(CapabilityError::Context("ETX prime context"))?;
+        Ok(prime >= FORKS.security_hardening)
+    }
+    fn needed_memory(&self, op: u8, etx_charged: bool) -> Result<u64, Stop> {
         match op {
             0x51 | 0x52 => Self::memory_end(self.back(0)?, Word::from_u64(32)),
             0x53 => Self::memory_end(self.back(0)?, Word::ONE),
             0x20 | 0xf3 | 0xfd | 0xa0..=0xa4 => Self::memory_end(self.back(0)?, self.back(1)?),
             0x37 | 0x39 | 0x3e => Self::memory_end(self.back(0)?, self.back(2)?),
+            // core/vm/memory_table.go memoryETXFixed (from the fork) and
+            // memoryETX (before it).
+            0xf6 if etx_charged => Ok(Self::memory_end(self.back(6)?, self.back(7)?)?
+                .max(Self::memory_end(self.back(8)?, self.back(9)?)?)),
             0xf6 => Ok(Self::memory_end(self.back(6)?, self.back(7)?)?
                 .checked_add(Self::memory_end(self.back(8)?, self.back(9)?)?)
                 .ok_or(Fault::GasOverflow)?),
@@ -552,9 +574,10 @@ impl Machine<'_> {
         ) {
             self.state_gas += static_gas;
         }
-        let end = self.needed_memory(op)?;
+        let free_memory = op == 0xf6 && !self.etx_memory_charged()?;
+        let end = self.needed_memory(op, !free_memory)?;
         let (memory_gas, size) = self.memory_cost(end)?;
-        let mut dynamic = if op == 0xf6 { 0 } else { memory_gas };
+        let mut dynamic = if free_memory { 0 } else { memory_gas };
         let mut state_cost = 0;
         match op {
             0x31 | 0x3b | 0x3c | 0x3f => {
@@ -665,7 +688,7 @@ impl Machine<'_> {
             _ => {}
         }
         self.charge(dynamic)?;
-        if op != 0xf6 && size > self.memory.len() as u64 {
+        if !free_memory && size > self.memory.len() as u64 {
             let words = size / 32;
             self.memory_paid = 3 * words + words * words / 512;
         }

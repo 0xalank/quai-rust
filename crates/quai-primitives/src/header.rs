@@ -159,13 +159,16 @@ impl Header {
         hasher.update(&self.wire.nonce.unwrap().to_be_bytes());
         *hasher.finalize().as_bytes()
     }
+    /// core/types/wo.go `WorkObjectHeader.Hash`: the ProgPoW hash before
+    /// KawPow and for transition headers without AuxPow; otherwise
+    /// `WoCustomPowHash`, blake3 of the protobuf AuxPow. Without an AuxPow that
+    /// encoding is empty: a ProgPoW header at prime terminus
+    /// KawPowForkBlock + KawPowTransitionPeriod (1,301,100) is still valid
+    /// (`CheckPowIdValidity` and `validateProgpowHeader` use `>`), and Go
+    /// names it blake3 of no bytes.
     pub fn block_hash(&self) -> Result<Hash, String> {
         if self.activated && (self.wire.aux_pow.is_some() || !self.transition) {
-            let bytes = self
-                .wire
-                .aux_pow
-                .as_ref()
-                .ok_or("post-transition auxiliary block hashing not implemented")?;
+            let bytes = self.wire.aux_pow.as_deref().unwrap_or_default();
             return Ok(*blake3::hash(bytes).as_bytes());
         }
         Ok(self.legacy_hash())

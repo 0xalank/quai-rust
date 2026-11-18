@@ -141,15 +141,39 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        1,872,600, SelfDestructRefund 1,919,500, ConversionLockChange 2,237,000,
        SecurityHardening 2,317,000, Polaris 2,444,574 (prime terminus),
        MaxCodeSize 3,490,000.
-       Known gap before SecurityHardening (found in step 3.3, not fixed: it
-       changes results for inputs that run today): from prime 2,317,000 go-quai
-       charges memory gas for opETX and sizes its memory by the larger of the
-       data and access-list ranges (`memoryETXFixed`, `pureMemoryGascost`,
-       core/vm/interpreter.go:77-82). Rust still adds both ends and charges
-       nothing (`evm/mod.rs` `needed_memory`, `step`), so such an opETX gets
-       other gas and memory than Go, and a large range allocates memory
-       without gas. Fix it with Go vectors before the replay reaches that
-       height and before Phase 2.3.
+       Fork audit (2026-11-18, branch `fork-audit`): every v0.57.0 fork gate
+       above zone 790,000 / prime 170,000, in replay order. p = prime
+       terminus, z = zone; "both" = a Go vector on each side of the gate;
+       CB = file of the `controllers` branch. Go files: hc = headerchain.go,
+       hcv = headerchain_validation.go, sp = state_processor.go, all in core/.
+
+       | Fork | Go gates | Rust | Vectors | Status |
+       |---|---|---|---|---|
+       | lock start z 1,036,800 | lock byte, gas and state ramp (hcv:399, :719; block_validator.go:455) | validation.rs:64; rules.rs:234 | header v11, consensus limits (both); uncle lock: before only | equal |
+       | ControllerKickIn p 262,000 | prime controllers, token choices, rates (slice.go:323-655, 1724-2020; exchange_controller.go; hc:1950-2006) | confirmation.rs:222 (CB) stops `Unsupported`; the CB components match Go but are not wired | controllers, prime-economics, prime-forward, choice-window | after the controllers merge |
+       | ControllerKickIn | Qi coinbase, conversions (sp:566, :839; vm/evm.go:715; instructions.go:1112; hcv:317, :682) | incoming.rs; etx.rs; validation.rs:47 | incoming, stateful, settlement `conversion-*` (new), history v20, header v26 (both); p2p checks (block_validator.go:188, 319, 369) none | equal |
+       | QiActivation z 1,220,000 | OneOverKqi (protocol_params.go:437) | economics.rs:29 | header quotes (both) | equal |
+       | ConversionSlipChange p 285,000 | cubic discount order (slice.go:456, 524, 1841, 1908) | prime_economics.rs:114 (CB) | prime-economics, prime-forward (both) | equal; after the controllers merge |
+       | MaxGrindIncrease z 1,865,000 | 1,000 → 10,000 grind salts (vm/evm.go:667) | calls.rs:307 | stateful `create-grind-*` (new, both) | equal |
+       | MaxCodeSize z 3,490,000 | code size 24,576 → 32,768 (vm/evm.go:574); new opcodes (interpreter.go:178) | calls.rs:396; mod.rs:548 | stateful `create-code-*` (new), serial-vm (both) | equal |
+       | MaxCodeSize | no reorg past 60 zone blocks (hc:966) | none | none | missing; part of the Phase 2.3 head switch |
+       | KQuaiChange p 752,000 | kQuai table, holds, increase / 3 (exchange_controller.go:30-69; rewards.go:199) | controllers.rs:106, 149 (CB) | controllers (both) | equal; after the controllers merge |
+       | KawPow p 1,171,500 | share fields, AuxPoW, PoW ids, share targets, KawPoW difficulty, entropy, payout slots, 20,000-block conversion hold (hc, hcv, poem.go, types/wo.go, sp:1168-1241, :2129, rewards.go:219-238, vm/evm.go:725, instructions.go:1118) | zone_header.rs, share_rules.rs, rules.rs, validation.rs, payouts.rs, economics.rs, etx.rs, qi_settlement.rs | work-headers, header, history, consensus, payouts, stateful, qi-settlement, settlement (both) | equal |
+       | KawPow grace end p 1,301,100 | ProgPoW still valid at it (hc:727; progpow.go:525); its hash is blake3 of the empty AuxPow (types/wo.go:1451, 1474) | header.rs `block_hash` | work-headers (both, new) | fixed `ce6f8e9` |
+       | KawPow | AuxPow without donor header or transaction dropped on decode (types/wo.go:1652) | header.rs:102 keeps a header-only AuxPow, rejects one without header | none | gap: peer data only; the history corpus has header-only AuxPows that Go would drop |
+       | InclusionDepthChange p 1,330,000 | depth 3 → 4, target ramp, reward depth, payout discount (hcv:259; hc:359-380, 1277; sp:1119, 1263) | validation.rs:497; share_rules.rs:136; history.rs:307; payouts.rs | history, payouts (both) | equal |
+       | BlocksPerYear z 6,307,200 | kQuai authority (state_transition.go:391), lockup multiple (protocol_params.go:389), rate override (slice.go:607, 1999) | settlement.rs:209; economic_state.rs; prime_forward.rs:106 (CB) | authority, incoming `*-zone-*` (new), prime-forward (both) | equal |
+       | Singularity p 1,530,500 | uncles 16 → 32, SHA/scrypt shares 8 → 16 (hcv:241, 363-380); forfeiture (state/gen_allocs.go:23) | validation.rs:317, 474, 559; historical.rs:68 | history (before only; share limits none), historical (both) | equal (limits by reading) |
+       | QiWrappingChange p 1,570,000 | no local UTXO for wrapped Qi (sp:1677) | qi_settlement.rs:203 | qi-settlement (both) | equal |
+       | ShaEquivalentDifficulty p 1,755,000 | SHA difficulty anchor (rewards.go:291), lockup revert (vm/evm.go:267), conversion hold | economics.rs:51; calls.rs:253; etx.rs; qi_settlement.rs | header quotes, stateful lockup, settlement `conversion-*` (new), qi-settlement (both) | equal |
+       | ConversionStability p 1,872,600 | share EMA and gain (hc:421, 451) | share_rules.rs:218 | history controllers (both) | equal |
+       | SelfDestructRefund p 1,919,500 | refund once, opETX/opConvert overflow checks (instructions.go:875, 919, 966, 1142, 1190; state_transition.go:479) | mod.rs:965; etx.rs | stateful, settlement (both) | equal |
+       | ConversionLockChange p 2,237,000 | fee signal, conversion reward, Qi slot, unwrap lock 10, trims, kQuai freeze (hc:1888; rewards.go:35-73; sp:1094-1283; protocol_params.go:379; hcv:1097; exchange_controller.go:17) | payouts.rs; economics.rs; incoming.rs; historical.rs; controllers.rs:157 (CB) | payouts, header, incoming, historical, controllers (both) | equal |
+       | SecurityHardening p 2,317,000 | opETX memory: larger range, charged (interpreter.go:77-82) | mod.rs `etx_memory_charged` | stateful `etx-memory-*` (new, both) | fixed `0bd0abe` |
+       | SecurityHardening | opETX rules, lockup restore, incoming ETX gas, Qi ETX denomination (instructions.go:904, 984-1029; vm/evm.go:232; state_transition.go:240-360; sp:927) | etx.rs; journal.rs:215; settlement.rs:405; incoming.rs:393 | stateful, incoming (pre-fork ETX gas new) (both) | equal |
+       | SecurityHardening | CreateETX intrinsic check (vm/evm.go:752) | etx.rs:94 | none: one zone has no eligible ETX destination | equal by reading |
+       | Polaris p 2,444,574 | PoW identity dedupe (hcv:254), suicide transaction (state_transition.go:468), founder forfeiture (gen_allocs.go:27) | validation.rs:500; settlement.rs:255; historical.rs:68 | polaris, settlement, historical (both) | equal |
+       | Polaris | Qi output address must be 20 bytes; before it longer ones pass (sp:1999) | qi_settlement.rs:156 stops `Unsupported` | none | gap: needs a variable-length UTXO address (Go keeps all bytes in the UTXO and its hash, crops ETX recipients to the last 20, gas to the first 20) |
 5. [x] Remove the EVM limits that Go does not have, so that only gas limits
        execution (`130b106`). Removed: steps per frame, EVM memory, logs per
        transaction, call input, access-list size, the 1,000,000-entry undo
@@ -331,3 +355,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 2.2 | Public P2P mode (`ab2a7ab`, merge `24b994a`): relay client, DCUtR, AutoNAT; `/quai/kad/1.0.0` in both profiles; Go GossipSub parameters and message ID; go-quai validators before accept or relay; genesis check per slot, Go scores and bans, a working rate limit, per-IP limit; publish off by default. Live 5 min: 44 peers, 2 relay reservations, reached through a relay circuit, 859/859 gossip accepted, 0 rejected. Coordinator rerun on merged main: 344/344 workspace in 65 suites, 43/43 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1.2, 1.3 | Rolling replay (`0d9c640`, `5efbbb5`, `e051bc7`): pruned segments in the QEX1 manifest, `peer-export prune` and `status`, `scripts/mainnet/rolling_replay.sh`. On clones of the long replay (checkpoint 670,000): replay 680,000–710,000 PASS across zone 700,000 on blocks downloaded after the prune, 710,000–715,000 PASS after a second prune; 19/19 quai-node and 6/6 peer-export tests. Merge `83e5d64`; coordinator rerun on merged main: 347/347 workspace in 65 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 3.3 | `quai-execution`, `quai-rpc`: non-test unwrap 127 to 0, expect 9 to 6, counted by `scripts/count_panics.py` (`4357880`, `0c7e159`, `add3bd3`, `7fdf0bd`); none was reachable from input. Deep call chains (about 700 frames at 50,000,000 gas) overflowed a 2 MiB stack and aborted the process; they now run again on a 128 MiB stack (`6d4d695`); Go vector `deep-calls` aborts `a69aa7a`. 347/347 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,398 s). Merge `f8a18b9`; coordinator rerun on merged main: 350/350 workspace in 66 suites, 45/45 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 1.4 | Fork audit (`fork-audit`; table in step 4): every v0.57.0 fork gate above zone 790,000 / prime 170,000. Fixed with Go vectors on both sides: opETX memory gas from SecurityHardening (`0bd0abe`; 7 of 15 new vectors failed before), the hash of a ProgPoW header at prime terminus 1,301,100 (`ce6f8e9`; 48 vectors). New Go vectors where Rust already matched: MaxGrindIncrease and MaxCodeSize (`faf33a9`), conversion transactions across the kick-in and both holds (`6c5db59`), incoming ETX gas before SecurityHardening (`5f80e11`), lockup reward years (`0e1036c`). Open: prime controllers (controllers branch), reorg horizon (Phase 2.3), partial AuxPow decode, long Qi addresses before Polaris. 350/350 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,410 s) |

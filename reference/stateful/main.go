@@ -120,6 +120,7 @@ type testcase struct {
 	lockup             string
 	reset              *common.Address
 	keys               int
+	zone               uint64
 }
 
 func run(c testcase, loc common.Location) map[string]interface{} {
@@ -254,6 +255,10 @@ func run(c testcase, loc common.Location) map[string]interface{} {
 	if prime == 0 {
 		prime = 2444574
 	}
+	zone := c.zone
+	if zone == 0 {
+		zone = 4000000
+	}
 	tr := new(trace)
 	transfer := func(db vm.StateDB, from, to common.Address, v *big.Int) error {
 		f, e := from.InternalAndQuaiAddress()
@@ -281,7 +286,7 @@ func run(c testcase, loc common.Location) map[string]interface{} {
 	env := vm.NewEVM(vm.BlockContext{CheckIfEtxEligible: func(bits common.Hash, to common.Location) bool {
 		n := int(to[0])*16 + int(to[1])
 		return bits[n/8]&(1<<uint(n%8)) != 0
-	}, EtxEligibleSlices: eligible, CanTransfer: can, Transfer: transfer, BlockNumber: u(4000000), Time: u(1769112000), Difficulty: u(1), BaseFee: u(13), QuaiStateSize: u(1 << 20), GasLimit: 30000000, PrimaryCoinbase: coinbase, PrimeTerminusNumber: prime, GetHash: func(n uint64) common.Hash { return common.BigToHash(u(n)) }}, vm.TxContext{Origin: sender, GasPrice: u(17), TxType: 0, Hash: common.Hash{31: 77}}, s, &chain, vm.Config{Debug: true, Tracer: tr}, batch)
+	}, EtxEligibleSlices: eligible, CanTransfer: can, Transfer: transfer, BlockNumber: u(zone), Time: u(1769112000), Difficulty: u(1), BaseFee: u(13), QuaiStateSize: u(1 << 20), GasLimit: 30000000, PrimaryCoinbase: coinbase, PrimeTerminusNumber: prime, GetHash: func(n uint64) common.Hash { return common.BigToHash(u(n)) }}, vm.TxContext{Origin: sender, GasPrice: u(17), TxType: 0, Hash: common.Hash{31: 77}}, s, &chain, vm.Config{Debug: true, Tracer: tr}, batch)
 	var output []byte
 	var left, stateGas uint64
 	var err error
@@ -315,7 +320,7 @@ func run(c testcase, loc common.Location) map[string]interface{} {
 			}
 		}
 		return out
-	}(), "context": map[string]interface{}{"address": hx(root.Bytes()), "caller": hx(sender.Bytes()), "origin": hx(sender.Bytes()), "coinbase": hx(coinbase.Bytes()), "etx_sender": hx(sender.Bytes()), "location": []int{int(loc[0]), int(loc[1])}, "tx_type": 0, "value": w(c.value), "gas_price": w(17), "block_number": w(4000000), "timestamp": w(1769112000), "difficulty": w(1), "base_fee": w(13), "chain_id": w(1337), "state_size": w(1 << 20), "block_gas_limit": 30000000, "address_listed": true, "warm_slots": []string{}, "read_only": c.readonly, "prime_number": prime}, "transaction_hash": common.Hash{31: 77}.Hex(), "eligible_slices": eligible.Hex(), "outbound_etxs": func() []string {
+	}(), "context": map[string]interface{}{"address": hx(root.Bytes()), "caller": hx(sender.Bytes()), "origin": hx(sender.Bytes()), "coinbase": hx(coinbase.Bytes()), "etx_sender": hx(sender.Bytes()), "location": []int{int(loc[0]), int(loc[1])}, "tx_type": 0, "value": w(c.value), "gas_price": w(17), "block_number": w(zone), "timestamp": w(1769112000), "difficulty": w(1), "base_fee": w(13), "chain_id": w(1337), "state_size": w(1 << 20), "block_gas_limit": 30000000, "address_listed": true, "warm_slots": []string{}, "read_only": c.readonly, "prime_number": prime}, "transaction_hash": common.Hash{31: 77}.Hex(), "eligible_slices": eligible.Hex(), "outbound_etxs": func() []string {
 		out := []string{}
 		for _, tx := range env.ETXCache {
 			pb, e := tx.ProtoEncode()
@@ -676,6 +681,132 @@ func main() {
 		huge := join(make([]byte, 32), new(big.Int).Lsh(u(1), 70).FillBytes(make([]byte, 32)), make([]byte, 32))
 		target := precompile(5)
 		vectors = append(vectors, run(testcase{id: "bounds-modexp-zero-lengths-huge-exponent", target: &target, input: huge, listed: true, precompile: true, gas: 1000000}, loc))
+	}
+
+	// opETX memory across SecurityHardeningForkBlock (core/vm/interpreter.go:77-82).
+	// Before the fork, memoryETX sizes memory by the sum of the data and
+	// access-list ranges, and opETX charges no memory gas. From the fork,
+	// memoryETXFixed takes the larger range and pureMemoryGascost charges it.
+	// Each program then records the opETX result, MSIZE and GAS at 4096, so a
+	// later expansion pays for the words that opETX added without gas.
+	{
+		loc := common.Location{0, 0}
+		remote := addr(common.Location{0, 1}, 8)
+		pw := func(v *big.Int) []byte {
+			b := v.Bytes()
+			if len(b) == 0 {
+				b = []byte{0}
+			}
+			return append([]byte{0x5f + byte(len(b))}, b...)
+		}
+		// opETX operands, pushed last to first: access-list size and offset,
+		// data size and offset, fee cap, tip, gas limit, value, to, temp.
+		etx := func(value, limit uint64, dataOff, dataLen, listOff, listLen *big.Int) []byte {
+			return join(pw(listLen), pw(listOff), pw(dataLen), pw(dataOff), p(0), p(0), p(limit), p(value), pushAddr(remote), p(0), []byte{0xf6})
+		}
+		observe := join([]byte{0x59}, p(4096), []byte{0x52}, p(4128), []byte{0x52, 0x5a}, p(4160), []byte{0x52}, p(96), p(4096), []byte{0xf3})
+		word := make([]byte, 32)
+		for i := range word {
+			word[i] = byte(i + 1)
+		}
+		// One nonzero data word at 0 and the empty access list 0xc0 at 32.
+		prefix := join(append([]byte{0x7f}, word...), p(0), []byte{0x52}, p(0xc0), p(32), []byte{0x53})
+		keys := []common.Hash{}
+		for i := 0; i < 64; i++ {
+			keys = append(keys, common.BigToHash(u(uint64(i))))
+		}
+		list, e := rlp.EncodeToBytes(types.AccessList{{Address: addr(loc, 2), StorageKeys: keys}})
+		must(e)
+		// The access list (2,142 bytes) from calldata to 256.
+		copied := join([]byte{0x36}, p(0), p(256), []byte{0x37})
+		half := new(big.Int).Lsh(u(1), 63)
+		n := func(v uint64) *big.Int { return u(v) }
+		for _, prime := range []uint64{2316999, 2317000} {
+			for _, c := range []testcase{
+				// Data [0, 2048) and the list [32, 33): 2,081 bytes before the fork, 2,048 from it.
+				{id: "etx-memory-data-2048-limit-100000", root: join(prefix, etx(13, 100000, n(0), n(2048), n(32), n(1)), observe), gas: 1000000},
+				// Gas limit 21,000 does not pay for the data from the fork.
+				{id: "etx-memory-data-2048-limit-21000", root: join(prefix, etx(13, 21000, n(0), n(2048), n(32), n(1)), observe), gas: 1000000},
+				// 262,144 bytes of data and a value above the balance: opETX returns 0.
+				// The memory is free before the fork and costs 155,642 gas from it.
+				{id: "etx-memory-data-262144-gas-100000", root: join(prefix, etx(2000000, 100000, n(0), n(262144), n(32), n(1)), observe), gas: 100000},
+				{id: "etx-memory-data-262144-gas-1000000", root: join(prefix, etx(2000000, 100000, n(0), n(262144), n(32), n(1)), observe), gas: 1000000},
+				// Two ranges of 2^63 bytes: the sum overflows uint64 before the fork;
+				// from it the larger range is above the memory gas ceiling.
+				{id: "etx-memory-overflow", root: join(etx(13, 100000, n(0), half, n(0), half), observe), gas: 1000000},
+				// The access list is the larger range and has 64 keys.
+				{id: "etx-memory-list-2142-limit-200000", root: join(copied, etx(13, 200000, n(0), n(4), n(256), n(uint64(len(list)))), observe), input: list, gas: 1000000},
+				{id: "etx-memory-list-2142-limit-21000", root: join(copied, etx(13, 21000, n(0), n(4), n(256), n(uint64(len(list)))), observe), input: list, gas: 1000000},
+			} {
+				c.id = fmt.Sprintf("%s-prime-%d", c.id, prime)
+				c.listed = true
+				c.prime = prime
+				vectors = append(vectors, run(c, loc))
+			}
+		}
+		// From the fork only: a range above 0x1FFFFFFFE0 bytes is out of gas.
+		// Before the fork go-quai would allocate it (128 GiB) without gas.
+		vectors = append(vectors, run(testcase{id: "etx-memory-ceiling-prime-2317000", root: join(prefix, etx(13, 100000, n(0), n(0x2000000000), n(32), n(1)), observe), listed: true, gas: 1000000, prime: 2317000}, loc))
+	}
+
+	// Zone forks of contract creation (core/vm/evm.go).
+	// MaxGrindIncreaseForkBlock (zone 1,865,000): GrindContract tries
+	// params.PreviousMaxAddressGrindAttempts (1,000) salts before it and
+	// params.MaxAddressGrindAttempts (10,000) from it.
+	// MaxCodeSizeForkHeight (zone 3,490,000): params.GetMaxCodeSize is 24,576
+	// bytes before it and 32,768 from it.
+	{
+		loc := common.Location{0, 0}
+		rootAddr := addr(loc, 1)
+		// Write the init code to memory, CREATE it with no value, return the address.
+		creator := func(init []byte) []byte {
+			code := []byte{}
+			for i, x := range init {
+				code = join(code, p(uint64(x)), p(uint64(i)), []byte{0x53})
+			}
+			return join(code, p(uint64(len(init))), p(0), p(0), []byte{0xf0}, p(0), []byte{0x52}, p(32), p(0), []byte{0xf3})
+		}
+		grind := func(init []byte, zone uint64) (common.Address, error) {
+			a, _, e := vm.GrindContract(rootAddr, 1, 100000000, 30+6*int64((len(init)+31)/32), crypto.Keccak256Hash(init), u(zone), loc)
+			return a, e
+		}
+		fork := params.MaxGrindIncreaseForkBlock.Uint64()
+		// Init codes PUSH k, POP, RETURN(0, 0) whose CREATE address is not
+		// local: the first that needs more than 1,000 salts and the first that
+		// needs fewer.
+		var late, early []byte
+		for k := uint64(0); late == nil || early == nil; k++ {
+			init := join(p(k), []byte{0x50}, p(0), p(0), []byte{0xf3})
+			if _, e := crypto.CreateAddress(rootAddr, 1, init, loc).InternalAndQuaiAddress(); e == nil {
+				continue
+			}
+			_, before := grind(init, fork-1)
+			_, after := grind(init, fork)
+			if before != nil && after == nil && late == nil {
+				late = init
+			}
+			if before == nil && early == nil {
+				early = init
+			}
+		}
+		for _, v := range []struct {
+			id   string
+			init []byte
+			zone uint64
+		}{{"late", late, fork - 1}, {"late", late, fork}, {"early", early, fork - 1}} {
+			created, e := grind(v.init, fork)
+			must(e)
+			vectors = append(vectors, run(testcase{id: fmt.Sprintf("create-grind-%s-zone-%d", v.id, v.zone), root: creator(v.init), listed: true, gas: 1000000, extra: []common.Address{created}, zone: v.zone}, loc))
+		}
+		for _, v := range []struct{ size, zone uint64 }{{24576, params.MaxCodeSizeForkHeight - 1}, {24577, params.MaxCodeSizeForkHeight - 1}, {32768, params.MaxCodeSizeForkHeight}, {32769, params.MaxCodeSizeForkHeight}} {
+			init := join(p(v.size), p(0), []byte{0xf3})
+			created := crypto.CreateAddress(rootAddr, 1, init, loc)
+			if _, e := created.InternalAndQuaiAddress(); e != nil {
+				created, e = grind(init, v.zone)
+				must(e)
+			}
+			vectors = append(vectors, run(testcase{id: fmt.Sprintf("create-code-%d-zone-%d", v.size, v.zone), root: creator(init), listed: true, gas: 8000000, extra: []common.Address{created}, zone: v.zone}, loc))
+		}
 	}
 
 	chain := *params.TestChainConfig

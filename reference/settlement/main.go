@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"math/big"
 	"os"
+	"strings"
 )
 
 var referenceRevision string
@@ -90,6 +91,10 @@ func vmClass(e error) interface{} {
 	if errors.Is(e, vm.ErrInvalidJump) {
 		return "invalid_jump"
 	}
+	// Every error of EVM.CreateETX (core/vm/evm.go) names it.
+	if strings.Contains(e.Error(), "CreateETX") {
+		return "etx"
+	}
 	return "vm_error"
 }
 func run(kind string, loc common.Location, prime uint64, finalized bool) map[string]interface{} {
@@ -111,6 +116,7 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 	nonce := uint64(7)
 	pool := uint64(20000000)
 	creation := false
+	conversion := strings.HasPrefix(kind, "conversion")
 	switch kind {
 	case "transfer":
 		gas = 21000
@@ -198,6 +204,24 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 		value = 0
 		gas = 30000000
 		pool = 30000000
+	case "conversion", "conversion-low-value", "conversion-gas-69199", "conversion-gas-69200":
+		// A Quai transaction to a Qi address of its own zone: EVM.Call sends it
+		// to CreateETX as a Quai-to-Qi conversion. The access list (recipient
+		// and two keys) costs 6,200 intrinsic gas, so 69,200 gas leaves
+		// ETXGas + TxGas = 42,000 for CreateETX.
+		b := recipient.Bytes()
+		b[1] |= 0x80
+		recipient = common.BytesToAddress(b, loc)
+		value = 10000000000000000000
+		if kind == "conversion-low-value" {
+			value--
+		}
+		if kind == "conversion-gas-69199" {
+			gas = 69199
+		}
+		if kind == "conversion-gas-69200" {
+			gas = 69200
+		}
 	case "bounds-access":
 		// 4,098 access-list tuples and 4,097 keys; the last tuple and key are read.
 		code = append([]byte{0x61, 0x10, 0x00, 0x54, 0x50, 0x73}, boundsAddress(loc, 4096).Bytes()...)
@@ -207,7 +231,7 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 	}
 	addresses := []common.Address{sender, child}
 	codes := [][]byte{nil, nil}
-	if !recipient.Equal(sender) {
+	if !recipient.Equal(sender) && !conversion {
 		addresses = append(addresses, recipient)
 		codes = append(codes, code)
 	}
@@ -223,6 +247,9 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 	}
 	from, _ := sender.InternalAndQuaiAddress()
 	s.SetBalance(from, u(1000000000000000))
+	if conversion {
+		s.SetBalance(from, new(big.Int).Mul(u(10000000000000000000), u(10)))
+	}
 	s.SetNonce(from, 7)
 	if kind == "sender-code" {
 		s.SetCode(from, []byte{0})
@@ -389,6 +416,17 @@ func main() {
 	// 4,096 logs in one receipt, and a call chain deeper than 500 frames.
 	for _, kind := range []string{"bounds-data-log", "bounds-access", "bounds-logs", "bounds-wire", "deep-calls"} {
 		v = append(v, run(kind, common.Location{0, 0}, 2444574, true))
+	}
+	// Quai-to-Qi conversions through EVM.CreateETX (core/vm/evm.go:709-736)
+	// across ControllerKickInBlock (262,000) and the KQuaiChangeHoldInterval
+	// (20,000) after KawPowForkBlock (1,171,500) and after
+	// ShaEquivalentDifficultyForkBlock (1,755,000); SecurityHardening adds
+	// no intrinsic check for conversions.
+	for _, prime := range []uint64{261999, 262000, 1171499, 1171500, 1191499, 1191500, 1754999, 1755000, 1774999, 1775000, 2316999, 2317000, 2444574} {
+		v = append(v, run("conversion", common.Location{0, 0}, prime, true))
+	}
+	for _, kind := range []string{"conversion-low-value", "conversion-gas-69199", "conversion-gas-69200"} {
+		v = append(v, run(kind, common.Location{0, 0}, 262000, true))
 	}
 	must(json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"reference_revision": referenceRevision, "vectors": v, "scope": "Actual signed Quai transactions through core.ApplyMessage and actual applyTransaction finalization on identical committed private pre-state; consensus errors are rolled back as rejected block transactions. No full block admission or public network."}))
 }

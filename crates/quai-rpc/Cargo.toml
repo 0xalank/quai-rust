@@ -11,6 +11,8 @@ reference-gateway = ["dep:reqwest"]
 [dependencies]
 quai-store = { path = "../quai-store" }
 quai-primitives = { path = "../quai-primitives" }
+quai-consensus = { path = "../quai-consensus" }
+crypto-bigint = { version = "=0.5.5", default-features = false }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 futures-util = "=0.3.34"
 reqwest = { optional = true, version = "=0.13.5", default-features = false, features = ["json", "stream"] }

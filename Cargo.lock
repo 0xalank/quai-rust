@@ -2603,7 +2603,9 @@ name = "quai-rpc"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "crypto-bigint",
  "futures-util",
+ "quai-consensus",
  "quai-primitives",
  "quai-store",
  "reqwest",

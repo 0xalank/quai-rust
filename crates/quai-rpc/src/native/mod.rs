@@ -9,6 +9,7 @@
 //! `quai_sendRawTransaction`. `ChainView::head_events` and
 //! `ChainView::submit_transaction` are their hooks.
 pub mod args;
+pub mod fees;
 pub mod json;
 
 use crate::view::{BlockData, CallError, CallRequest, ChainView, ViewError};
@@ -105,6 +106,8 @@ pub const METHODS: &[&str] = &[
     "quai_getOutPointsByAddressAndRange",
     "quai_call",
     "quai_estimateGas",
+    "quai_createAccessList",
+    "quai_gasPrice",
 ];
 
 /// Answer one call. View calls do disk reads and proof-of-work, so they run
@@ -410,6 +413,19 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
                 .get_optional(1, args::block_ref)?
                 .unwrap_or(BlockRef::Number(BlockNumber::Latest));
             estimate_gas(view, call, at)
+        }
+        "quai_createAccessList" => {
+            let a = Args::new(params, 2)?;
+            let call = a.get(0, call_args)?;
+            let at = a
+                .get_optional(1, args::block_ref)?
+                .unwrap_or(BlockRef::Number(BlockNumber::Latest));
+            create_access_list(view, &call, at)
+        }
+        "quai_gasPrice" => {
+            Args::new(params, 0)?;
+            let head = head_block(view)?;
+            Ok(json::big_hex(&fees::gas_price(&view.calc_base_fee(&head)?)))
         }
         _ => Err(RpcError::method_not_found(method)),
     }
@@ -976,6 +992,13 @@ enum Called {
     /// `core.ErrIntrinsicGas` (estimateGas raises the limit).
     Intrinsic(RpcError),
 }
+/// "parent block not found": `GetEVM` without the parent of the genesis.
+fn genesis_parent() -> RpcError {
+    RpcError::go(format!(
+        "parent block not found, parenthash: {}",
+        quai_primitives::encode_hex(&[0; 32])
+    ))
+}
 /// `DoCall` without overrides.
 fn do_call(view: &dyn ChainView, args: &CallArgs, block: &BlockData) -> Called {
     let from = args.from();
@@ -990,12 +1013,10 @@ fn do_call(view: &dyn ChainView, args: &CallArgs, block: &BlockData) -> Called {
         value: args.value.unwrap_or([0; 32]),
         data: args.data(),
         access_list: args.access_list.clone().unwrap_or_default(),
+        trace_access_list: false,
     };
     if block.number == 0 {
-        return Called::Failed(RpcError::go(format!(
-            "parent block not found, parenthash: {}",
-            quai_primitives::encode_hex(&[0; 32])
-        )));
+        return Called::Failed(genesis_parent());
     }
     match view.call(block, &request) {
         Ok(result) => Called::Done(result),
@@ -1060,6 +1081,185 @@ fn do_call_rpc(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Value> 
         Called::Failed(e) | Called::Intrinsic(e) => Err(e),
     }
 }
+
+/// What `AccessList` returns without an error: the list, the gas used and
+/// the EVM error of the last run.
+struct Traced {
+    list: Vec<AccessTuple>,
+    used_gas: u64,
+    error: Option<String>,
+}
+/// `accessListMaxIterations`.
+const ACCESS_LIST_ROUNDS: usize = 16;
+/// `AccessList` (internal/quaiapi/api.go): run the message with an
+/// access-list tracer until the list no longer grows.
+fn access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Traced> {
+    let block = resolve(view, at)?;
+    let state = view.state(&block)?;
+    // setDefaults
+    let from = args.from();
+    if !internal(view, &from) {
+        return Err(RpcError::go("Address belongs to other zone"));
+    }
+    let nonce = state.nonce(&from)?;
+    if let (Some(d), Some(i)) = (&args.data, &args.input) {
+        if d != i {
+            return Err(RpcError::go(
+                "both \"data\" and \"input\" are set and not equal. Please use \"input\" to pass transaction call data",
+            ));
+        }
+    }
+    if args.to.is_none() && args.data().is_empty() {
+        return Err(RpcError::go("contract creation without any data provided"));
+    }
+    // `crypto.CreateAddress(..., *args.Data, ...)` dereferences "data", so a
+    // creation that sends only "input" crashes the Go handler.
+    if args.to.is_none() && args.data.is_none() {
+        return Err(RpcError::go("method handler crashed"));
+    }
+    if block.number == 0 {
+        return Err(genesis_parent());
+    }
+    let gas = args.gas.unwrap_or(GAS_CAP).min(GAS_CAP);
+    // Go's first round runs with the given list after the tracer's
+    // exclusions (`prevTracer.AccessList()`); later rounds run with the
+    // previous round's list as it is, and the loop ends when a round traces
+    // the list it ran with.
+    let mut list = seed(
+        view,
+        args.access_list.as_deref().unwrap_or_default(),
+        from,
+        args.to,
+    );
+    let mut first = true;
+    let mut rounds = 0;
+    while rounds < ACCESS_LIST_ROUNDS {
+        let request = CallRequest {
+            from,
+            to: args.to,
+            gas,
+            value: args.value.unwrap_or([0; 32]),
+            data: args.data(),
+            access_list: list.clone(),
+            trace_access_list: true,
+        };
+        match view.call(&block, &request) {
+            Ok(r) => {
+                let traced = r.access_list.ok_or_else(|| {
+                    RpcError::from(ViewError::Unavailable("access-list tracing".into()))
+                })?;
+                if std::mem::take(&mut first) && traced.before != list {
+                    list = traced.before;
+                    continue;
+                }
+                rounds += 1;
+                if traced.after == list {
+                    return Ok(Traced {
+                        list,
+                        used_gas: r.used_gas,
+                        error: r.error,
+                    });
+                }
+                list = traced.after;
+            }
+            Err(CallError::Message { text, .. }) => {
+                return Err(RpcError::go(format!(
+                    "failed to apply transaction: {} err: {text}",
+                    message_text(&request, nonce)
+                )))
+            }
+            Err(CallError::View(e)) => return Err(e.into()),
+        }
+    }
+    Err(RpcError::go(format!(
+        "access list did not converge after {ACCESS_LIST_ROUNDS} executions"
+    )))
+}
+/// `NewAccessListTracer(list, from, to, precompiles).AccessList()`, sorted
+/// as the view returns lists. A creation's own address is not known here;
+/// the view's `before` list covers it.
+fn seed(
+    view: &dyn ChainView,
+    list: &[AccessTuple],
+    from: Address,
+    to: Option<Address>,
+) -> Vec<AccessTuple> {
+    let [r, z] = view.location();
+    let excluded = |a: &Address| {
+        *a == from
+            || Some(*a) == to
+            || (a[1..19].iter().all(|b| *b == 0)
+                && (1..=9).contains(&a[19])
+                && (a[0] == 0 || a[0] == (r << 4 | z)))
+    };
+    let mut out: std::collections::BTreeMap<Address, std::collections::BTreeSet<Hash>> =
+        Default::default();
+    for t in list {
+        if !excluded(&t.address) || !t.keys.is_empty() {
+            out.entry(t.address)
+                .or_default()
+                .extend(t.keys.iter().copied());
+        }
+    }
+    out.into_iter()
+        .map(|(address, keys)| AccessTuple {
+            address,
+            keys: keys.into_iter().collect(),
+        })
+        .collect()
+}
+/// Go's `%v` of the `types.Message` in "failed to apply transaction". Its
+/// fields are unexported, so fmt prints pointers as addresses, which differ
+/// from run to run; this text has the same shape with the placeholder
+/// 0xc000000000 for each pointer.
+fn message_text(r: &CallRequest, nonce: u64) -> String {
+    const POINTER: &str = "0xc000000000";
+    let bytes = |b: &[u8]| {
+        let items: Vec<String> = b.iter().map(|v| v.to_string()).collect();
+        format!("[{}]", items.join(" "))
+    };
+    let tuples: Vec<String> = r
+        .access_list
+        .iter()
+        .map(|t| {
+            let keys: Vec<String> = t.keys.iter().map(|k| bytes(k)).collect();
+            format!("{{{{{POINTER}}} [{}]}}", keys.join(" "))
+        })
+        .collect();
+    format!(
+        "{{{} {{{POINTER}}} {nonce} {POINTER} {} {POINTER} {} [{}] false {{<nil>}} 0 {} <nil>}}",
+        if r.to.is_some() { POINTER } else { "<nil>" },
+        r.gas,
+        bytes(&r.data),
+        tuples.join(" "),
+        bytes(&[0; 32]),
+    )
+}
+/// `PublicBlockChainQuaiAPI.CreateAccessList`.
+fn create_access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Value> {
+    let traced = access_list(view, args, at)?;
+    let mut out = Map::new();
+    out.insert(
+        "accessList".into(),
+        Value::Array(
+            traced
+                .list
+                .iter()
+                .map(|t| {
+                    json!({
+                        "address": json::checksum(&t.address),
+                        "storageKeys": t.keys.iter().map(|k| json::hash_hex(k)).collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+    if let Some(e) = traced.error {
+        out.insert("error".into(), Value::String(e));
+    }
+    out.insert("gasUsed".into(), json::u64_hex(traced.used_gas));
+    Ok(Value::Object(out))
+}
 /// `PublicBlockChainQuaiAPI.EstimateGas` and `DoEstimateGas`.
 fn estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Value> {
     let from_quai = !qi(&args.from());
@@ -1077,31 +1277,34 @@ fn estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Val
         }
         _ => return Err(RpcError::go("unsupported tx type")),
     }
-    // HeaderByNumberOrHash for the gas ceiling, and the state for the calls.
-    let block = match at {
-        BlockRef::Number(BlockNumber::Pending) => return Err(RpcError::go("block not found")),
-        BlockRef::Number(n) => {
-            by_number(view, n)?.ok_or_else(|| RpcError::go("block not found"))?
-        }
-        BlockRef::Hash { hash, .. } => view
-            .block_by_hash(&hash)?
-            .ok_or_else(|| RpcError::go("header for hash not found"))?,
-        BlockRef::Neither => {
-            return Err(RpcError::go(
-                "invalid arguments; neither block nor hash specified",
-            ))
-        }
-    };
+    // The gas ceiling: the given gas, else the gas limit of the block
+    // (HeaderByNumberOrHash).
     let mut hi = match args.gas {
         Some(g) if g >= TX_GAS => g,
-        _ => match block.object.header().wire().gas_limit.unwrap_or_default() {
-            0 => GAS_CAP,
-            limit => limit,
-        },
+        _ => {
+            let header = match at {
+                BlockRef::Number(BlockNumber::Pending) => None,
+                BlockRef::Number(n) => by_number(view, n)?,
+                BlockRef::Hash { hash, .. } => Some(
+                    view.block_by_hash(&hash)?
+                        .ok_or_else(|| RpcError::go("header for hash not found"))?,
+                ),
+                BlockRef::Neither => {
+                    return Err(RpcError::go(
+                        "invalid arguments; neither block nor hash specified",
+                    ))
+                }
+            };
+            let header = header.ok_or_else(|| RpcError::go("block not found"))?;
+            match header.object.header().wire().gas_limit.unwrap_or_default() {
+                0 => GAS_CAP,
+                limit => limit,
+            }
+        }
     };
     let fee_cap = args.gas_price.unwrap_or([0; 32]);
     if fee_cap != [0; 32] {
-        let state = view.state(&block)?;
+        let state = view.state(&*resolve(view, at)?)?;
         let from = args.from();
         quai_internal(view, &from)?;
         let balance = u256(state.balance(&from)?);
@@ -1120,24 +1323,16 @@ fn estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Val
     }
     hi = hi.min(GAS_CAP);
     let cap = hi;
-    // An access list for contract calls with data needs an access-list
-    // tracer; a call to an account without code gets the empty list.
+    // Without an access list, a contract call gets the one `AccessList`
+    // builds, so the estimate pays its intrinsic gas; on an error it goes on
+    // without one, as Go does.
     if args.access_list.is_none() && args.to.is_some() && !args.data().is_empty() {
-        let to = args.to.unwrap_or_default();
-        let has_code = internal(view, &to)
-            && view
-                .state(&block)
-                .ok()
-                .and_then(|s| s.code(&to).ok())
-                .is_some_and(|c| !c.is_empty());
-        if has_code {
-            return Err(RpcError::from(ViewError::Unavailable(
-                "gas estimates for contract calls without an access list (needs an access-list tracer)"
-                    .into(),
-            )));
+        if let Ok(traced) = access_list(view, &args, at) {
+            args.access_list = Some(traced.list);
         }
-        args.access_list = Some(vec![]);
     }
+    let block = resolve(view, at)?;
+    view.state(&block)?;
     let executable = |gas: u64| -> R<(bool, Option<crate::view::CallResult>)> {
         let mut a = args.clone();
         a.gas = Some(gas);

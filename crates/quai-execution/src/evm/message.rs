@@ -600,7 +600,7 @@ fn precompile_error(id: u8, input: &[u8]) -> Option<String> {
         }
         7 => g1_error(&padded(96)[..64]),
         8 => {
-            if input.len() % 192 != 0 {
+            if !input.len().is_multiple_of(192) {
                 return Some("bad elliptic curve pairing size".into());
             }
             input

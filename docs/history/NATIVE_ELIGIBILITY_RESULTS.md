@@ -111,7 +111,4 @@ checks pass 70/16 comparisons, with eight boundary checks and three raw Go/Rust
 application-wire loopback exchanges. Registry dependencies remain unchanged.
 These overlapping scopes are not full-node coverage or performance.
 
-Changed readable text, executable strings and readable extended metadata were
-inspected. No AI-identifying marks were found or removed; unknown invisible
-watermarks cannot be excluded by these inspections. Copyright, license
-attribution and technical metadata are preserved.
+Same text as in [NATIVE_COORDINATOR_RESULTS.md](NATIVE_COORDINATOR_RESULTS.md); omitted here.

@@ -1,6 +1,6 @@
 # Native Rust Quai client plan
 
-Current native runtime: [independent private-node processes](NATIVE_PROCESS_RESULTS.md) qualify early-profile sync/reorg, persistent peer identity, restart/kill recovery, cancellation and clean shutdown. Full global consensus/public sync remain unfinished; the tracked goal is active.
+Same text as in [NATIVE_STATEFUL_PROGRESS.md](NATIVE_STATEFUL_PROGRESS.md); omitted here.
 
 
 

@@ -28,7 +28,7 @@ a validating or synchronizing node.
 | `quai-execution` | Intrinsic gas, Qi input checks, ETX queue roots, EVM frames and settlement |
 | `quai-consensus` | ProgPoW/KAWPOW, auxiliary proofs, difficulty and PoEM rules |
 | `quai-network` | Application framing, topics and optional private libp2p transport |
-| `quai-store` | Durable state, history and canonical storage |
+| `quai-store` | Versioned materialized reads and the imported frozen view |
 | `quai-rpc` | Frozen-view JSON-RPC service and profiling example |
 
 See [the protocol notice](crates/quai-primitives/NOTICE.md) for attribution.

@@ -86,7 +86,4 @@ latest-Go check passes 16 SDK comparisons. All 13 component oracle corpora repro
 exactly. Full consensus and network readiness remain false. No performance
 comparison was made.
 
-Changed readable text, executable strings and readable extended metadata were
-inspected. No AI-identifying marks were found or removed; unknown invisible
-watermarks cannot be excluded by these inspections. Copyright, license
-attribution and technical metadata are preserved.
+Same text as in [NATIVE_COORDINATOR_RESULTS.md](NATIVE_COORDINATOR_RESULTS.md); omitted here.

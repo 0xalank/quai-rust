@@ -1,4 +1,4 @@
-> Historical Go-backed profile. The default build is now standalone Rust; see [README](../../README.md) and [the native plan](PLAN.md). Run these reference commands only inside the isolated lab created by `scripts/build_reference.py`.
+Same text as in [CANONICAL_READS.md](CANONICAL_READS.md); omitted here.
 
 # Local node acceptance and native Rust reads
 

@@ -90,8 +90,8 @@ pub fn prepare_component(
         return Err(Error::Invalid("prime forward override branch"));
     }
     let h = block.object().header().wire();
-    let previous = share_rules::uint(h.exchange_rate.as_deref().unwrap())?;
-    let miner = share_rules::uint(h.miner_difficulty.as_deref().unwrap())?;
+    let previous = share_rules::uint(h.exchange_rate.as_deref().unwrap_or_default())?;
+    let miner = share_rules::uint(h.miner_difficulty.as_deref().unwrap_or_default())?;
     let choice = choice_window::derive(
         parent,
         previous,
@@ -116,7 +116,7 @@ pub fn prepare_component(
                     .wire()
                     .miner_difficulty
                     .as_deref()
-                    .unwrap(),
+                    .unwrap_or_default(),
             )?,
             window.difficulty_sum(),
         )?
@@ -124,7 +124,7 @@ pub fn prepare_component(
     let quote = economics::reward_quote_at_difficulty(
         block.header(),
         forward_rate,
-        share_rules::uint(h.avg_tx_fees.as_deref().unwrap())?,
+        share_rules::uint(h.avg_tx_fees.as_deref().unwrap_or_default())?,
         miner,
     )?;
     if converted.pricing.len() != converted.etxs.len() {

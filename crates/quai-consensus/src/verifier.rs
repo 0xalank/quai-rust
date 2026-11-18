@@ -494,11 +494,11 @@ impl Verifier {
     }
     /// Validate a block against an explicit parent context: the chain spec,
     /// the history windows and append snapshots of each context, the heads it
-    /// must extend and the orders and confirmations of earlier blocks. Runs
-    /// every state-free rule (`block::check`) and, with a parent state, the
-    /// execution with every state root (`block::execute`): the pipeline
-    /// `quai-node replay` runs. Stops that are not Go rules remain where a Go
-    /// stage is not ported (prime controllers after ControllerKickInBlock).
+    /// must extend, the orders, rollups and confirmations of earlier blocks
+    /// and the prime controller state. Runs every state-free rule
+    /// (`block::check`, the prime controllers included) and, with a parent
+    /// state, the execution with every state root (`block::execute`): the
+    /// pipeline `quai-node replay` runs.
     pub fn validate_block<P: quai_execution::historical::History>(
         &mut self,
         parent: &crate::block::Parent<'_>,

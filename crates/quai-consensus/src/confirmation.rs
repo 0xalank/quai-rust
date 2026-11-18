@@ -6,6 +6,7 @@ use crate::{
     chain::Chain,
     history::{History, Record, MAX_RECORDS},
     placement::{self, CandidateIndex, Prepared, Profile},
+    prime_controller,
     private_profile::PrivateChain,
     share_rules,
     verifier::Verifier,
@@ -155,10 +156,23 @@ pub fn newly_confirmed(
         cursor = parent.into();
     }
 }
-/// The ETXs a block confirms for its zone: a prime block filters its prime
-/// collection to the zone (the region Append of a dominant block), a region
-/// block passes its region collection, a zone-only block confirms nothing.
-/// `accumulated` is the zone rollup of the region block's manifest.
+/// core/slice.go CollectNewlyConfirmedEtxs for a prime block in the prime
+/// context: the ETXs it confirms for its region, before the prime economic
+/// branch of Append prices them (`prime_controller`).
+pub fn prime_inbound(
+    histories: &[History; 3],
+    known: &dyn Known,
+    prime: &Record,
+) -> Result<Vec<Transaction>, Error> {
+    let sub = sub_rollup(histories, known, prime, 0)?;
+    newly_confirmed(histories, known, prime, 0, 0, &sub)
+}
+/// The ETXs a block confirms for its zone: a prime block filters the list its
+/// prime context passes down (`dominant`: core/slice.go Append newInboundEtxs
+/// after the prime economic branch, see `prime_controller::Step::dominant`) to
+/// the zone (the region Append of a dominant block), a region block passes
+/// its region collection, a zone-only block confirms nothing. `accumulated`
+/// is the zone rollup of the region block's manifest.
 pub fn confirm(
     histories: &[History; 3],
     known: &dyn Known,
@@ -166,18 +180,15 @@ pub fn confirm(
     order: u8,
     accumulated: &[Transaction],
     location: [u8; 2],
+    dominant: Option<&[Transaction]>,
 ) -> Result<Vec<Transaction>, Error> {
     match order {
-        0 => {
-            let prime = records[0].ok_or(Error::Unavailable("coincident prime record"))?;
-            let sub = sub_rollup(histories, known, prime, 0)?;
-            filter_to_sub(
-                &newly_confirmed(histories, known, prime, 0, order, &sub)?,
-                location,
-                1,
-                0,
-            )
-        }
+        0 => filter_to_sub(
+            dominant.ok_or(Error::Unavailable("prime dominant ETXs"))?,
+            location,
+            1,
+            0,
+        ),
         1 => {
             let region = records[1].ok_or(Error::Unavailable("coincident region record"))?;
             newly_confirmed(histories, known, region, 1, order, accumulated)
@@ -215,28 +226,23 @@ pub fn expected_uncled_entropy(
         crate::validation::uncled_log_entropy(v, zone)
     }
 }
-/// core/slice.go Append, prime context: up to ControllerKickInBlock a prime
-/// block must carry the starting controller values. Later prime blocks need
-/// verifyParentExchangeRateAndFlowAmount and the conversion pricing of
-/// Append, which the hierarchy does not run yet.
-pub fn check_prime_economics(chain: &Chain, prime: &Record) -> Result<(), Error> {
-    let number = prime.number(0)?;
-    if number > FORKS.controller_kick_in {
-        return Err(Error::Unsupported(
-            "prime controllers after ControllerKickInBlock are not ported",
-        ));
-    }
-    let h = prime.object().header().wire();
-    let e = &chain.spec().economics;
-    let value = |v: &Option<Vec<u8>>| share_rules::uint(v.as_deref().unwrap_or_default());
-    if value(&h.k_quai_discount)? != crate::rules::Uint::from_u128(e.k_quai_discount)
-        || value(&h.conversion_flow_amount)?
-            != crate::rules::Uint::from_u128(e.conversion_flow_amount)
-        || value(&h.exchange_rate)? != crate::rules::Uint::from_u128(e.exchange_rate)
-    {
-        return Err(Error::Invalid("prime economic starting values"));
-    }
-    Ok(())
+/// core/slice.go Append, prime context: the prime controllers of a prime
+/// block on the state after its parent. Returns the next controller state and
+/// the list the prime context passes to the region.
+pub fn prime_step(
+    histories: &[History; 3],
+    known: &dyn Known,
+    state: &prime_controller::State,
+    prime: &Record,
+) -> Result<prime_controller::Step, prime_controller::Refusal> {
+    let parent = histories[0].get(&prime.parent(0)?)?;
+    let grandparent = if prime.number(0)? > FORKS.controller_kick_in {
+        Some(histories[0].get(&parent.parent(0)?)?)
+    } else {
+        None
+    };
+    let inbound = prime_inbound(histories, known, prime)?;
+    state.step(prime, &parent, grandparent.as_deref(), inbound)
 }
 pub(crate) mod delta;
 pub use delta::LocalOutputs;
@@ -273,8 +279,8 @@ impl placement::Reader for IndexReader {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PreparationDomain {
-    /// The go-quai rules of the chain spec. Refusals are Go's, plus explicit
-    /// stops where a Go stage is not ported (prime controllers after the kick-in).
+    /// The go-quai rules of the chain spec, prime controllers included.
+    /// Refusals are Go's; explicit stops remain only where go-quai panics.
     Spec,
     /// Reviewed private profile domains (qualification scopes of chain 1337).
     Early,
@@ -293,6 +299,9 @@ pub struct Hierarchy {
     region_rollups: BTreeMap<Hash, Arc<Vec<Transaction>>>,
     confirmed: BTreeMap<Hash, Arc<Vec<Transaction>>>,
     etx_bytes: usize,
+    /// The prime controller state after the prime head (a chain spec built
+    /// from its genesis); None over a reader, which does not supply it.
+    controller: Option<prime_controller::State>,
 }
 /// Privately constructed component permit bound to the current three heads.
 /// It never grants execution or full consensus authority by itself.
@@ -306,6 +315,7 @@ pub struct PreparedConfirmation {
     confirmed: Vec<Transaction>,
     execution_inbound: Vec<Transaction>,
     charge: usize,
+    controller: Option<prime_controller::State>,
 }
 impl PreparedConfirmation {
     pub(crate) fn chain_profile(&self) -> &Chain {
@@ -376,6 +386,7 @@ impl Hierarchy {
             region_rollups: BTreeMap::from([(id, Arc::new(vec![]))]),
             confirmed: BTreeMap::from([(id, Arc::new(vec![]))]),
             etx_bytes: 0,
+            controller: Some(prime_controller::State::genesis(chain.genesis())?),
             chain,
         };
         for c in 0..3 {
@@ -420,6 +431,7 @@ impl Hierarchy {
             region_rollups: BTreeMap::from([(id, Arc::new(vec![]))]),
             confirmed: BTreeMap::from([(id, Arc::new(vec![]))]),
             etx_bytes: 0,
+            controller: None,
             source: Some(source),
             chain,
         })
@@ -629,11 +641,7 @@ impl Hierarchy {
             records[*c as usize] = Some(r);
         }
         let h = zone.object().header().wire();
-        if spec_domain {
-            if order == 0 {
-                check_prime_economics(&self.chain, zone)?;
-            }
-        } else {
+        if !spec_domain {
             // Private profiles: every block keeps the genesis controller values.
             let gh = self.chain.genesis().object().header().wire();
             if h.exchange_rate != gh.exchange_rate
@@ -696,6 +704,23 @@ impl Hierarchy {
                 return Err(Error::Invalid("region/zone rollup disagreement"));
             }
         }
+        // core/slice.go Append, prime context: the prime controllers of a
+        // chain spec, or the unpriced list of a private profile (its blocks
+        // keep the genesis values and stop before the kick-in).
+        let (controller, dominant) = match records[0].as_ref() {
+            Some(prime) if spec_domain => {
+                let state = self
+                    .controller
+                    .as_ref()
+                    .ok_or(Error::Unavailable("prime controller state"))?;
+                let step =
+                    prime_step(&self.histories, self, state, prime).map_err(|r| r.error())?;
+                let dominant = step.dominant().to_vec();
+                (Some(step.into_state()), Some(dominant))
+            }
+            Some(prime) => (None, Some(prime_inbound(&self.histories, self, prime)?)),
+            None => (None, None),
+        };
         let confirmed = confirm(
             &self.histories,
             self,
@@ -707,6 +732,7 @@ impl Hierarchy {
             order,
             &accumulated,
             location,
+            dominant.as_deref(),
         )?;
         let execution_inbound = self.confirmed_after(&zone.parents[2])?.to_vec();
         let retained_cross = if order <= 1 { cross.as_slice() } else { &[] };
@@ -735,6 +761,7 @@ impl Hierarchy {
             confirmed,
             execution_inbound,
             charge,
+            controller,
         })
     }
     /// Installs checked components only. The private branch caller must execute
@@ -770,6 +797,9 @@ impl Hierarchy {
         }
         self.confirmed.insert(id, Arc::new(p.confirmed));
         self.etx_bytes += p.charge;
+        if let Some(c) = p.controller.take() {
+            self.controller = Some(c);
+        }
         Ok(())
     }
 }

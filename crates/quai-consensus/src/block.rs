@@ -4,10 +4,13 @@
 //! parent links, body commitments, the block proof-of-work, the computed
 //! order against the coincident records, the header/inclusion/append rules
 //! and PCRC of each coincident context, the uncled entropy, the prime
-//! starting values, the ETX rollup root and the region/zone rollup agreement.
-//! `execute` derives the ETXs the block confirms (the shared
-//! `confirmation::confirm`), executes the zone block on the parent state with
-//! the ETXs its parent confirmed, and compares every state root of the header.
+//! controllers (`prime_controller`: the starting values up to
+//! ControllerKickInBlock, then verifyParentExchangeRateAndFlowAmount and the
+//! conversion pricing of Append), the ETX rollup root and the region/zone
+//! rollup agreement. `execute` derives the ETXs the block confirms (the shared
+//! `confirmation::confirm`, with the list the prime controllers priced),
+//! executes the zone block on the parent state with the ETXs its parent
+//! confirmed, and compares every state root of the header.
 //! `Verifier::validate_block` runs both; `quai-node replay` runs the same two
 //! calls on mainnet exports. A failure names the context and the check, with
 //! the expected and the actual value where the rule has one.
@@ -17,6 +20,7 @@ use crate::{
     economics,
     history::{History, Record},
     placement::{self, CandidateIndex, Snapshot},
+    prime_controller,
     rules::{self, Uint},
     share_rules, validation,
     verifier::Verifier,
@@ -112,8 +116,9 @@ fn body_context(c: usize) -> work::Context {
 
 /// The ancestry a block is checked against: the chain spec, the recent
 /// records and append snapshots of each context, the heads the block must
-/// extend, the orders (and, for execution, the rollups and confirmations) of
-/// earlier blocks, and the clock for the future-block rule.
+/// extend, the orders and region rollups (and, for execution, the
+/// confirmations) of earlier blocks, the prime controller state after the
+/// prime head, and the clock for the future-block rule.
 pub struct Parent<'a> {
     pub chain: &'a Chain,
     pub histories: &'a [History; 3],
@@ -121,6 +126,8 @@ pub struct Parent<'a> {
     /// The head (hash, number) of each context.
     pub heads: [(Hash, u64); 3],
     pub known: &'a dyn Known,
+    /// The prime controller state after the prime head.
+    pub controller: &'a prime_controller::State,
     pub now: u64,
 }
 /// The execution state of the zone parent and the history execution reads at
@@ -158,6 +165,9 @@ pub struct Checked {
     pub accumulated: Vec<Transaction>,
     /// The cross-prime rollup of those ETXs (the region rollup).
     pub cross: Vec<Transaction>,
+    /// For a prime block: the next prime controller state and the ETXs the
+    /// prime context passes to the region.
+    pub prime: Option<prime_controller::Step>,
 }
 impl Checked {
     pub fn zone(&self) -> &Arc<Record> {
@@ -529,17 +539,39 @@ pub fn check(
     if actual != expected {
         return Err(fail(2, "uncled entropy", uint(expected), uint(actual)));
     }
-    // Prime controller starting values (core/slice.go Append).
-    if order == 0 {
-        confirmation::check_prime_economics(chain, &zone).map_err(|e| {
-            fail(
-                0,
-                "prime economics",
-                "the starting controller values",
-                describe(&e),
-            )
-        })?;
-    }
+    // Prime controllers (core/slice.go Append, prime context).
+    let prime = if order == 0 {
+        let record = records[0].as_ref().unwrap();
+        match confirmation::prime_step(parent.histories, parent.known, parent.controller, record) {
+            Ok(step) => Some(step),
+            Err(prime_controller::Refusal::Field {
+                field,
+                expected,
+                actual,
+            }) => {
+                return Err(fail(
+                    0,
+                    format!("prime controllers: {field}"),
+                    uint(expected),
+                    uint(actual),
+                ))
+            }
+            Err(prime_controller::Refusal::Error(e)) => {
+                return Err(fail(
+                    0,
+                    "prime controllers",
+                    format!(
+                        "the controller state after prime {} {}",
+                        parent.controller.head().1,
+                        hex(&parent.controller.head().0)
+                    ),
+                    describe(&e),
+                ))
+            }
+        }
+    } else {
+        None
+    };
     // ETX rollup root over the zone parent's manifest.
     let snapshot = parent.indexes[2]
         .get(&zone.parent(2).unwrap_or([0; 32]))
@@ -600,6 +632,7 @@ pub fn check(
         next,
         accumulated,
         cross,
+        prime,
     })
 }
 
@@ -623,6 +656,7 @@ pub fn execute<P: historical::History>(
         checked.order,
         &checked.accumulated,
         parent.chain.location(),
+        checked.prime.as_ref().map(|p| p.dominant()),
     )
     .map_err(|e| fail(2, "state: confirmation", "confirmed ETXs", describe(&e)))?;
     let inbound = parent
@@ -728,6 +762,7 @@ pub struct Ancestry {
     indexes: [CandidateIndex; 3],
     heads: [(Hash, u64); 3],
     known: MemoryKnown,
+    controller: prime_controller::State,
 }
 impl Ancestry {
     pub fn new(chain: Arc<Chain>) -> Result<Self, Error> {
@@ -745,12 +780,14 @@ impl Ancestry {
         known.orders.insert(id, 0);
         known.region_rollups.insert(id, Arc::new(vec![]));
         known.confirmed.insert(id, Arc::new(vec![]));
+        let controller = prime_controller::State::genesis(chain.genesis())?;
         Ok(Self {
             chain,
             histories,
             indexes,
             heads: [(id, 0); 3],
             known,
+            controller,
         })
     }
     pub fn heads(&self) -> [(Hash, u64); 3] {
@@ -764,6 +801,7 @@ impl Ancestry {
             indexes: &self.indexes,
             heads: self.heads,
             known: &self.known,
+            controller: &self.controller,
             now,
         }
     }
@@ -799,6 +837,9 @@ impl Ancestry {
         }
         if let Some(e) = executed {
             self.known.confirmed.insert(id, Arc::new(e.confirmed));
+        }
+        if let Some(step) = checked.prime {
+            self.controller = step.into_state();
         }
         Ok(())
     }

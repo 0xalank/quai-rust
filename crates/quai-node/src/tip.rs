@@ -278,6 +278,8 @@ pub fn follow(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
+            // The gossip task ends on a stop signal before this loop sees it.
+            Err(RecvTimeoutError::Disconnected) if stop.load(Ordering::Relaxed) => break,
             Err(RecvTimeoutError::Disconnected) => return Err("gossip stopped".into()),
         }
         // Blocks that gossip missed: the peers' next height.
@@ -354,7 +356,7 @@ pub fn follow(
                         }
                     }
                     Offer::Rejected(_) => stats.rejected += 1,
-                    Offer::Known | Offer::TooFar => {}
+                    Offer::Known | Offer::TooFar | Offer::BelowBase => {}
                 }
                 chain.pop();
             }

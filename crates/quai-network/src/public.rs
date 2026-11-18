@@ -65,7 +65,8 @@ pub const COLOSSEUM_BOOTNODES: [&str; 3] = [
 /// Most simultaneous connections: established plus pending dials.
 pub const MAX_PEERS: u32 = 8;
 const MAX_PENDING_DIALS: u32 = 2;
-const MAX_STREAMS: usize = 16;
+/// Outbound streams at once: up to 4 per peer at the peer limit.
+const MAX_STREAMS: usize = 4 * MAX_PEERS as usize;
 
 fn err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())

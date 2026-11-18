@@ -23,6 +23,7 @@ quai-execution = { path = "../quai-execution" }
 quai-consensus = { path = "../quai-consensus" }
 quai-store = { path = "../quai-store" }
 serde_json = { version = "=1.0.154", features = ["arbitrary_precision"] }
+sha2 = "=0.10.9"
 
 [[example]]
 name = "private-peer"
@@ -43,3 +44,8 @@ required-features = ["native-transport"]
 [[example]]
 name = "mainnet-probe"
 required-features = ["native-transport"]
+
+[[example]]
+name = "peer-export"
+required-features = ["native-transport"]
+test = true

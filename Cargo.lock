@@ -2485,6 +2485,7 @@ dependencies = [
  "quai-primitives",
  "quai-store",
  "serde_json",
+ "sha2",
  "tokio",
 ]
 

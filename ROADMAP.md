@@ -44,8 +44,11 @@ Gate: the repo has a first commit and one status file.
 - [x] First commit of the tree (`59bc106`). Fixtures are plain Git: 225 MB of
       JSON packs to about 11 MB, so Git LFS would store more, not less.
 - [x] This file replaces per-step reports.
-- [ ] Move the historical `NATIVE_*` reports out of the top level and fix the
-      `PORTING_MAP.md` generator, which prints "0 comparisons".
+- [x] Move the historical reports to `docs/history/` (53 files) and fix the
+      `PORTING_MAP.md` generator, which printed "0 comparisons": the newest
+      `results/native-validation.json` lost 30 keys. The map now shows the last
+      recorded values and names the record they come from. Regenerating the map
+      needs the local, ignored `results/` directory.
 
 ## Phase 1: mainnet replay (critical path)
 
@@ -124,3 +127,5 @@ Mining, block templates and Stratum come last.
 |---|---|---|
 | 2026-11-17 | Phase 0 | First commit `59bc106`; `results/` ignored |
 | 2026-11-17 | Phase 1.1 | go-quai v0.57.0 mainnet node started for slice `[0 0]` |
+| 2026-11-17 | Phase 1.1 | Node guard also stops the node on an iPhone hotspot (`daec049`) |
+| 2026-11-17 | Phase 0.4 | Reports moved to `docs/history/`; porting map counts fixed (`3d73836`) |

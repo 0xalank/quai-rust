@@ -97,13 +97,25 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        1,872,600, SelfDestructRefund 1,919,500, ConversionLockChange 2,237,000,
        SecurityHardening 2,317,000, Polaris 2,444,574 (prime terminus),
        MaxCodeSize 3,490,000.
-5. [ ] Remove the EVM limits that Go does not have, so that only gas limits
-       execution: 200,000 steps per frame, 1 MiB memory, 4,096 logs or 4 MiB of
-       logs per transaction, 128 KiB call input, 4,096 access-list items. Keep
-       anti-DoS limits at the P2P edge. The replay found more limits to check
-       against Go: 4,096 transactions, uncles or manifest hashes per work
-       object; a 3 MiB protobuf message; 4,096 logs and 128 KiB per log in a
-       receipt; 8,192 ETXs per rollup.
+5. [x] Remove the EVM limits that Go does not have, so that only gas limits
+       execution (`130b106`). Removed: steps per frame, EVM memory, logs per
+       transaction, call input, access-list size, the 1,000,000-entry undo
+       journal, precompile input and modexp caps, transaction/receipt/block
+       decode caps, opETX access-list caps and the lazy World overlay caps.
+       With the 50,000,000 gas ceiling, memory stays under 5.1 MB per frame and
+       140.6 MB over 1,025 frames (proof in `evm/mod.rs`). Kept because Go has
+       the same limit: code size 32,768, BLOCKHASH depth 256, the u16 ETX index,
+       the 3 MiB message cap. Two silent divergences were fixed on the way:
+       opETX pushed 0 where Go succeeds on a long access list, and opETX
+       required 20-byte addresses where Go accepts any length. 19 new Go
+       oracle vectors; 11 new tests fail on the old code.
+       Still open: change caps of 65,536 and a 32 MiB payload cap in the ETX
+       queue and lockup overlays (`etx.rs`, `lockup_state.rs`), which a
+       long-lived overlay can reach; header-path caps without a Go equivalent
+       (64 KiB header input, 4,096-byte header data, 4,096-entry manifest;
+       step 6); 8,192 ETXs per rollup. The in-memory World keeps its snapshot
+       bounds (65,536 accounts), so mainnet replay must move to the lazy World
+       (`restore_sparse`) before the state passes them.
 6. [ ] Replace the per-profile code with one chain spec and one fork schedule.
        Then make `validate_block` do real validation.
        The replay works around private-profile entry points today: it copies
@@ -194,3 +206,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-17 | Phase 1.2 | QEX1 exporter (`59a928c`); live-clone export of zone 0–11,682: 20,408 records, 75.9 MB; every self-check and `-verify` pass |
 | 2026-11-17 | Phase 2.2 groundwork | Rust libp2p talks to go-quai mainnet peers, read-only (`9a25090`): `/quai/1.0.0` requests 57/57 local and 153/153 public, hashes equal to Go RPC; gossip decoded |
 | 2026-11-17 | Phase 1.3, 1.7, 2.1 | `quai-node replay` (`0e13a64`): mainnet zone 0–11,682 passes all stateless checks; all 11,682 executed zone blocks have every root equal to go-quai. Rerun independently by the coordinator: PASS, 751 s under load 20 |
+| 2026-11-17 | Phase 1.5 | Gas is the only EVM and tx-path bound, as in Go (`130b106`); +19 Go oracle vectors; 246/246 release tests in execution, primitives, consensus |

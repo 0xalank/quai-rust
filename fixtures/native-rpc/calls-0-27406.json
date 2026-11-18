@@ -1,0 +1,1968 @@
+{
+ "generator": "scripts/gen_native_rpc_vectors.py",
+ "head": 27406,
+ "head_hash": "0x3aa71a91c9f9ff5e8d616f3467a54a0da7a0a478ba768cfcb4efb4d3e613bf26",
+ "source": "go-quai v0.57.0 (33db82f2891b267ba898ca38bd2dd8bf75cbb072), zone [0 0], HTTP JSON-RPC, RPC version v1",
+ "vectors": [
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00001111222233334444555566667777888899AA"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x0011",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "accessList": [
+      {
+       "address": "0x0000044757587287d5EF86E5020F32913058c6C4",
+       "storageKeys": []
+      },
+      {
+       "address": "0x00001111222233334444555566667777888899AA",
+       "storageKeys": [
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+       ]
+      }
+     ],
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "accessList": [
+      {
+       "address": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+       "storageKeys": []
+      },
+      {
+       "address": "0x0000000000000000000000000000000000000001",
+       "storageKeys": []
+      }
+     ],
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x001C24149303884821E0e8530eBD010c754E7a24",
+     "value": "0x2"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x10"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "err: insufficient funds for gas * price + value: address 0x0000055114f34A0Baa741dd2A77a89638B83a821 have 0 want 1 (supplied gas 50000000)"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000055114f34A0Baa741dd2A77a89638B83a821",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5208",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "insufficient balance for transfer"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5208",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0xa000",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "err: intrinsic gas too low: have 20992, want 21000 (supplied gas 20992)"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5200",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gasPrice": "0x3b9aca00",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x00"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x600060005360016000f3",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "CreateETX error: ETX is not eligible to be sent to 1000024c83970aea9451a6170e4048d5786745ad"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x1000024c83970Aea9451A6170E4048D5786745aD",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "CreateETX conversion error: Quai->Qi conversion is not allowed before block 262000"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00804c83970AeA9451a6170e4048D5786745aD01",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x0000000000000000000000002724864f4f22004151caca136cc35ae9ef1ecf14"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x1111111111111111111111111111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000001c22222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000001"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x1234",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000001"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x000000000000000000000000108f07b8382412612c048d07d13f814118445acd"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000003"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x68656c6c6f"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000004"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x05"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001030507",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000005"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000006"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "bn256: coordinate exceeds modulus"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000006"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "bn256: coordinate exceeds modulus"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000007"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x0000000000000000000000000000000000000000000000000000000000000001"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000008"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "bad elliptic curve pairing size"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000008"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "invalid input length"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "invalid final flag"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x0000000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6883d5a3342278f1b8980117edb5bb495e5dcebab58bbeebeb210e7df6d3e8c0841d17f69ce562082ca1c45e66af40dbf11c691f2088699011618b46e7c6afa3"
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x0000000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "insufficient balance for transfer"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5300",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "execution reverted"
+    }
+   },
+   "method": "quai_call",
+   "params": [
+    {
+     "data": "0x",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x000000000000000000000000000000000000000a"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "head",
+   "go": {
+    "result": "0x"
+   },
+   "go_params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ],
+   "method": "quai_call",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "latest"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc608"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00001111222233334444555566667777888899AA"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d7a"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x0011",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x9045"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "accessList": [
+      {
+       "address": "0x0000044757587287d5EF86E5020F32913058c6C4",
+       "storageKeys": []
+      },
+      {
+       "address": "0x00001111222233334444555566667777888899AA",
+       "storageKeys": [
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+       ]
+      }
+     ],
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x8660"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "accessList": [
+      {
+       "address": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+       "storageKeys": []
+      },
+      {
+       "address": "0x0000000000000000000000000000000000000001",
+       "storageKeys": []
+      }
+     ],
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc608"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x001C24149303884821E0e8530eBD010c754E7a24",
+     "value": "0x2"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x10"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "err: insufficient funds for gas * price + value: address 0x0000055114f34A0Baa741dd2A77a89638B83a821 have 0 want 1 (supplied gas 25010499)"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000055114f34A0Baa741dd2A77a89638B83a821",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5208",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "insufficient balance for transfer"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5208",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc608"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0xa000",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5200",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gasPrice": "0x3b9aca00",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x18319"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x600060005360016000f3",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "CreateETX error: ETX is not eligible to be sent to 1000024c83970aea9451a6170e4048d5786745ad"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x1000024c83970Aea9451A6170E4048D5786745aD",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x6d60"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xde61"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x1111111111111111111111111111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000001c22222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000001"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xd5d1"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x1234",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000001"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc6d1"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xca31"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000003"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc689"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000004"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc981"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001030507",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000005"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xc979"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000006"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "bn256: coordinate exceeds modulus"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000006"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "bn256: coordinate exceeds modulus"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000007"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0x1b066"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000008"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "bad elliptic curve pairing size"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000008"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "invalid input length"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "invalid final flag"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x0000000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": "0xcaa6"
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x0000000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "insufficient balance for transfer"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5300",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "execution reverted"
+    }
+   },
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x000000000000000000000000000000000000000a"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "head",
+   "go": {
+    "result": "0x6d60"
+   },
+   "go_params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ],
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "latest"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x9485"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00001111222233334444555566667777888899AA"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x521c"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x0011",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [
+      {
+       "address": "0x00001111222233334444555566667777888899AA",
+       "storageKeys": [
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+       ]
+      }
+     ],
+     "gasUsed": "0x62d4"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "accessList": [
+      {
+       "address": "0x0000044757587287d5EF86E5020F32913058c6C4",
+       "storageKeys": []
+      },
+      {
+       "address": "0x00001111222233334444555566667777888899AA",
+       "storageKeys": [
+        "0x0000000000000000000000000000000000000000000000000000000000000001"
+       ]
+      }
+     ],
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "accessList": [
+      {
+       "address": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+       "storageKeys": []
+      },
+      {
+       "address": "0x0000000000000000000000000000000000000001",
+       "storageKeys": []
+      }
+     ],
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x9485"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x001C24149303884821E0e8530eBD010c754E7a24",
+     "value": "0x2"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x10"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "failed to apply transaction: {0xc000000000 {0xc000000000} 0 0xc000000000 50000000 0xc000000000 [] [] false {<nil>} 0 [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] <nil>} err: insufficient funds for gas * price + value: address 0x0000055114f34A0Baa741dd2A77a89638B83a821 have 0 want 1"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000055114f34A0Baa741dd2A77a89638B83a821",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5208",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "insufficient balance for transfer",
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5208",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x9485"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0xa000",
+     "to": "0x00001111222233334444555566667777888899AA",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "failed to apply transaction: {0xc000000000 {0xc000000000} 0 0xc000000000 20992 0xc000000000 [] [] false {<nil>} 0 [0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0] <nil>} err: intrinsic gas too low: have 20992, want 21000"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5200",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gasPrice": "0x3b9aca00",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [
+      {
+       "address": "0x003c86AE08A71B219FAE2dfb51d8e135D6cff2D1",
+       "storageKeys": []
+      }
+     ],
+     "gasUsed": "0x12bb3"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x600060005360016000f3",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "CreateETX error: ETX is not eligible to be sent to 1000024c83970aea9451a6170e4048d5786745ad",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x1000024c83970Aea9451A6170E4048D5786745aD",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "CreateETX conversion error: Quai->Qi conversion is not allowed before block 262000",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x00804c83970AeA9451a6170e4048D5786745aD01",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0xa6c9"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x1111111111111111111111111111111111111111111111111111111111111111000000000000000000000000000000000000000000000000000000000000001c22222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000001"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0xa05d"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x1234",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000001"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x951d"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x97a5"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000003"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x94e7"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000004"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x9721"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001030507",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000005"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x971b"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000006"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "bn256: coordinate exceeds modulus",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000006"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "bn256: coordinate exceeds modulus",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000007"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x1444d"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000008"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "bad elliptic curve pairing size",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000008"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "invalid input length",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "invalid final flag",
+     "gasUsed": "0x2faf080"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x0000000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x97fd"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x0000000c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000009"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "insufficient balance for transfer",
+     "gasUsed": "0x5258"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x68656c6c6f",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "gas": "0x5300",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": {
+     "accessList": [],
+     "error": "execution reverted",
+     "gasUsed": "0x5208"
+    }
+   },
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x000000000000000000000000000000000000000a"
+    },
+    "0x6b0e"
+   ]
+  },
+  {
+   "compare": "head",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x5208"
+    }
+   },
+   "go_params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "0x6b0e"
+   ],
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000044757587287d5EF86E5020F32913058c6C4",
+     "value": "0x1"
+    },
+    "latest"
+   ]
+  },
+  {
+   "compare": "head",
+   "go": {
+    "result": "0xc67c"
+   },
+   "go_params": [
+    {
+     "data": "0x01",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000002"
+    },
+    "0x6b0e"
+   ],
+   "method": "quai_estimateGas",
+   "params": [
+    {
+     "data": "0x01",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000002"
+    }
+   ]
+  },
+  {
+   "compare": "head",
+   "go": {
+    "result": {
+     "accessList": [],
+     "gasUsed": "0x94a7"
+    }
+   },
+   "go_params": [
+    {
+     "data": "0x01",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000004"
+    },
+    "0x6b0e"
+   ],
+   "method": "quai_createAccessList",
+   "params": [
+    {
+     "data": "0x01",
+     "from": "0x0000024c83970aea9451A6170E4048d5786745Ad",
+     "to": "0x0000000000000000000000000000000000000004"
+    }
+   ]
+  },
+  {
+   "compare": "derived",
+   "go": {
+    "result": "0x12b41eb3e"
+   },
+   "method": "quai_gasPrice",
+   "note": "baseFeePerGas of block 27407 * 120 / 100 (quai_getBlockByNumber of the Go node)",
+   "params": []
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32602,
+     "message": "too many arguments, want at most 0"
+    }
+   },
+   "method": "quai_gasPrice",
+   "params": [
+    1
+   ]
+  }
+ ]
+}

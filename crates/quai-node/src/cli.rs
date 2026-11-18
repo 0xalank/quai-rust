@@ -9,7 +9,7 @@ Usage: quai-node [GLOBAL OPTIONS] <COMMAND> [OPTIONS]
 
 Commands:
   replay    Check go-quai blocks exported in the QEX1 format with the Rust
-            consensus code (no execution state)
+            consensus code; with --state, also execute them
   run       Run a node (not available yet)
   help      Print this help
 

@@ -603,7 +603,14 @@ impl Checker {
     ) -> Result<(), Fail> {
         let z = Context::Zone;
         let confirmed = st
-            .confirm(&self.histories, &self.orders, records, order, accumulated)
+            .confirm(
+                &self.histories,
+                &self.orders,
+                records,
+                order,
+                accumulated,
+                self.spec.location,
+            )
             .map_err(|e| fail(z, "state: confirmation", "confirmed ETXs", describe(&e)))?;
         let inbound = st
             .confirmed_after(&zone.parent(2).unwrap_or([0; 32]))
@@ -1133,8 +1140,13 @@ pub fn run_with(
     };
     let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location.to_vec());
     let state = if opts.state {
-        let profile = state::profile_for(spec.environment, spec.chain_id, spec.genesis_hash())
-            .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
+        let profile = state::profile_for(
+            spec.environment,
+            spec.chain_id,
+            spec.location,
+            spec.genesis_hash(),
+        )
+        .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
         Some(StateReplay::new(profile, spec.genesis_hash()))
     } else {
         None

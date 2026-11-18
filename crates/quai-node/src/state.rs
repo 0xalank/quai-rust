@@ -154,7 +154,9 @@ impl StateReplay {
             cursor = parent;
         }
     }
-    /// The ETXs this block confirms for its zone children (prepare_scoped).
+    /// The ETXs this block confirms for its zone children (prepare_scoped,
+    /// which writes the zone location [0, 0] as a literal).
+    #[allow(clippy::too_many_arguments)]
     pub fn confirm(
         &self,
         histories: &[History; 3],
@@ -162,13 +164,14 @@ impl StateReplay {
         records: &[Option<Arc<Record>>; 3],
         order: u8,
         accumulated: &[Transaction],
+        location: [u8; 2],
     ) -> Result<Vec<Transaction>, Error> {
         Ok(if order == 0 {
             let prime = records[0].as_ref().unwrap();
             let sub = self.sub_rollup(histories, prime, 0)?;
             filter_to_sub(
                 &self.collect(histories, orders, prime, 0, order, &sub)?,
-                [0, 0],
+                location,
                 1,
                 0,
             )?
@@ -223,11 +226,16 @@ impl StateReplay {
         &self.profile
     }
 }
-pub fn profile_for(environment: &str, chain_id: u64, genesis: Hash) -> Result<Profile, Error> {
+pub fn profile_for(
+    environment: &str,
+    chain_id: u64,
+    location: [u8; 2],
+    genesis: Hash,
+) -> Result<Profile, Error> {
     match environment {
         "colosseum" => Profile::official(
             quai_consensus::rules::Uint::from_u64(chain_id),
-            [0, 0],
+            location,
             [genesis].into(),
         ),
         "local" => Profile::reviewed_hierarchy(),

@@ -1,6 +1,7 @@
 //! Native Quai node shell. Today it has one command, `replay`, which checks
 //! go-quai mainnet blocks exported in the QEX1 format with the Rust consensus
-//! code. It is not a validating or synchronizing node: it holds no state, has
+//! code and, with `--state`, executes them and compares the state roots. It is
+//! not a validating or synchronizing node: it keeps no state between runs, has
 //! no network and serves nothing.
 pub mod cli;
 pub mod log;

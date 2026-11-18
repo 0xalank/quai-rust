@@ -1,0 +1,23 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "driver_sha256": "2a60f68eb50cd0a7a1c7017e264de82a0e786a97303648058560148facf29db2",
+  "oracle_sources": {
+    "reference/chain-spec/main.go": "e3da9ee49d72836b574249ef3829f526de6dae089c58f854732a79a69c8f88be",
+    "reference/chain-spec/core-export.go": "0229850ae3ea3233eddc1bd8f1100075677e5e2c4e911e9343d62fa0f3e0bf38"
+  },
+  "sources": {
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "params/config.go": "0c22f50163c2db192f01296121c455e0de12b67d41079f33f2f970835bf084d4",
+    "core/genesis.go": "f738b821bb81a6623f9072338ebebfc2a230a4d2386811e702612c98fe94c8ba",
+    "core/types/utxo.go": "e6789ad476704e88cee846b12f27d00132175299d3119e0c5eefa9b8dfded498",
+    "core/headerchain_validation.go": "6f412c112f2a675a7811be9fca32d1827257ad962c092d79ab4c3d607df5fdf8",
+    "cmd/utils/flags.go": "889e7fde7bd67d7028b42aeeddd35e923693adbae3bcb2ccf0e5ff84982431e1",
+    "common/types.go": "7bc526e37b42e1a33adb096d652f0eed153eea4239e73f9cff3b7a207a854912",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "scope": "Pinned go-quai v0.57.0 chain parameters, fork heights and the colosseum genesis. Values only; no block acceptance, state or network authority.",
+  "runtime_go_dependency": false,
+  "go_version": "go version go1.24.5 darwin/arm64",
+  "vectors_sha256": "4ed555f0f2f5d9e992a07f2f04e7500d7ad042eacc2e21bcf147f20806418a26"
+}

@@ -1,0 +1,254 @@
+{
+  "colosseum": {
+    "allocation_hash": "0xa1f3f565b62c83fcc0e61dfd219409fb06526570934a5d94b5db5afdad13f1da",
+    "chain_id": "9",
+    "consensus_engine": "progpow",
+    "duration_limit": "5",
+    "gas_ceil": 50000000,
+    "genesis_difficulty": "1500000000000",
+    "genesis_extra": "0x81564673705261963422",
+    "genesis_gas_limit": 12000000,
+    "genesis_hash": "0xac81c28f1a72591b87b5f16c9793cdc0e87c45c6d426d1a364c3b8f6386b5b8b",
+    "genesis_nonce": "159351423047472226",
+    "genesis_nonce_flag": "23621466532946281564673705261963422",
+    "genesis_timestamp": 0,
+    "min_difficulty": "750000000000",
+    "name": "colosseum",
+    "rebuilt_genesis_hash": "0xac81c28f1a72591b87b5f16c9793cdc0e87c45c6d426d1a364c3b8f6386b5b8b",
+    "workshare_p2p_threshold": 7
+  },
+  "core": {
+    "allowed_future_block_time_seconds": 15
+  },
+  "forks": {
+    "coinbase_lockup_precompile": 604800,
+    "controller_kick_in": 262000,
+    "conversion_lock_change": 2237000,
+    "conversion_slip_change": 285000,
+    "conversion_stability": 1872600,
+    "exchange_rate_hold_after_kawpow": 648000,
+    "exchange_rate_hold_after_sha_equivalent": 518400,
+    "inclusion_depth_change": 1330000,
+    "inclusion_depth_update_period": 10000,
+    "k_quai_change": 752000,
+    "k_quai_change_hold": 20000,
+    "k_quai_change_table": [
+      [
+        752000,
+        50
+      ],
+      [
+        1011200,
+        75
+      ],
+      [
+        1270400,
+        75
+      ],
+      [
+        1529600,
+        75
+      ]
+    ],
+    "k_quai_freeze": 2237000,
+    "k_quai_reset_after_kawpow": 1171500,
+    "kawpow": 1171500,
+    "kawpow_transition": 129600,
+    "max_code_size": 3490000,
+    "max_code_size_at": 32768,
+    "max_code_size_before": 24576,
+    "max_grind_increase": "1865000",
+    "polaris": 2444574,
+    "qi_activation": 1220000,
+    "qi_wrapping_change": 1570000,
+    "security_hardening": 2317000,
+    "self_destruct_refund": 1919500,
+    "sha_equivalent_difficulty": 1755000,
+    "singularity": 1530500,
+    "start_tx": 259200,
+    "unwrap_qi_lock_period_at": 10,
+    "unwrap_qi_lock_period_before": 241920
+  },
+  "params": {
+    "blocks_per_day": 17280,
+    "blocks_per_month": 518400,
+    "blocks_per_week": 120960,
+    "blocks_per_year": 6307200,
+    "conversion_lock_period": 241920,
+    "difficulty_adjustment_factor": 40,
+    "difficulty_adjustment_period": "720",
+    "exchange_rate": "221077819000000000",
+    "expected_workshares_per_block": 8,
+    "genesis_gas_limit": 12000000,
+    "hierarchy_size_by_expansion": [
+      [
+        1,
+        1
+      ],
+      [
+        1,
+        2
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        2,
+        3
+      ],
+      [
+        3,
+        3
+      ],
+      [
+        3,
+        4
+      ],
+      [
+        4,
+        4
+      ],
+      [
+        4,
+        5
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        5,
+        6
+      ],
+      [
+        6,
+        6
+      ],
+      [
+        6,
+        7
+      ],
+      [
+        7,
+        7
+      ],
+      [
+        7,
+        8
+      ],
+      [
+        8,
+        8
+      ],
+      [
+        8,
+        9
+      ],
+      [
+        9,
+        9
+      ],
+      [
+        9,
+        10
+      ],
+      [
+        10,
+        10
+      ],
+      [
+        10,
+        11
+      ],
+      [
+        11,
+        11
+      ],
+      [
+        11,
+        12
+      ],
+      [
+        12,
+        12
+      ],
+      [
+        12,
+        13
+      ],
+      [
+        13,
+        13
+      ],
+      [
+        13,
+        14
+      ],
+      [
+        14,
+        14
+      ],
+      [
+        14,
+        15
+      ],
+      [
+        15,
+        15
+      ],
+      [
+        15,
+        16
+      ],
+      [
+        16,
+        16
+      ]
+    ],
+    "initial_base_fee": 1,
+    "initial_state_limit": 5000000,
+    "lockup_byte_to_block_depth": [
+      241920,
+      1555200,
+      3110400,
+      6307200
+    ],
+    "max_gossipsub_packet_size": 3145728,
+    "max_lockup_byte": 3,
+    "max_scrypt_shares_count": 8,
+    "max_sha_shares_count": 8,
+    "max_time_diff_between_blocks": 100,
+    "max_workshare_count": 16,
+    "max_workshare_p2p_threshold_diff": 16,
+    "maximum_extra_data_size": 32,
+    "min_gas_limit": 12000000,
+    "musig2_public_keys": [
+      "02cae78e4905da54dc93d6009119d56a2ef91b11e129c8fa41342310ec3a9b499c",
+      "03374cbfcea6cb8172b2fdc09e9f7ec0cc2ff10aaa2192fb19fa04d9391b0a75c2",
+      "03abfe95f7d487a44cac59c9d62fe63e9e01dc3e06dc9fe96b7038d73d99a62fa6"
+    ],
+    "new_max_scrypt_shares_count": 16,
+    "new_max_sha_shares_count": 16,
+    "new_max_workshare_count": 32,
+    "new_workshares_inclusion_depth": 4,
+    "prime_blocks_per_month": 129600,
+    "starting_conversion_flow_amount": "10000000000000000000000",
+    "starting_k_quai_discount": "100",
+    "state_ceil": 50000000,
+    "trim_depths": {
+      "0": 241920,
+      "1": 483840,
+      "2": 725760,
+      "3": 967680,
+      "4": 1209600,
+      "5": 1451520
+    },
+    "unwrap_qi_lock_period": 10,
+    "workshare_p2p_threshold_diff": 7,
+    "workshares_inclusion_depth": 3,
+    "workshares_threshold_diff": 3
+  },
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "scope": "Pinned go-quai v0.57.0 chain parameters, fork heights and the colosseum genesis. Values only; no block acceptance, state or network authority."
+}

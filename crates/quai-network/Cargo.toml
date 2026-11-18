@@ -6,17 +6,18 @@ publish = false
 license = "GPL-3.0-only"
 
 [features]
-native-transport = ["dep:quai-consensus","dep:libp2p", "dep:tokio", "dep:futures", "dep:async-trait", "dep:libp2p-stream"]
+native-transport = ["dep:quai-consensus","dep:libp2p", "dep:tokio", "dep:futures", "dep:async-trait", "dep:libp2p-stream", "dep:crypto-bigint"]
 
 [dependencies]
 quai-consensus = { path = "../quai-consensus", optional = true }
 quai-primitives = { path = "../quai-primitives" }
 prost = "=0.14.4"
-libp2p = { version = "=0.56.0", optional = true, default-features = false, features = ["tokio", "tcp", "dns", "noise", "yamux", "request-response", "gossipsub", "identify", "kad", "macros", "ed25519"] }
+libp2p = { version = "=0.56.0", optional = true, default-features = false, features = ["tokio", "tcp", "dns", "noise", "yamux", "request-response", "gossipsub", "identify", "kad", "macros", "ed25519", "relay", "dcutr", "autonat"] }
 tokio = { version = "=1.54.1", optional = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-std", "io-util"] }
 futures = { version = "=0.3.31", optional = true }
 async-trait = { version = "=0.1.89", optional = true }
 libp2p-stream = { version = "=0.4.0-alpha", optional = true }
+crypto-bigint = { version = "=0.5.5", optional = true, default-features = false }
 
 [dev-dependencies]
 quai-execution = { path = "../quai-execution" }
@@ -49,3 +50,7 @@ required-features = ["native-transport"]
 name = "peer-export"
 required-features = ["native-transport"]
 test = true
+
+[[example]]
+name = "public-node"
+required-features = ["native-transport"]

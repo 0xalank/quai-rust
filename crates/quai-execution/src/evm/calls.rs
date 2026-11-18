@@ -372,7 +372,7 @@ pub(crate) fn create(
     if !local(&address, parent.location) {
         return Ok((result(s, 0, Some(Fault::ExternalAddress)), None));
     }
-    if !s.addresses.contains(&address) {
+    if !s.address_listed(&address) {
         return Ok((result(s, 0, Some(Fault::InvalidAccessList)), None));
     }
     if s.world()
@@ -391,6 +391,10 @@ pub(crate) fn create(
     context.address = address;
     context.caller = parent.address;
     context.value = value;
+    // go-quai `EVM.create` adds every new contract to the access-list tracer.
+    if let Some(tracer) = s.debug.as_mut().and_then(|d| d.tracer.as_mut()) {
+        tracer.add_address(address);
+    }
     let mut out = run_code(s, &context, &[], gas, code.to_vec(), depth)?;
     if out.error.is_none() && !out.reverted {
         let max = if parent.block_number < Word::from_u64(FORKS.max_code_size) {

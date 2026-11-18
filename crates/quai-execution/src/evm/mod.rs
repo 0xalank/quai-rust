@@ -30,10 +30,13 @@
 //! `MAX_TRACE_BYTES` applies only when `Context::trace` is set. Consensus
 //! callers always clear it, so it cannot change a block result.
 use quai_primitives::spec::FORKS;
+pub mod access_list;
 pub mod calls;
 pub mod etx;
 pub mod journal;
 pub mod lockup;
+pub mod message;
+pub mod opcodes;
 pub mod precompile;
 pub mod state;
 pub mod state_gas;
@@ -408,7 +411,7 @@ impl Machine<'_> {
     }
     fn storage_cost(&mut self, op: u8) -> Result<(u64, u64), Stop> {
         let slot = bytes(self.back(0)?);
-        let cold = if self.state.slots.contains(&(self.ctx.address, slot)) {
+        let cold = if self.state.slot_listed(self.ctx.address, slot) {
             0
         } else {
             self.cost(2100)
@@ -416,7 +419,7 @@ impl Machine<'_> {
         let warm = self.cost(100);
         if op == 0x54 {
             return Ok((
-                if self.state.slots.contains(&(self.ctx.address, slot)) {
+                if self.state.slot_listed(self.ctx.address, slot) {
                     warm
                 } else {
                     cold
@@ -517,8 +520,21 @@ impl Machine<'_> {
             len as usize,
         ))
     }
+    /// The RPC call mode only: the Go error detail of a fault in the top frame.
+    fn note(&mut self, detail: message::FaultDetail) {
+        if self.depth == 0 {
+            if let Some(debug) = self.state.debug.as_mut() {
+                debug.top_fault = Some(detail);
+            }
+        }
+    }
     fn step(&mut self) -> Result<(), Stop> {
         let op = self.code.get(self.pc).copied().unwrap_or(0);
+        // go-quai calls `CaptureState` once for every fetched operation, with
+        // the stack before it runs, also when its checks fail.
+        if let Some(tracer) = self.state.debug.as_mut().and_then(|d| d.tracer.as_mut()) {
+            tracer.capture(op, &self.stack, self.ctx.address);
+        }
         let gas_before = self.gas;
         if matches!(
             op,
@@ -543,16 +559,26 @@ impl Machine<'_> {
             if unsupported(op) {
                 return Err(CapabilityError::Opcode(op).into());
             }
+            self.note(message::FaultDetail::InvalidOpcode(op));
             return Err(Fault::InvalidOpcode.into());
         };
         if matches!(op, 0x5c..=0x5f) && self.ctx.block_number < Word::from_u64(FORKS.max_code_size)
         {
+            self.note(message::FaultDetail::InvalidOpcode(op));
             return Err(Fault::InvalidOpcode.into());
         }
         if self.stack.len() < instruction.required {
+            self.note(message::FaultDetail::StackUnderflow {
+                len: self.stack.len(),
+                required: instruction.required,
+            });
             return Err(Fault::StackUnderflow.into());
         }
         if self.stack.len() - instruction.pop + instruction.push > 1024 {
+            self.note(message::FaultDetail::StackOverflow {
+                len: self.stack.len(),
+                limit: 1024 + instruction.pop - instruction.push,
+            });
             return Err(Fault::StackOverflow.into());
         }
         if self.ctx.read_only && (instruction.writes || (op == 0xf1 && self.back(2)? != Word::ZERO))
@@ -582,7 +608,7 @@ impl Machine<'_> {
         match op {
             0x31 | 0x3b | 0x3c | 0x3f => {
                 let a = address(self.back(0)?);
-                let cold = if self.state.addresses.contains(&a) {
+                let cold = if self.state.address_listed(&a) {
                     0
                 } else {
                     self.cost(2600) - self.cost(100)
@@ -607,9 +633,11 @@ impl Machine<'_> {
             0xff => {
                 let a = address(self.back(0)?);
                 if !calls::local(&a, self.ctx.location) {
+                    // Go's dynamic gas function fails here: "out of gas".
+                    self.note(message::FaultDetail::OutOfGas);
                     return Err(Fault::ExternalAddress.into());
                 }
-                if !self.state.addresses.contains(&a) {
+                if !self.state.address_listed(&a) {
                     dynamic = self.cost(2600);
                 }
                 if calls::empty(self.state, &a)?
@@ -647,7 +675,7 @@ impl Machine<'_> {
                 if op == 0xf1 && !calls::local(&address, self.ctx.location) {
                     return Err(Fault::OutOfGas.into());
                 }
-                let cold = if self.state.addresses.contains(&address) {
+                let cold = if self.state.address_listed(&address) {
                     0
                 } else {
                     self.cost(2600) - self.cost(100)
@@ -764,9 +792,10 @@ impl Machine<'_> {
             0x31 | 0x3b | 0x3c | 0x3f => {
                 let a = address(self.pop()?);
                 if op != 0x3b && !calls::local(&a, self.ctx.location) {
+                    self.note(message::FaultDetail::Scope(a));
                     return Err(Fault::ExternalAddress.into());
                 }
-                if !self.state.addresses.contains(&a) {
+                if !self.state.address_listed(&a) {
                     return Err(Fault::InvalidAccessList.into());
                 }
                 let account = if calls::local(&a, self.ctx.location) {
@@ -883,7 +912,7 @@ impl Machine<'_> {
                 span_mut(&mut self.memory, o, n)?.fill(low);
             }
             0x54 | 0x55 => {
-                if !self.state.addresses.contains(&self.ctx.address) {
+                if !self.state.address_listed(&self.ctx.address) {
                     return Err(Fault::InvalidAccessList.into());
                 }
                 let key = bytes(self.pop()?);
@@ -972,9 +1001,7 @@ impl Machine<'_> {
             }
             0xff => {
                 let a = address(self.pop()?);
-                if !self.state.addresses.contains(&a)
-                    || !self.state.addresses.contains(&self.ctx.address)
-                {
+                if !self.state.address_listed(&a) || !self.state.address_listed(&self.ctx.address) {
                     return Err(Fault::InvalidAccessList.into());
                 }
                 let balance = self.state.balance(&self.ctx.address)?;
@@ -1053,7 +1080,7 @@ impl Machine<'_> {
                 let len = self.pop()?;
                 let ret_off = self.pop()?;
                 let ret_len = self.pop()?;
-                if !self.state.addresses.contains(&target) {
+                if !self.state.address_listed(&target) {
                     return Err(Fault::InvalidAccessList.into());
                 }
                 let (o, n) = Self::range(off, len)?;

@@ -7,12 +7,14 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 11,682** (2026-11-17, `0e13a64`). `quai-node replay
---state` executes mainnet zone blocks 0–11,682 from the colosseum genesis, and
-every root equals go-quai: EVM state, ETX set, UTXO, receipts, outbound ETXs,
-gas and state counters, account count. 11,682 is the end of the current export,
-not a mismatch. User transactions start at zone 259,200, so execution of user
-transactions is not tested on mainnet yet.
+Current value: **zone 27,406** (2026-11-18, `f841a74`, rerun from genesis in a
+fresh data directory). `quai-node replay --state` executes mainnet zone blocks
+0–27,406 from the colosseum genesis, and every root equals go-quai: EVM state,
+ETX set, UTXO, receipts, outbound ETXs, gas and state counters, account count;
+209,841 workshares pass. 27,406 is the end of the Go export, not a mismatch.
+User transactions start at zone 259,200, so execution of user transactions is
+not tested on mainnet yet; a long replay on the peer export to zone 686,009 is
+running to reach them.
 
 ## Status on 2026-11-17
 

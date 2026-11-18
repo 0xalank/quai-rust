@@ -1,16 +1,16 @@
 {
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "vectors_sha256": "eb384dafa8b6817042a0b34d1ad01faf3a0856b210f80b867bc8f3e15fd06887",
+  "vectors_sha256": "295ebe9b470dbe75eb42672e1f7d7ff749a55be60b67bfb8ed5cc117c9933f33",
   "oracle_source_sha256": "7cb57ee647a59347f5dc4e720b578d371809127c2e87b30f4b48d4041e5d1f96",
-  "template_sha256": "fb8dee75f628d90539926838b5d3a98c4a284c0053766a96ccb10708887be7a0",
+  "template_sha256": "8fb03b64d51d30e54a673c401ddf91904516988a353403b4021302e94410467f",
   "dispatch_sha256": "c65b6fbc11777e9db0097d23315cb4f742c667b48b2646dacb1148dad439b96b",
   "harness_sha256": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928",
   "oracle_sources": {
     "reference/incoming/main.go": "7cb57ee647a59347f5dc4e720b578d371809127c2e87b30f4b48d4041e5d1f96",
-    "reference/incoming/core-template.go": "fb8dee75f628d90539926838b5d3a98c4a284c0053766a96ccb10708887be7a0",
+    "reference/incoming/core-template.go": "8fb03b64d51d30e54a673c401ddf91904516988a353403b4021302e94410467f",
     "reference/early-blocks/harness.go": "50458ec9ac99e54611870e1d39f0f2abe6870f62da4b75844a678d70833d0928"
   },
-  "driver_sha256": "a419b09087799c455271c484d37a310fcb1f2ea08f3a21cf6338765b5b27aa6d",
+  "driver_sha256": "601af059455cdd4d580e4f10c2ea2e75f0d55130b364736b4913720a58d33908",
   "go_sources": {
     "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
     "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",

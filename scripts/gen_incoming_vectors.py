@@ -8,7 +8,7 @@ source=(go/'core/state_processor.go').read_text();start=source.index('\t\tif tx.
 template=ROOT/'reference/incoming/core-template.go';main=ROOT/'reference/incoming/main.go';env={**os.environ,'GOPROXY':'off','GOTOOLCHAIN':'local'}
 with tempfile.TemporaryDirectory(prefix='quai-incoming-')as directory:
  d=Path(directory);adapter=d/'core-export.go';adapter.write_text(template.read_text().replace('/* OFFICIAL_INCOMING_DISPATCH */',branch));overlay=d/'overlay.json';binary=d/'oracle';overlay.write_text(json.dumps({'Replace':{str(go/'cmd/quai-incoming-vectors/main.go'):str(main),str(go/'core/native_incoming.go'):str(adapter),str(go/'core/native_incoming_harness.go'):str(ROOT/'reference/early-blocks/harness.go')}}));subprocess.run(['go','build','-overlay',str(overlay),'-ldflags','-X main.referenceRevision='+PIN,'-o',str(binary),'./cmd/quai-incoming-vectors'],cwd=go,env=env,check=True);output=subprocess.check_output([str(binary)],cwd=d,env=env);(ROOT/'results/incoming-oracle-raw.log').write_bytes(output);v=json.loads(output.splitlines()[-1])
-assert v['reference_revision']==PIN and len(v['vectors'])==423
+assert v['reference_revision']==PIN and len(v['vectors'])==429
 # Location bytes are encoded as base64 by Go; expose the coordinate pair.
 import base64
 for row in v['vectors']:row['location']=list(base64.b64decode(row['location']))

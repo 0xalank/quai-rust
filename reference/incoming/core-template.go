@@ -291,6 +291,17 @@ func NativeIncomingVectors() []interface{} {
 			}
 			rows = append(rows, niOne(c))
 		}
+		// The same ETXs before SecurityHardeningForkBlock: an ETX gas limit above
+		// GasLimit / MinimumEtxGasDivisor and an ETX below its intrinsic gas make
+		// TransitionDb return an error, so the block is invalid
+		// (core/state_transition.go:240, 329, 360).
+		for _, variant := range []string{"oversize", "intrinsic-short"} {
+			c := nativeIncomingCase{ID: fmt.Sprintf("incoming-%x-%s-prime-2316999", []byte(loc), variant), Location: loc, Number: 4000000, Parent: 3999999, Prime: 2316999, Gas: 6000001, Pool: 30000000, Value: 100006, Type: 0, Qi: false, Queued: true, Listed: true}
+			if variant == "intrinsic-short" {
+				c.Gas = 20999
+			}
+			rows = append(rows, niOne(c))
+		}
 	}
 	return rows
 }

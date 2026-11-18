@@ -177,9 +177,10 @@ pub fn apply_qi(
         // 20 bytes of Qi data name the wrapping contract.
         let wrapper = <[u8; 20]>::try_from(qi.data.as_slice()).ok();
         let converts = local_quai && qi.data.len() == 22;
+        let aggregated = converts || local_quai && wrapper.is_some();
         // Go counts every output and then uncounts the ones that conversion or
         // wrapping aggregates (core/state_processor.go ProcessQiTx).
-        if !converts && !(local_quai && wrapper.is_some()) {
+        if !aggregated {
             *output_counts.entry(output.denomination).or_insert(0) += 1;
         }
         if converts {

@@ -153,7 +153,8 @@ impl<'a> Cursor<'a> {
     }
     fn transactions(&mut self) -> Result<Arc<Vec<Transaction>>, Error> {
         let n = self.count(MAX_ETXS)?;
-        let mut out = Vec::with_capacity(n);
+        // Each entry carries at least a 4-byte length, so the input bounds the reservation.
+        let mut out = Vec::with_capacity(n.min((self.raw.len() - self.offset) / 4));
         for _ in 0..n {
             let tx = Transaction::decode(self.blob()?).map_err(|_| invalid())?;
             external(&tx)?;

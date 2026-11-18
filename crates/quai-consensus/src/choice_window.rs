@@ -108,14 +108,14 @@ pub fn derive(
     Ok(choice)
 }
 impl Choice {
-    fn encode(self) -> [u8; 48] {
+    pub(crate) fn encode(self) -> [u8; 48] {
         let mut out = [0; 48];
         out[..8].copy_from_slice(&self.quai.to_be_bytes());
         out[8..16].copy_from_slice(&self.qi.to_be_bytes());
         out[16..].copy_from_slice(&self.difficulty.to_be_bytes());
         out
     }
-    fn decode(raw: &[u8]) -> io::Result<Self> {
+    pub(crate) fn decode(raw: &[u8]) -> io::Result<Self> {
         need(raw.len() == 48, "choice row bytes")?;
         Ok(Self {
             quai: u64::from_be_bytes(raw[..8].try_into().unwrap()),

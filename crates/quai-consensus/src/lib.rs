@@ -101,3 +101,5 @@ extern crate self as quai_consensus;
 mod runtime_fixture;
 #[cfg(test)]
 mod runtime_profile_tests;
+#[cfg(test)]
+mod fuzz_tests;

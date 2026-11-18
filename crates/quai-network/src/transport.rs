@@ -214,8 +214,12 @@ impl WireStream {
                     "Quai frame exceeds 3 MiB",
                 ));
             }
-            let mut b = vec![0; n];
-            self.inner.read_exact(&mut b).await?;
+            // Grow with the bytes that arrive instead of reserving the declared size.
+            let mut b = Vec::with_capacity(n.min(64 * 1024));
+            (&mut self.inner).take(n as u64).read_to_end(&mut b).await?;
+            if b.len() != n {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
             decode_envelope(&b).map_err(err)?;
             Ok(b)
         })

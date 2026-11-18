@@ -8,7 +8,7 @@ sources=['reference/stateful/main.go','reference/stateful/trace.go'];env={**os.e
 with tempfile.TemporaryDirectory(prefix='quai-stateful-oracle-')as directory:
  d=Path(directory);overlay=d/'overlay.json';binary=d/'oracle';overlay.write_text(json.dumps({'Replace':{str(go/'cmd/quai-stateful-vectors'/Path(n).name):str(ROOT/n)for n in sources}}))
  subprocess.run(['go','build','-overlay',str(overlay),'-ldflags','-X main.referenceRevision='+PIN,'-o',str(binary),'./cmd/quai-stateful-vectors'],cwd=go,env=env,check=True);raw=subprocess.check_output([str(binary)],cwd=d,env=env);(ROOT/'results/stateful-oracle-raw.log').write_bytes(raw);v=json.loads(raw.splitlines()[-1])
-assert v['reference_revision']==PIN and len(v['vectors'])==1571
+assert v['reference_revision']==PIN and len(v['vectors'])==1578
 path=ROOT/'fixtures/protocol/stateful.json';encoded=(json.dumps(v,indent=2,sort_keys=True)+'\n').encode()
 if a.write:path.write_bytes(encoded)
 elif path.read_bytes()!=encoded:raise SystemExit('Stateful corpus differs')

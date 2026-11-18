@@ -7,13 +7,14 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 310,000** (checkpoint, 2026-11-18), and the run goes on.
-The long replay on the peer export executes mainnet zone blocks from the
-colosseum genesis, and every root equals go-quai: EVM state, ETX set, UTXO,
-receipts, outbound ETXs, gas and state counters, account count. It passed zone
-259,200, where user transactions start, so Rust executes real mainnet user
-transactions with equal roots. Binaries: `f841a74` for 0–180,000, `e1f4cfb`
-from checkpoint 180,000. A single-binary run from genesis is still to do.
+Current value: **zone 686,009** (2026-11-18), the end of the public peer
+export. The run goes on toward zone 1,250,000 on a longer export. The long
+replay executes mainnet zone blocks from the colosseum genesis, and every root
+equals go-quai: EVM state, ETX set, UTXO, receipts, outbound ETXs, gas and
+state counters, account count. It passed zone 259,200, where user
+transactions start, so Rust executes real mainnet user transactions with equal
+roots. Binaries: `f841a74` for 0–180,000, `e1f4cfb` from checkpoint 180,000.
+A single-binary run from genesis is still to do.
 Earlier value: zone 27,406, rerun from genesis on the Go export (with receipts)
 by the coordinator.
 
@@ -182,16 +183,23 @@ divergence from Go.
        `replay` command from Phase 1. Started: the crate, `--datadir`,
        `--log-level` and `replay` exist (`0e13a64`); config file, metrics and
        `run` do not.
-2. [ ] Public P2P: bootnodes, Kademlia discovery, GossipSub topics, peer scoring.
+2. [x] Public P2P: bootnodes, Kademlia discovery, GossipSub topics, peer scoring.
        Groundwork (`9a25090`): read-only `quai_network::public` and the
        `mainnet-probe` example work with go-quai v0.57.0 (local) and the v0.57.1
-       boot peers: Noise/Yamux, identify, `/quai/kad/1.0.0`, all `/quai/1.0.0`
-       request types, zone block and workshare gossip. Still needed: a relay
-       client, DCUtR and AutoNAT (many peers have only `/p2p-circuit`
-       addresses); the private profile's Kademlia ID is `/quai`, Go uses
-       `/quai/kad/1.0.0`; Go's GossipSub message-ID function; GossipSub
-       validation equal to Go before relay; request scoring and bans; per-IP
-       limits; answers only from validated state.
+       boot peers. Done (`ab2a7ab`): `public::PublicNode` with
+       `Config::read_only` (the probe and `peer-export`) and `Config::public`:
+       relay client, DCUtR and AutoNAT; `/quai/kad/1.0.0` in both profiles;
+       Go's GossipSub parameters and message ID; go-quai's validators before a
+       message is accepted or relayed; a genesis check before a peer takes a
+       slot; Go's scores and bans; a request rate limit that works; per-IP
+       limits; `publish` off by default. Live on mainnet for 5 minutes: 44
+       peers, 2 relay reservations, reached through a relay circuit, 859/859
+       gossip messages accepted, 0 rejected. Chosen differences from Go (listed
+       in `public/mod.rs`): no relay service, the DHT stays a client until the
+       node is public, scores per peer and not per topic. Open: the node
+       answers inbound requests with "not found" until it has validated state
+       (step 3, Phase 3.1), so two Rust public nodes fail each other's genesis
+       check; Kademlia contacts with only circuit addresses are not dialed.
 3. [ ] Follow the live head. Send gossiped blocks and workshares through the
        same validation path.
 4. [ ] Run next to a Go node and compare heads and roots.
@@ -270,3 +278,6 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1.6 | One ChainSpec/ForkSchedule checked against Go; shared confirmation; `validate_block` validates real blocks and the replay calls it (`e1f4cfb`); agent's run: 343/343 workspace + 21/21, replay 0–27,406 PASS from genesis |
 | 2026-11-18 | Phase 1 | Long replay: the `f841a74` binary passed every check to checkpoint 180,000 with no failure; resumed there with `e1f4cfb` (log: `replay-public-e1f4cfb.err`) |
 | 2026-11-18 | Phase 1 | Long replay passed zone 259,200 (first user transactions); checkpoint 310,000, every root equal. Peer export extended to zone 1,250,000 (`peer-export-1250k`, 7.6 GB, 6 public peers, 0 faults) |
+| 2026-11-18 | Phase 1 | Long replay PASS to zone 686,009, the end of `peer-export-public`, every root equal: 506,009 heights from checkpoint 180,000 in 10,347 s (48.9 blocks/s; 67% of the time waits for proof-of-work), 5,193,990 workshares. Continued on `peer-export-1250k` from checkpoint 700,000 (log: `replay-public-1250k.err`) |
+| 2026-11-18 | Phase 3.3 | `Lockup::decode` matches Go; test `record_layout_matches_go` (`7206f8c`). Clippy `approx_constant`: Go's `ln2 = 0.6931` kept on purpose (`e3747da`) |
+| 2026-11-18 | Phase 2.2 | Public P2P mode (`ab2a7ab`, merge `24b994a`): relay client, DCUtR, AutoNAT; `/quai/kad/1.0.0` in both profiles; Go GossipSub parameters and message ID; go-quai validators before accept or relay; genesis check per slot, Go scores and bans, a working rate limit, per-IP limit; publish off by default. Live 5 min: 44 peers, 2 relay reservations, reached through a relay circuit, 859/859 gossip accepted, 0 rejected. Coordinator rerun on merged main: 344/344 workspace in 65 suites, 43/43 `quai-network --features native-transport`, fmt clean |

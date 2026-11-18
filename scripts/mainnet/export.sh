@@ -93,7 +93,8 @@ mkdir -p "$OUT" "$DATA/logs" "$DATA/clones"
 OUT=$(CDPATH= cd -- "$OUT" && pwd)
 
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/quai-mainnet-export.XXXXXX")
+TMP_ROOT=${TMPDIR:-/tmp}
+WORK=$(mktemp -d "${TMP_ROOT%/}/quai-mainnet-export.XXXXXX")
 CLONE="$DATA/clones/export-$STAMP-$$"
 LOG="$DATA/logs/export-$STAMP.log"
 NODE_DOWN=0

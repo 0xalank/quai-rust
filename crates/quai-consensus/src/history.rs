@@ -29,15 +29,14 @@ impl Record {
             share_rules::number(h.number.as_deref().unwrap_or_default())?,
         ];
         let parents = [
-            b.parent_hash[0].value.as_slice().try_into().unwrap(),
-            b.parent_hash[1].value.as_slice().try_into().unwrap(),
-            h.parent_hash
-                .as_ref()
-                .unwrap()
-                .value
-                .as_slice()
-                .try_into()
-                .unwrap(),
+            crate::slice::array(&b.parent_hash[0].value)?,
+            crate::slice::array(&b.parent_hash[1].value)?,
+            crate::slice::array(
+                &h.parent_hash
+                    .as_ref()
+                    .ok_or(Error::Invalid("ancestry parent hash"))?
+                    .value,
+            )?,
         ];
         let prime = share_rules::number(h.prime_terminus_number.as_deref().unwrap_or_default())?;
         let id = header
@@ -56,7 +55,15 @@ impl Record {
     }
     /// The all-height binding required before order lookup or calculation.
     pub fn verify_binding(&self) -> Result<(), Error> {
-        if self.header.wire().header_hash.as_ref().unwrap().value != self.object.header().hash() {
+        if self
+            .header
+            .wire()
+            .header_hash
+            .as_ref()
+            .ok_or(Error::Invalid("ancestry header hash"))?
+            .value
+            != self.object.header().hash()
+        {
             return Err(Error::Invalid("body-header commitment"));
         }
         let aux = self
@@ -305,15 +312,14 @@ impl History {
             ancestors.insert(parent.id, parent.numbers[2]);
             current = parent.into();
         }
-        let mut parent: Hash = share
-            .wire()
-            .parent_hash
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let mut parent: Hash = crate::slice::array(
+            &share
+                .wire()
+                .parent_hash
+                .as_ref()
+                .ok_or(Error::Invalid("workshare parent hash"))?
+                .value,
+        )?;
         let mut distance = 0u64;
         loop {
             let record = self.get(&parent)?;

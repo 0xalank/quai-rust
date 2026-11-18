@@ -64,12 +64,12 @@ impl Checkpoint {
         if b.len() < n + 81 || !b.starts_with(MAGIC) || b[n + 32] > 1 {
             return Err(error("checkpoint format"));
         }
-        let height = u64::from_be_bytes(b[n + 65..n + 73].try_into().unwrap());
-        let len = u64::from_be_bytes(b[n + 73..n + 81].try_into().unwrap());
+        let height = u64::from_be_bytes(crate::slice::array(&b[n + 65..n + 73])?);
+        let len = u64::from_be_bytes(crate::slice::array(&b[n + 73..n + 81])?);
         if len as u128 != (b.len() - n - 81) as u128 {
             return Err(error("checkpoint payload length"));
         }
-        let raw: Id = b[n + 33..n + 65].try_into().unwrap();
+        let raw: Id = crate::slice::array(&b[n + 33..n + 65])?;
         if b[n + 32] == 0 && raw != [0; 32] {
             return Err(error("noncanonical checkpoint parent"));
         }
@@ -84,7 +84,7 @@ impl Checkpoint {
     fn decode(b: &[u8]) -> std::io::Result<Self> {
         let (m, payload) = Self::parts(b)?;
         Ok(Self {
-            block: b[MAGIC.len()..MAGIC.len() + 32].try_into().unwrap(),
+            block: crate::slice::array(&b[MAGIC.len()..MAGIC.len() + 32])?,
             parent: m.parent,
             height: m.height,
             payload: payload.to_vec(),
@@ -164,7 +164,7 @@ impl ScratchJournal {
         if b.len() != 64 || b[32..] != hash(&b[..32]) {
             return Err(error("head checksum"));
         }
-        Ok(Some(b[..32].try_into().unwrap()))
+        Ok(Some(crate::slice::array(&b[..32])?))
     }
     pub fn load(&self, id: Id) -> std::io::Result<Checkpoint> {
         let b = read_bounded(&self.directory.join("objects").join(hex(&id)), MAX_BYTES)?;

@@ -2,6 +2,7 @@
 //! Bounded proof, auxiliary and ancestry components do not establish canonical
 //! history, economic state validity or full block consensus.
 pub mod donor;
+pub(crate) mod slice;
 pub mod pow;
 pub mod rules;
 pub mod verifier;
@@ -101,3 +102,5 @@ extern crate self as quai_consensus;
 mod runtime_fixture;
 #[cfg(test)]
 mod runtime_profile_tests;
+#[cfg(test)]
+mod fuzz_tests;

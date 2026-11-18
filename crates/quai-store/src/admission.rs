@@ -93,10 +93,10 @@ impl<'a> Cursor<'a> {
         Ok(v)
     }
     fn hash(&mut self) -> io::Result<Hash> {
-        Ok(self.take(32)?.try_into().unwrap())
+        Ok(crate::slice::array(&self.take(32)?)?)
     }
     fn number(&mut self) -> io::Result<u64> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
+        Ok(u64::from_be_bytes(crate::slice::array(&self.take(8)?)?))
     }
 }
 fn decode(profile: Hash, id: Hash, bytes: &[u8]) -> io::Result<Header> {
@@ -167,12 +167,12 @@ fn head(read: &ReadTransaction) -> io::Result<Option<Head>> {
         b.len() == 104 && digest(&b[..72]) == b[72..],
         "admission head checksum/width",
     )?;
-    let count = u64::from_be_bytes(b[..8].try_into().unwrap());
+    let count = u64::from_be_bytes(crate::slice::array(&b[..8])?);
     need(count > 0, "admission head count")?;
     Ok(Some(Head {
         count,
-        last: b[8..40].try_into().unwrap(),
-        selected: b[40..72].try_into().unwrap(),
+        last: crate::slice::array(&b[8..40])?,
+        selected: crate::slice::array(&b[40..72])?,
     }))
 }
 fn encode_head(h: Head) -> Vec<u8> {

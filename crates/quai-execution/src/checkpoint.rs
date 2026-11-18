@@ -25,10 +25,10 @@ impl<'a> Reader<'a> {
         Ok(b)
     }
     fn n(&mut self) -> Result<usize, String> {
-        Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()) as usize)
+        Ok(u32::from_be_bytes(crate::slice::array(&self.take(4)?)?) as usize)
     }
     fn u(&mut self) -> Result<u64, String> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
+        Ok(u64::from_be_bytes(crate::slice::array(&self.take(8)?)?))
     }
 }
 pub fn encode(state: &EarlyReplay) -> Result<Vec<u8>, String> {
@@ -67,14 +67,14 @@ pub fn decode(input: &[u8], expected_genesis: Hash) -> Result<EarlyReplay, Strin
     if r.take(MAGIC.len())? != MAGIC {
         return Err("checkpoint format".into());
     }
-    let genesis: Hash = r.take(32)?.try_into().unwrap();
+    let genesis: Hash = crate::slice::array(&r.take(32)?)?;
     if genesis != expected_genesis {
         return Err("checkpoint genesis".into());
     }
-    let head = r.take(32)?.try_into().unwrap();
+    let head = crate::slice::array(&r.take(32)?)?;
     let height = r.u()?;
     let time = r.u()?;
-    let root: Hash = r.take(32)?.try_into().unwrap();
+    let root: Hash = crate::slice::array(&r.take(32)?)?;
     let count = r.n()?;
     if count > MAX_ACCOUNTS {
         return Err("checkpoint account limit".into());
@@ -82,7 +82,7 @@ pub fn decode(input: &[u8], expected_genesis: Hash) -> Result<EarlyReplay, Strin
     let mut world = World::default();
     let mut last = None;
     for _ in 0..count {
-        let a: [u8; 20] = r.take(20)?.try_into().unwrap();
+        let a: [u8; 20] = crate::slice::array(&r.take(20)?)?;
         if last.is_some_and(|previous| previous >= a) {
             return Err("noncanonical checkpoint account order".into());
         }
@@ -102,8 +102,8 @@ pub fn decode(input: &[u8], expected_genesis: Hash) -> Result<EarlyReplay, Strin
         let mut storage = std::collections::BTreeMap::new();
         let mut previous = None;
         for _ in 0..n {
-            let k: Hash = r.take(32)?.try_into().unwrap();
-            let v: Hash = r.take(32)?.try_into().unwrap();
+            let k: Hash = crate::slice::array(&r.take(32)?)?;
+            let v: Hash = crate::slice::array(&r.take(32)?)?;
             if previous.is_some_and(|p| p >= k) || v == [0; 32] {
                 return Err("noncanonical checkpoint storage".into());
             }

@@ -135,13 +135,13 @@ impl<'a> Cursor<'a> {
         Ok(v)
     }
     fn hash(&mut self) -> Result<Hash, Error> {
-        Ok(self.take(32)?.try_into().unwrap())
+        Ok(crate::slice::array(self.take(32)?)?)
     }
     fn byte(&mut self) -> Result<u8, Error> {
         Ok(self.take(1)?[0])
     }
     fn count(&mut self, max: usize) -> Result<usize, Error> {
-        let n = u32::from_be_bytes(self.take(4)?.try_into().unwrap()) as usize;
+        let n = u32::from_be_bytes(crate::slice::array(self.take(4)?)?) as usize;
         if n > max {
             return Err(invalid());
         }
@@ -153,7 +153,8 @@ impl<'a> Cursor<'a> {
     }
     fn transactions(&mut self) -> Result<Arc<Vec<Transaction>>, Error> {
         let n = self.count(MAX_ETXS)?;
-        let mut out = Vec::with_capacity(n);
+        // Each entry carries at least a 4-byte length, so the input bounds the reservation.
+        let mut out = Vec::with_capacity(n.min((self.raw.len() - self.offset) / 4));
         for _ in 0..n {
             let tx = Transaction::decode(self.blob()?).map_err(|_| invalid())?;
             external(&tx)?;

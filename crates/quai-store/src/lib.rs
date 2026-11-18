@@ -11,6 +11,7 @@ use std::{
 };
 
 mod logs;
+pub(crate) mod slice;
 pub use logs::ReadMiss;
 
 const MAX_BYTES: u64 = 128 * 1024 * 1024;

@@ -41,11 +41,11 @@ impl Auxiliary {
         Ok(ProtoAuxTemplate {
             chain_id: Some(self.id() as u32),
             prev_hash: Some(h[4..36].to_vec()),
-            version: Some(u32::from_le_bytes(h[..4].try_into().unwrap())),
-            bits: Some(u32::from_le_bytes(h[72..76].try_into().unwrap())),
+            version: Some(u32::from_le_bytes(crate::slice::array(&h[..4])?)),
+            bits: Some(u32::from_le_bytes(crate::slice::array(&h[72..76])?)),
             signature_time: Some(c.signature_time),
             height: Some(if self.id() == 1 {
-                u32::from_le_bytes(h[76..80].try_into().unwrap())
+                u32::from_le_bytes(crate::slice::array(&h[76..80])?)
             } else {
                 c.height
             }),
@@ -87,7 +87,7 @@ impl Auxiliary {
     ) -> Result<Admission, Error> {
         let h = self.header();
         let c = coinbase::Coinbase::decode(self.transaction())?;
-        if u32::from_le_bytes(h[68..72].try_into().unwrap()) < c.signature_time
+        if u32::from_le_bytes(crate::slice::array(&h[68..72])?) < c.signature_time
             || quai_time < u64::from(c.signature_time)
         {
             return Err(Error::Invalid("auxiliary signature time"));
@@ -112,14 +112,12 @@ impl Auxiliary {
         let h = self.header();
         let c = coinbase::Coinbase::decode(self.transaction())?;
         let expected = if self.id() == 4 {
-            let doge: Hash = self
-                .wire
-                .auxpow2
-                .as_ref()
-                .unwrap()
-                .as_slice()
-                .try_into()
-                .unwrap();
+            let doge: Hash = crate::slice::array(
+                self.wire
+                    .auxpow2
+                    .as_ref()
+                    .ok_or(Error::Invalid("scrypt auxiliary hash missing"))?,
+            )?;
             if doge == [0; 32] {
                 return Err(Error::Invalid("scrypt auxiliary hash is zero"));
             }
@@ -144,9 +142,9 @@ impl Auxiliary {
         }
         let h = self.header();
         let seal = coinbase::double_sha(&h[..80]);
-        let nonce = u64::from_le_bytes(h[80..88].try_into().unwrap());
-        let height = u32::from_le_bytes(h[76..80].try_into().unwrap()) as u64;
-        let mix = h[88..120].try_into().unwrap();
+        let nonce = u64::from_le_bytes(crate::slice::array(&h[80..88])?);
+        let height = u32::from_le_bytes(crate::slice::array(&h[76..80])?) as u64;
+        let mix = crate::slice::array(&h[88..120])?;
         Ok((seal, nonce, height, mix))
     }
 }

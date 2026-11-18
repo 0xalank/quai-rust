@@ -80,10 +80,10 @@ pub(super) fn key(hashed: Hash, raw: &[u8]) -> io::Result<Key> {
     let p = preimage(hashed, raw, 47)?;
     need(&p[..2] == b"cl", "lockup key format")?;
     Ok(Key {
-        owner: p[2..22].try_into().unwrap(),
-        beneficiary: p[22..42].try_into().unwrap(),
+        owner: crate::slice::array(&p[2..22])?,
+        beneficiary: crate::slice::array(&p[22..42])?,
         lock: p[42],
-        epoch: u32::from_be_bytes(p[43..47].try_into().unwrap()),
+        epoch: u32::from_be_bytes(crate::slice::array(&p[43..47])?),
     })
 }
 impl crate::lockup_state::Reader for Reader {

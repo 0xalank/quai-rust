@@ -90,11 +90,9 @@ pub fn access_list(input: &[u8]) -> Result<Vec<AccessTuple>, String> {
         if fields.len() != 2 {
             return Err("access tuple arity".into());
         }
-        let Item::List(slots) = fields.pop().unwrap() else {
-            return Err("access keys are not a list".into());
-        };
-        let Item::Bytes(address) = fields.pop().unwrap() else {
-            return Err("access address is not bytes".into());
+        let (Some(Item::List(slots)), Some(Item::Bytes(address))) = (fields.pop(), fields.pop())
+        else {
+            return Err("access tuple is not [address bytes, key list]".into());
         };
         let mut parsed = vec![];
         for k in slots {

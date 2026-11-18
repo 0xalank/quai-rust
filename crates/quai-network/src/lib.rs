@@ -44,7 +44,7 @@ impl From<io::Error> for Error {
         Self::Io(e)
     }
 }
-/// Read the advertised length before allocating the payload. Deadlines and
+/// Read the advertised length, check it against the limit, then read the payload in steps. Deadlines and
 /// connection/resource management belong to the eventual transport.
 pub fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, Error> {
     let mut prefix = [0; 4];
@@ -53,8 +53,13 @@ pub fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, Error> {
     if length > MAX_FRAME_BYTES {
         return Err(Error::Limit);
     }
-    let mut bytes = vec![0; length];
-    reader.read_exact(&mut bytes)?;
+    // Grow with the bytes that arrive. A peer that declares 3 MiB and sends
+    // nothing does not make this side reserve 3 MiB.
+    let mut bytes = Vec::with_capacity(length.min(64 * 1024));
+    reader.take(length as u64).read_to_end(&mut bytes)?;
+    if bytes.len() != length {
+        return Err(Error::Io(io::ErrorKind::UnexpectedEof.into()));
+    }
     Ok(bytes)
 }
 pub fn write_frame(writer: &mut impl Write, bytes: &[u8]) -> Result<(), Error> {

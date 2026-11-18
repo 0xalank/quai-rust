@@ -384,10 +384,10 @@ impl<'a> Cursor<'a> {
         Ok(v)
     }
     fn u64(&mut self) -> io::Result<u64> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
+        Ok(u64::from_be_bytes(crate::slice::array(&self.take(8)?)?))
     }
     fn hash(&mut self) -> io::Result<Hash> {
-        Ok(self.take(32)?.try_into().unwrap())
+        Ok(crate::slice::array(&self.take(32)?)?)
     }
     fn done(&self) -> io::Result<()> {
         need(self.offset == self.raw.len(), "state record trailing bytes")
@@ -492,7 +492,7 @@ fn restore_inner(
     } else {
         let mut world = World::default();
         scan(b"account-data", accounts as usize, &mut |key, value| {
-            let address: [u8; 20] = preimage(key, value, 20)?.try_into().unwrap();
+            let address: [u8; 20] = crate::slice::array(&preimage(key, value, 20)?)?;
             let mut r = Cursor {
                 raw: value,
                 offset: 20,
@@ -586,10 +586,10 @@ fn restore_inner(
             let raw = preimage(key, value, 47)?;
             need(&raw[..2] == b"cl", "lockup key format")?;
             let k = Key {
-                owner: raw[2..22].try_into().unwrap(),
-                beneficiary: raw[22..42].try_into().unwrap(),
+                owner: crate::slice::array(&raw[2..22])?,
+                beneficiary: crate::slice::array(&raw[22..42])?,
                 lock: raw[42],
-                epoch: u32::from_be_bytes(raw[43..47].try_into().unwrap()),
+                epoch: u32::from_be_bytes(crate::slice::array(&raw[43..47])?),
             };
             need(
                 world.lockup(&k).map_err(bad)?.is_none(),
@@ -606,7 +606,7 @@ fn restore_inner(
             crate::etx::MAX_PENDING_ETXS,
             &mut |key, value| {
                 let raw = preimage(key, value, 8)?;
-                let index = u64::from_be_bytes(raw.try_into().unwrap());
+                let index = u64::from_be_bytes(crate::slice::array(&raw)?);
                 let tx = Transaction::decode(&value[8..]).map_err(bad)?;
                 need(slots.insert(index, tx).is_none(), "duplicate queue slot")?;
                 Ok(())
@@ -638,15 +638,15 @@ fn restore_inner(
         scan(b"utxos", raw_count as usize, &mut |key, value| {
             let p = preimage(key, value, 34)?;
             let point = OutPoint {
-                hash: p[..32].try_into().unwrap(),
-                index: u16::from_be_bytes(p[32..].try_into().unwrap()),
+                hash: crate::slice::array(&p[..32])?,
+                index: u16::from_be_bytes(crate::slice::array(&p[32..])?),
             };
             let mut r = Cursor {
                 raw: value,
                 offset: 34,
             };
             let denomination = r.take(1)?[0];
-            let address = r.take(20)?.try_into().unwrap();
+            let address = crate::slice::array(&r.take(20)?)?;
             let len = r.take(1)?[0] as usize;
             need(len <= 32, "UTXO lock bound")?;
             let lock = r.take(len)?.to_vec();

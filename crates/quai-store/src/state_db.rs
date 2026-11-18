@@ -121,10 +121,10 @@ impl<'a> Cursor<'a> {
         Ok(v)
     }
     fn hash(&mut self) -> io::Result<Hash> {
-        Ok(self.take(32)?.try_into().unwrap())
+        Ok(crate::slice::array(&self.take(32)?)?)
     }
     fn u32(&mut self) -> io::Result<usize> {
-        Ok(u32::from_be_bytes(self.take(4)?.try_into().unwrap()) as usize)
+        Ok(u32::from_be_bytes(crate::slice::array(&self.take(4)?)?) as usize)
     }
 }
 fn decode(profile: Hash, id: Hash, raw: &[u8]) -> io::Result<Version> {
@@ -146,7 +146,7 @@ fn decode(profile: Hash, id: Hash, raw: &[u8]) -> io::Result<Version> {
         _ => return Err(bad("state version parent flag")),
     };
     let block = r.hash()?;
-    let height = u64::from_be_bytes(r.take(8)?.try_into().unwrap());
+    let height = u64::from_be_bytes(crate::slice::array(&r.take(8)?)?);
     need(
         (height == 0) == parent.is_none(),
         "state version parent/height",

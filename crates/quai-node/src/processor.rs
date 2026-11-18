@@ -834,12 +834,8 @@ impl Checker {
                         });
                     }
                 }
-                let mut removed: Vec<OutPoint> = x
-                    .execution
-                    .trimmed
-                    .iter()
-                    .map(|t| t.point)
-                    .collect();
+                let mut removed: Vec<OutPoint> =
+                    x.execution.trimmed.iter().map(|t| t.point).collect();
                 for tx in txs {
                     if let Kind::Qi(q) = tx.kind() {
                         removed.extend(q.inputs.iter().map(|i| OutPoint {
@@ -1002,7 +998,11 @@ fn storage_receipts(
                     .collect(),
             }),
             tx_hash: Some(ProtoHash {
-                value: tx_hashes.get(i as usize).copied().unwrap_or_default().to_vec(),
+                value: tx_hashes
+                    .get(i as usize)
+                    .copied()
+                    .unwrap_or_default()
+                    .to_vec(),
             }),
             contract_address,
             gas_used,
@@ -1204,11 +1204,25 @@ fn load_checkpoint(dir: &Path, chain: &Chain, state: bool) -> Result<Option<Resu
             cp.height
         ));
     }
-    if cp.state.is_some() != state {
+    if cp.state.is_none() && state {
         return Err(format!("checkpoint {height} rejected: state mode differs"));
     }
     let (state, rollups) = match &cp.state {
         None => (None, vec![]),
+        // A stateless run can continue from a state checkpoint (copied into
+        // its headers/ directory): it keeps the region rollups of the state
+        // section and leaves the state.
+        Some(section) if !state => {
+            let mut rollups = vec![];
+            for (id, _, rollup) in &section.confirmations {
+                if let Some(r) = rollup {
+                    let list = store::decode_tx_list(r)
+                        .map_err(|e| format!("checkpoint {height} rejected: region rollup: {e}"))?;
+                    rollups.push((*id, Arc::new(list)));
+                }
+            }
+            (None, rollups)
+        }
         Some(section) => {
             let profile = state::profile_for(chain).map_err(|e| describe(&e))?;
             let commitment = quai_execution::state_store::Commitment {
@@ -1307,6 +1321,8 @@ pub struct Settings {
 }
 /// Staged blocks the store writes in one non-durable transaction.
 const STORE_BATCH: usize = 256;
+/// Heights between two published heads while the node is behind.
+const PUBLISH_EVERY: u64 = 1_000;
 
 /// The per-height pipeline, its ancestry window and its durable state.
 pub struct Processor {
@@ -1323,6 +1339,9 @@ pub struct Processor {
     verify_first: bool,
     stop: Arc<AtomicBool>,
     store: Option<BlockStore>,
+    /// The RPC view of a running node, which follows the published head.
+    live: Option<Arc<crate::rpc_view::Live>>,
+    metrics: Option<Arc<crate::metrics::Metrics>>,
 }
 impl Processor {
     /// Open the processor for `chain`: resume from the latest checkpoint in
@@ -1452,7 +1471,9 @@ impl Processor {
                 summary.resumed_from.is_some(),
                 settings.state,
             )?),
-            (None, true) => return Err("--store keeps the block store under the data directory".into()),
+            (None, true) => {
+                return Err("--store keeps the block store under the data directory".into())
+            }
             _ => None,
         };
         Ok(Self {
@@ -1468,6 +1489,8 @@ impl Processor {
             seq: 0,
             stop: Arc::new(AtomicBool::new(false)),
             store,
+            live: None,
+            metrics: None,
         })
     }
     /// The first zone height a source must deliver: 0, or the checkpoint
@@ -1495,6 +1518,65 @@ impl Processor {
     }
     pub fn summary(&self) -> &Summary {
         &self.summary
+    }
+    /// The head (hash, number) of each context.
+    pub fn heads(&self) -> [Option<(Hash, u64)>; 3] {
+        self.checker.heads
+    }
+    pub fn set_metrics(&mut self, m: Arc<crate::metrics::Metrics>) {
+        self.metrics = Some(m);
+    }
+    /// The RPC view of the store and the head state; the processor
+    /// publishes its head to it from now on.
+    pub fn live_view(
+        &mut self,
+    ) -> Result<(crate::rpc_view::ExportView, Arc<crate::rpc_view::Live>), String> {
+        let store = self
+            .store
+            .as_mut()
+            .ok_or("live view without a block store")?;
+        store.flush(false).map_err(io_err("block store"))?;
+        let reader = store.reader().map_err(io_err("block store"))?;
+        let (hash, number) = self.checker.heads[2].ok_or("live view before genesis")?;
+        let head = (number, hash);
+        let state = self.head_state()?;
+        let (view, live) =
+            crate::rpc_view::ExportView::live(self.checker.chain.clone(), reader, head, state)?;
+        self.live = Some(live.clone());
+        Ok((view, live))
+    }
+    /// The state after the zone head, for the RPC.
+    fn head_state(&self) -> Result<Option<Arc<crate::rpc_view::HeadState>>, String> {
+        let Some(st) = self.checker.state.as_ref() else {
+            return Ok(None);
+        };
+        let (evm, etx, _, _) = self.checker.head_roots()?;
+        Ok(Some(Arc::new(crate::rpc_view::HeadState::new(
+            st.state.clone(),
+            evm,
+            etx,
+        ))))
+    }
+    /// Make the head visible to the RPC: flush the store and publish.
+    fn publish(&mut self) -> Result<(), String> {
+        let Some(store) = self.store.as_mut() else {
+            return Ok(());
+        };
+        store.flush(false).map_err(io_err("block store"))?;
+        let Some(live) = self.live.clone() else {
+            return Ok(());
+        };
+        let Some((hash, number)) = self.checker.heads[2] else {
+            return Ok(());
+        };
+        let head = (number, hash);
+        if live.head() == head {
+            return Ok(());
+        }
+        let reader = store.reader().map_err(io_err("block store"))?;
+        let state = self.head_state()?;
+        live.publish(reader, head, state);
+        Ok(())
     }
     /// Check heights from `source` until it ends, a check fails or the stop
     /// flag is set.
@@ -1528,9 +1610,7 @@ impl Processor {
                     break;
                 }
                 // Nothing to check: make the head visible, then wait.
-                if let Some(store) = self.store.as_mut() {
-                    store.flush(false).map_err(io_err("block store"))?;
-                }
+                self.publish()?;
                 source.wait(&self.stop);
                 continue;
             };
@@ -1561,13 +1641,13 @@ impl Processor {
             let t = Instant::now();
             let zone_height = slot.height.zone_height;
             let raws: [Option<(u64, Hash)>; 3] = std::array::from_fn(|c| {
-                slot.height.records[c]
-                    .as_ref()
-                    .map(|r| (r.number, r.hash))
+                slot.height.records[c].as_ref().map(|r| (r.number, r.hash))
             });
             let shares = done.as_ref().map_or(0, |d| d.shares as u64);
             let result = if zone_height == 0 {
-                let genesis = self.checker.collect.then(|| genesis_block(&slot, self.checker.receipts, self.checker.state.is_some()));
+                let genesis = self.checker.collect.then(|| {
+                    genesis_block(&slot, self.checker.receipts, self.checker.state.is_some())
+                });
                 self.checker.genesis(slot).map(|_| (0, genesis))
             } else {
                 self.checker.check(slot, done)
@@ -1590,6 +1670,13 @@ impl Processor {
                     }
                     s.shares += shares;
                     progress_heights += 1;
+                    if let Some(m) = &self.metrics {
+                        m.head.store(zone_height, Ordering::Relaxed);
+                        m.blocks.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if self.live.is_some() && zone_height % PUBLISH_EVERY == 0 {
+                        self.publish()?;
+                    }
                 }
                 Err(f) => {
                     let raw = raws[f.context.index()];
@@ -1603,6 +1690,9 @@ impl Processor {
                         actual: f.actual,
                     });
                     self.summary.end = End::Failed;
+                    if let Some(m) = &self.metrics {
+                        m.failures.fetch_add(1, Ordering::Relaxed);
+                    }
                     break;
                 }
             }
@@ -1628,9 +1718,7 @@ impl Processor {
             }
             if last_progress.elapsed() >= self.settings.progress {
                 let secs = last_progress.elapsed().as_secs_f64();
-                let target = source
-                    .target()
-                    .map_or("?".to_string(), |t| t.to_string());
+                let target = source.target().map_or("?".to_string(), |t| t.to_string());
                 let s = &self.summary;
                 log.info(&format!(
                     "zone height {zone_height}/{target}: {} prime, {} region, {} zone records, {} workshares; {:.1} blocks/s now, {:.1} in this run",
@@ -1692,6 +1780,7 @@ impl Processor {
         if let Some(store) = self.store.as_mut() {
             store.flush(true).map_err(io_err("block store"))?;
         }
+        self.publish()?;
         self.summary.state_blocks = self.checker.state.as_ref().map(|s| s.executed);
         self.summary.elapsed = self.started.elapsed();
         Ok(self.summary)

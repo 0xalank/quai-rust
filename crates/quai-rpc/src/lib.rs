@@ -721,6 +721,19 @@ pub fn serve_blocking(app: Arc<App>) -> Result<(), String> {
     })
 }
 
+/// Serve `app` on an already bound listener until `shutdown` completes, on
+/// the caller's runtime (`quai-node run` serves the RPC next to its sync).
+pub async fn serve_until(
+    app: Arc<App>,
+    listener: tokio::net::TcpListener,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), String> {
+    axum::serve(listener, router(app))
+        .with_graceful_shutdown(shutdown)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/", post(rpc_handler))

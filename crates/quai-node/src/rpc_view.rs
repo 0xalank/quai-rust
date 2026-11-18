@@ -202,7 +202,8 @@ impl Blocks for Index {
         if e.receipts_len == 0 {
             return Ok(Some(vec![]));
         }
-        self.read(e.segment, e.receipts_at, e.receipts_len).map(Some)
+        self.read(e.segment, e.receipts_at, e.receipts_len)
+            .map(Some)
     }
     fn child_entropy(&self, height: u64, _: &Hash) -> Result<Option<U256>, ViewError> {
         if height + 1 >= self.heights.len() as u64 {
@@ -488,7 +489,9 @@ fn checkpoint_state(
         commitment,
     )
     .map_err(|e| format!("state {height}: {e}"))?;
-    let state = store.restore().map_err(|e| format!("state {height}: {e}"))?;
+    let state = store
+        .restore()
+        .map_err(|e| format!("state {height}: {e}"))?;
     Ok((state, section.evm, section.etx))
 }
 fn latest_checkpoint(dir: &Path, chain: &Chain) -> Result<Option<checkpoint::Checkpoint>, String> {

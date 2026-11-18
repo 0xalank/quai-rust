@@ -524,9 +524,7 @@ struct Waiting {
     waits: u64,
 }
 impl quai_node::processor::BlockSource for Waiting {
-    fn next(
-        &mut self,
-    ) -> Result<quai_node::processor::Next, quai_node::processor::SourceError> {
+    fn next(&mut self) -> Result<quai_node::processor::Next, quai_node::processor::SourceError> {
         use quai_node::processor::Next;
         if !std::mem::take(&mut self.armed) {
             return Ok(Next::Wait);
@@ -571,7 +569,8 @@ fn a_source_that_waits_gives_the_export_result() {
         store: false,
     };
     let chain = quai_node::spec::Chain::for_environment("local").unwrap();
-    let mut p = Processor::open(chain, settings, Some(caches()), std::time::Instant::now()).unwrap();
+    let mut p =
+        Processor::open(chain, settings, Some(caches()), std::time::Instant::now()).unwrap();
     assert_eq!(p.start(), 0);
     let mut source = Waiting {
         heights: heights().into(),

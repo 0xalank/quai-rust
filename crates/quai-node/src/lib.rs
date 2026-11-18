@@ -6,7 +6,11 @@
 pub mod blockstore;
 pub mod checkpoint;
 pub mod cli;
+pub mod config;
 pub mod log;
+pub mod metrics;
+pub mod node;
+pub mod peers;
 pub mod pow;
 pub mod processor;
 pub mod qex;

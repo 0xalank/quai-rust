@@ -429,3 +429,39 @@ fn the_block_store_follows_the_checkpoint_after_a_crash() {
     std::fs::remove_dir_all(straight).unwrap();
     std::fs::remove_dir_all(data).unwrap();
 }
+
+/// A stateless replay continues from a state checkpoint copied into its
+/// headers/ directory, and a state replay refuses a stateless checkpoint.
+#[test]
+fn a_stateless_run_continues_from_a_state_checkpoint() {
+    let export = mainnet_slice();
+    let data = unique("state-to-stateless");
+    run(&options(&export, &data, Some(5), false)).unwrap();
+    let state_dir = dir_of(&export, &data);
+    let env = Manifest::load(&export).unwrap().environment;
+    let headers = checkpoint_dir(&data, &Chain::for_environment(&env).unwrap(), false);
+    std::fs::create_dir_all(&headers).unwrap();
+    let (h, path) = checkpoint::list(&state_dir).unwrap().remove(0);
+    assert_eq!(h, 5);
+    std::fs::copy(&path, checkpoint::path(&headers, 5)).unwrap();
+    let mut o = options(&export, &data, None, true);
+    o.state = false;
+    let s = run(&o).unwrap();
+    assert_eq!(s.failure, None, "{}", s.line());
+    assert_eq!((s.resumed_from, s.highest_passed), (Some(5), Some(8)));
+    assert!(latest_in(&headers).state.is_none());
+    std::fs::remove_dir_all(&state_dir).unwrap();
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::copy(
+        checkpoint::path(&headers, 8),
+        checkpoint::path(&state_dir, 8),
+    )
+    .unwrap();
+    let e = run(&options(&export, &data, None, true)).unwrap_err();
+    assert!(e.contains("state mode differs"), "{e}");
+    std::fs::remove_dir_all(data).unwrap();
+}
+fn latest_in(dir: &Path) -> Checkpoint {
+    let (_, path) = checkpoint::list(dir).unwrap().into_iter().next().unwrap();
+    checkpoint::read(&path).unwrap()
+}

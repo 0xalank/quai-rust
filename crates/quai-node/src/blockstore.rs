@@ -439,10 +439,14 @@ impl BlockStore {
             let mut spent = vec![];
             for p in &u.removed {
                 let key = outpoint_key(p);
-                let owner = outs.remove(key.as_slice()).map_err(store_err)?.map(|v| v.value().to_vec());
+                let owner = outs
+                    .remove(key.as_slice())
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec());
                 if let Some(owner) = owner {
                     let a: Address = owner.as_slice().try_into().map_err(bad)?;
-                    addr.remove(address_key(&a, p).as_slice()).map_err(store_err)?;
+                    addr.remove(address_key(&a, p).as_slice())
+                        .map_err(store_err)?;
                     spent.push((*p, a));
                 }
             }
@@ -486,7 +490,11 @@ impl BlockStore {
             let mut outs = w.open_table(OUTS).map_err(store_err)?;
             let mut n = top;
             while n > height {
-                let Some(hash) = canon.remove(n).map_err(store_err)?.map(|v| v.value().to_vec()) else {
+                let Some(hash) = canon
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                else {
                     n -= 1;
                     continue;
                 };
@@ -503,7 +511,11 @@ impl BlockStore {
                         }
                     }
                 }
-                if let Some(raw) = created.remove(n).map_err(store_err)?.map(|v| v.value().to_vec()) {
+                if let Some(raw) = created
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
                     for c in decode_created(&raw)? {
                         addr.remove(address_key(&c.address, &c.point).as_slice())
                             .map_err(store_err)?;
@@ -511,9 +523,14 @@ impl BlockStore {
                             .map_err(store_err)?;
                     }
                 }
-                if let Some(raw) = spent.remove(n).map_err(store_err)?.map(|v| v.value().to_vec()) {
+                if let Some(raw) = spent
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
                     for (p, a) in decode_spent(&raw)? {
-                        addr.insert(address_key(&a, &p).as_slice(), ()).map_err(store_err)?;
+                        addr.insert(address_key(&a, &p).as_slice(), ())
+                            .map_err(store_err)?;
                         outs.insert(outpoint_key(&p).as_slice(), a.as_slice())
                             .map_err(store_err)?;
                     }
@@ -599,7 +616,10 @@ impl StoreReader {
                     Ok(u64::from_be_bytes(v.value().try_into().map_err(bad)?))
                 })
                 .transpose()?;
-            let utxos = meta.get("utxos").map_err(store_err)?.is_some_and(|v| v.value() == [1]);
+            let utxos = meta
+                .get("utxos")
+                .map_err(store_err)?
+                .is_some_and(|v| v.value() == [1]);
             (head, base, utxos)
         };
         Ok(Self {

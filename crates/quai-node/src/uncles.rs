@@ -54,10 +54,11 @@ pub fn pow_hash(caches: &SharedCaches, h: &Header) -> Result<Hash, Error> {
         };
     }
     let mix = hash_of(w.mix_hash.as_ref().map_or(&[][..], |m| m.value.as_slice()));
-    let (actual, hash) =
-        caches
-            .get(Algorithm::Progpow, height)?
-            .compute(h.seal_hash(), w.nonce.unwrap_or_default(), height)?;
+    let (actual, hash) = caches.get(Algorithm::Progpow, height)?.compute(
+        h.seal_hash(),
+        w.nonce.unwrap_or_default(),
+        height,
+    )?;
     if actual != mix {
         return Err(Error::Invalid("mix hash"));
     }

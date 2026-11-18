@@ -341,19 +341,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("divergences.jsonl");
         let m = Arc::new(Metrics::new(0));
-        let mut d = Detector::new(Some(path.clone()), Some(m.clone()), Log::new(crate::log::Level::Error));
+        let mut d = Detector::new(
+            Some(path.clone()),
+            Some(m.clone()),
+            Log::new(crate::log::Level::Error),
+        );
         let peers: Vec<PeerId> = (0..3).map(|_| PeerId::random()).collect();
         // A rejected block that two of three peers hold: one block divergence.
         d.block_rejected([7; 32], 7, failure());
         let due = d.due(7 + DEPTH);
         assert_eq!(due.len(), 1);
-        let answers = vec![(peers[0], Some([7; 32])), (peers[1], Some([7; 32])), (peers[2], None)];
+        let answers = vec![
+            (peers[0], Some([7; 32])),
+            (peers[1], Some([7; 32])),
+            (peers[2], None),
+        ];
         d.block_verdict(due[0].clone(), &answers);
         assert_eq!(m.divergences_block.load(Ordering::Relaxed), 1);
         // One the peers do not hold: no divergence.
         d.block_rejected([8; 32], 8, failure());
         let due = d.due(8 + DEPTH);
-        d.block_verdict(due[0].clone(), &[(peers[0], Some([9; 32])), (peers[1], Some([9; 32]))]);
+        d.block_verdict(
+            due[0].clone(),
+            &[(peers[0], Some([9; 32])), (peers[1], Some([9; 32]))],
+        );
         assert_eq!(m.divergences_block.load(Ordering::Relaxed), 1);
         assert_eq!(m.blocks_rejected.load(Ordering::Relaxed), 2);
         // A rejected workshare that a valid block includes.
@@ -362,12 +373,28 @@ mod tests {
         d.block_included([6; 32], 9, &[[5; 32]]);
         assert_eq!(m.divergences_workshare.load(Ordering::Relaxed), 1);
         // Agreement, then a difference that must last PERSIST to count.
-        d.head_verdict(20, [1; 32], &[(peers[0], Some([1; 32])), (peers[1], Some([1; 32]))]);
-        d.head_verdict(21, [1; 32], &[(peers[0], Some([2; 32])), (peers[1], Some([2; 32]))]);
+        d.head_verdict(
+            20,
+            [1; 32],
+            &[(peers[0], Some([1; 32])), (peers[1], Some([1; 32]))],
+        );
+        d.head_verdict(
+            21,
+            [1; 32],
+            &[(peers[0], Some([2; 32])), (peers[1], Some([2; 32]))],
+        );
         assert_eq!(m.divergences_head.load(Ordering::Relaxed), 0);
         d.fork.as_mut().unwrap().since -= PERSIST;
-        d.head_verdict(22, [1; 32], &[(peers[0], Some([2; 32])), (peers[1], Some([2; 32]))]);
-        d.head_verdict(23, [1; 32], &[(peers[0], Some([2; 32])), (peers[1], Some([2; 32]))]);
+        d.head_verdict(
+            22,
+            [1; 32],
+            &[(peers[0], Some([2; 32])), (peers[1], Some([2; 32]))],
+        );
+        d.head_verdict(
+            23,
+            [1; 32],
+            &[(peers[0], Some([2; 32])), (peers[1], Some([2; 32]))],
+        );
         assert_eq!(m.divergences_head.load(Ordering::Relaxed), 1);
         assert_eq!(m.head_checks.load(Ordering::Relaxed), 4);
         assert_eq!(m.head_agreements.load(Ordering::Relaxed), 1);

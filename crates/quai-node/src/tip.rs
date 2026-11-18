@@ -412,10 +412,14 @@ pub fn follow(
             }
         }
         if let Some(m) = &metrics {
-            m.gossip_blocks
-                .store(gossip_stats.blocks.load(Ordering::Relaxed), Ordering::Relaxed);
-            m.gossip_workshares
-                .store(gossip_stats.workshares.load(Ordering::Relaxed), Ordering::Relaxed);
+            m.gossip_blocks.store(
+                gossip_stats.blocks.load(Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
+            m.gossip_workshares.store(
+                gossip_stats.workshares.load(Ordering::Relaxed),
+                Ordering::Relaxed,
+            );
         }
         let mut queue: VecDeque<Block> = VecDeque::new();
         match gossip.recv_timeout(Duration::from_secs(1)) {
@@ -472,8 +476,12 @@ pub fn follow(
                             answers,
                         });
                     }
-                    let answers =
-                        ask(node.clone(), peers.clone(), head + crate::divergence::STALL_BLOCKS).await;
+                    let answers = ask(
+                        node.clone(),
+                        peers.clone(),
+                        head + crate::divergence::STALL_BLOCKS,
+                    )
+                    .await;
                     let _ = tx.send(Check::Lag { head, answers });
                     for rejected in due {
                         let answers = ask(node.clone(), peers.clone(), rejected.number).await;
@@ -641,7 +649,8 @@ fn workshare(
     if !seen.insert(hash) {
         return;
     }
-    let number = share_rules::number(header.wire().number.as_deref().unwrap_or_default()).unwrap_or(0);
+    let number =
+        share_rules::number(header.wire().number.as_deref().unwrap_or_default()).unwrap_or(0);
     let head = processor.tip().map_or(0, |t| t.head().1);
     if number + SHARE_DISTANCE < head {
         stats.shares_old += 1;

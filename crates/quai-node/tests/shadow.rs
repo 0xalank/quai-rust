@@ -244,7 +244,10 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
     cp.trusted = Some((go[8], 8));
     checkpoint::write(&dir, &cp).unwrap();
     let e = open(&data, true, false).err().unwrap();
-    assert!(e.contains("shadow run") && e.contains("--shadow-bootstrap"), "{e}");
+    assert!(
+        e.contains("shadow run") && e.contains("--shadow-bootstrap"),
+        "{e}"
+    );
     assert!(open(&data, true, true).is_ok());
     // `quai-node run` itself, without the flag, refuses before it syncs.
     let o = quai_node::node::Options {

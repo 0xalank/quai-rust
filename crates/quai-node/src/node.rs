@@ -113,8 +113,8 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     // before anything else (the processor refuses it too).
     if o.shadow_bootstrap.is_none() {
         let dir = crate::processor::checkpoint_dir(&o.datadir, &chain, !o.stateless);
-        let latest = crate::checkpoint::list(&dir)
-            .map_err(|e| format!("checkpoint directory: {e}"))?;
+        let latest =
+            crate::checkpoint::list(&dir).map_err(|e| format!("checkpoint directory: {e}"))?;
         if let Some((h, path)) = latest.first() {
             if let Some((t, at)) = crate::checkpoint::read(path).ok().and_then(|c| c.trusted) {
                 return Err(format!(
@@ -161,12 +161,12 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         }
         log.warn("SHADOW BOOTSTRAP (test tool, not for production): this run starts at a trusted zone block; that block and its whole ancestry are NOT validated by this node. Every block after it passes every stateless check");
         let dir = crate::processor::checkpoint_dir(&o.datadir, &chain, false);
-        let existing = crate::checkpoint::list(&dir)
-            .map_err(|e| format!("checkpoint directory: {e}"))?;
+        let existing =
+            crate::checkpoint::list(&dir).map_err(|e| format!("checkpoint directory: {e}"))?;
         match existing.first() {
             Some((h, path)) => {
-                let cp = crate::checkpoint::read(path)
-                    .map_err(|e| format!("checkpoint {h}: {e}"))?;
+                let cp =
+                    crate::checkpoint::read(path).map_err(|e| format!("checkpoint {h}: {e}"))?;
                 match (cp.trusted, trusted) {
                     (Some((t, at)), Some(want)) if t != want => {
                         return Err(format!(

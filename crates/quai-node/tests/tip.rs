@@ -348,8 +348,11 @@ fn reorg_across_commits(state: bool, keep: u64, compacted: u64) {
     let base = *checkpoints(&data, state).last().unwrap();
     let mut p = opened(&data, state, true, 4);
     assert_eq!(p.zone_head(), Some((hb[base as usize], base)));
-    p.run(&mut Heights(b[base as usize..].iter().cloned().collect()), &log)
-        .unwrap();
+    p.run(
+        &mut Heights(b[base as usize..].iter().cloned().collect()),
+        &log,
+    )
+    .unwrap();
     assert_eq!(p.zone_head(), Some((hb[16], 16)));
     assert!(p.finish(&log).unwrap().failure.is_none());
     std::fs::remove_dir_all(data).unwrap();
@@ -431,11 +434,17 @@ fn a_block_forking_below_the_base_is_refused() {
     p.set_tip_keep(4);
     p.enable_tip().unwrap();
     for h in &a[1..] {
-        assert!(matches!(p.offer(h.clone(), &log).unwrap(), Offer::Accepted { .. }));
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
     }
     assert_eq!(p.tip().unwrap().base(), (ha[12], 12));
     assert_eq!(p.offer(b[11].clone(), &log).unwrap(), Offer::Known);
-    assert_eq!(p.offer(b[14].clone(), &log).unwrap(), Offer::NeedParent(hb[13]));
+    assert_eq!(
+        p.offer(b[14].clone(), &log).unwrap(),
+        Offer::NeedParent(hb[13])
+    );
     assert_eq!(p.offer(b[13].clone(), &log).unwrap(), Offer::BelowBase);
     assert_eq!(p.tip().unwrap().head(), (ha[16], 16));
     assert_eq!(p.tip().unwrap().canonical_at(14), Some(ha[14]));

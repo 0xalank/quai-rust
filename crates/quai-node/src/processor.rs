@@ -2222,7 +2222,7 @@ impl Processor {
     pub fn check_workshare(
         &mut self,
         header: &quai_primitives::Header,
-    ) -> Result<quai_consensus::validation::WorkshareReport, Failure> {
+    ) -> Result<quai_consensus::validation::WorkshareReport, Box<Failure>> {
         let c = &mut self.checker;
         let w = header.wire();
         let number = share_rules::number(w.number.as_deref().unwrap_or_default()).ok();
@@ -2232,14 +2232,16 @@ impl Processor {
             header,
             &c.chain.zone_profile(),
         )
-        .map_err(|e| Failure {
-            zone_height: number,
-            context: "zone".into(),
-            number,
-            hash: header.block_hash().ok(),
-            check: format!("workshare: {}", block::message(&e)),
-            expected: "a valid workshare (go-quai AddWorkShare and the uncle rules)".into(),
-            actual: describe(&e),
+        .map_err(|e| {
+            Box::new(Failure {
+                zone_height: number,
+                context: "zone".into(),
+                number,
+                hash: header.block_hash().ok(),
+                check: format!("workshare: {}", block::message(&e)),
+                expected: "a valid workshare (go-quai AddWorkShare and the uncle rules)".into(),
+                actual: describe(&e),
+            })
         })
     }
     /// Check a block of the tip against its parent's context, let go-quai's
@@ -2494,8 +2496,7 @@ impl Processor {
                 removed.len()
             ));
             if let Some(dir) = &self.dir {
-                store::fault(dir, "reorg-rolled-back", common_number)
-                    .map_err(io_err("reorg"))?;
+                store::fault(dir, "reorg-rolled-back", common_number).map_err(io_err("reorg"))?;
             }
         }
         // Apply the new branch.
@@ -2815,12 +2816,12 @@ impl Checker {
         }
         let mut snapshots = snapshots.into_iter();
         let prime = snapshots.next().ok_or("seed snapshot")?;
-        for c in 1..3 {
-            let s = snapshots.next().ok_or("seed snapshot")?;
-            self.window.insert(c, views[c].clone(), Arc::new(s));
+        // The region and zone views with their snapshots.
+        for ((c, view), s) in views.iter().enumerate().skip(1).zip(snapshots) {
+            self.window.insert(c, view.clone(), Arc::new(s));
         }
-        for c in 0..3 {
-            self.heads[c] = Some((id, views[c].number(c).map_err(err)?));
+        for (c, view) in views.iter().enumerate() {
+            self.heads[c] = Some((id, view.number(c).map_err(err)?));
         }
         warm.pending = Some((views[0].clone(), prime));
         self.remember_order(id, 0);
@@ -2885,7 +2886,9 @@ impl Checker {
             let profile = self.chain.placement_profile(c);
             placement::check_append_commitments(&self.indexes[c], &r, c)
                 .map_err(|e| format!("{} {}: {}", CONTEXTS[c].name(), hex(&r.id()), err(e)))?;
-            let parent = self.indexes[c].get(&r.parent(c).map_err(err)?).map_err(err)?;
+            let parent = self.indexes[c]
+                .get(&r.parent(c).map_err(err)?)
+                .map_err(err)?;
             let (prev, termini) = placement::pcrc(
                 parent.termini.as_ref().ok_or("parent termini")?,
                 r.id(),
@@ -2910,7 +2913,9 @@ impl Checker {
             // The cross-prime rollup of the zone parent's manifest, as the
             // region Append builds it, checked against the header and the
             // region body.
-            let parent = self.indexes[2].get(&zone.parent(2).map_err(err)?).map_err(err)?;
+            let parent = self.indexes[2]
+                .get(&zone.parent(2).map_err(err)?)
+                .map_err(err)?;
             let manifest = parent.manifest.as_ref().ok_or("zone parent manifest")?;
             let region = records[1].as_ref().ok_or("region record")?;
             if region.object().manifest_hashes() != *manifest {
@@ -2921,9 +2926,16 @@ impl Checker {
             }
             let mut accumulated = vec![];
             for z in manifest {
-                accumulated.extend_from_slice(self.histories[2].get(z).map_err(err)?.object().outbound_etxs());
+                accumulated.extend_from_slice(
+                    self.histories[2]
+                        .get(z)
+                        .map_err(err)?
+                        .object()
+                        .outbound_etxs(),
+                );
             }
-            let cross = confirmation::cross_prime(&accumulated, self.chain.location()[0]).map_err(err)?;
+            let cross =
+                confirmation::cross_prime(&accumulated, self.chain.location()[0]).map_err(err)?;
             let root = work::transactions_root(&cross)?;
             let committed = zone
                 .object()
@@ -2972,7 +2984,10 @@ impl Checker {
         warm.rates.insert(n, rate_of(record)?);
         // Up to ControllerKickInBlock no token choice set or inbound list is
         // read (prime_controller::State::before_kick_in).
-        if n < warm.prime_head.1.saturating_sub(quai_consensus::controllers::WINDOW)
+        if n < warm
+            .prime_head
+            .1
+            .saturating_sub(quai_consensus::controllers::WINDOW)
             || n <= quai_primitives::spec::FORKS.controller_kick_in
         {
             return Ok(());
@@ -2984,7 +2999,9 @@ impl Checker {
         };
         let inbound = confirmation::prime_inbound(&self.histories, &known, record)
             .map_err(|e| format!("prime {n} inbound ETXs: {}", err(e)))?;
-        let parent = self.histories[0].get(&record.parent(0).map_err(err)?).map_err(err)?;
+        let parent = self.histories[0]
+            .get(&record.parent(0).map_err(err)?)
+            .map_err(err)?;
         let prior = match warm.window.take() {
             Some(w) => w,
             None => choice_window::Window::empty_at(parent.id(), n - 1),
@@ -3006,7 +3023,9 @@ impl Checker {
             Some(&inbound),
             &prior,
             old,
-            Some(prime_controller::stored_rate(record.parent(2).map_err(err)?)),
+            Some(prime_controller::stored_rate(
+                record.parent(2).map_err(err)?,
+            )),
         )
         .map_err(|e| format!("prime {n} token choices: {}", err(e)))?;
         warm.parent_window = Some(prior);
@@ -3048,7 +3067,9 @@ impl Checker {
         );
         // The parent's interlinks by the same rule must be the ones the head's
         // body carries.
-        let parent = self.histories[0].get(&head.parent(0).map_err(err)?).map_err(err)?;
+        let parent = self.histories[0]
+            .get(&head.parent(0).map_err(err)?)
+            .map_err(err)?;
         let parent_rank = placement::verify_placement(&mut self.verifier, &parent, &profile)
             .map_err(|e| format!("prime parent proof-of-work: {}", err(e)))?
             .rank
@@ -3058,10 +3079,13 @@ impl Checker {
             .interlink_hashes()
             .try_into()
             .map_err(|_| "prime body interlinks are not four hashes")?;
-        let derived = placement::next_interlinks(parent.id(), Some(&grand_links), parent_rank, false)
-            .map_err(err)?;
+        let derived =
+            placement::next_interlinks(parent.id(), Some(&grand_links), parent_rank, false)
+                .map_err(err)?;
         if derived != parent_links {
-            return Err("the prime parent's interlinks by rank are not the ones the head carries".into());
+            return Err(
+                "the prime parent's interlinks by rank are not the ones the head carries".into(),
+            );
         }
         self.window.insert(0, head.clone(), Arc::new(snapshot));
         let (hash, number) = warm.prime_head;

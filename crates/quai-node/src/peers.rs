@@ -915,8 +915,7 @@ impl Shared {
     async fn add(self: &Arc<Self>, node: Arc<PublicNode>, peer: PeerId) -> Result<(), String> {
         // One probe per peer at a time: a peer that connects while it is
         // being added must not become two sources.
-        if lock(&self.sources).iter().any(|s| s.peer == peer) || !lock(&self.probing).insert(peer)
-        {
+        if lock(&self.sources).iter().any(|s| s.peer == peer) || !lock(&self.probing).insert(peer) {
             return Err("already a source".into());
         }
         let probed = async {
@@ -1487,50 +1486,8 @@ async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: cr
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    /// The batch that holds `to` is fetched even when `to` does not end a
-    /// ten-block batch (a source stopped at `to` waited for it forever).
-    #[test]
-    fn the_batch_that_holds_to_is_fetched() {
-        let mut s = Sched {
-            pending: BTreeSet::new(),
-            state: HashMap::new(),
-            zone: BTreeMap::new(),
-            dom: [BTreeMap::new(), BTreeMap::new()],
-            dom_next: [0, 0],
-            zone_next: 0,
-            zone_end: 100,
-            to: Some(37),
-            write_pos: 0,
-            error: None,
-        };
-        s.fill();
-        let starts: Vec<u64> = s.pending.iter().map(|(_, j)| j.start).collect();
-        assert_eq!(starts, vec![0, 10, 20, 30]);
-        // Without `to`, every batch below the fetch limit.
-        s.to = None;
-        s.fill();
-        assert_eq!(s.pending.len(), 10);
-    }
-    #[test]
-    fn reply_frames_and_numbers() {
-        assert_eq!(number_bytes(0), Vec::<u8>::new());
-        assert_eq!(number_bytes(256), vec![1, 0]);
-        // QuaiMessage{response{work_object_blocks_view{views[{wo}]}}} by hand.
-        let wo = vec![0x0a, 0x00];
-        let view = [vec![0x0a, wo.len() as u8], wo.clone()].concat();
-        let outer = [vec![0x0a, view.len() as u8], view].concat();
-        let reply = [vec![0x2a, outer.len() as u8], outer].concat();
-        let frame = [vec![0x12, reply.len() as u8], reply].concat();
-        assert_eq!(reply_objects(&frame, true).unwrap(), vec![wo]);
-        assert!(reply_objects(&[0x12, 0x05, 0x00], true).is_err());
-    }
-}
-
 // ---------------------------------------------------------------------------
-// Single requests and ranges for the trusted bootstrap (`bootstrap.rs`).
+// Single requests and ranges for the shadow bootstrap (`bootstrap.rs`).
 
 /// Dial the configured peers and, when allowed, the colosseum boot peers,
 /// and start a Kademlia walk for more.
@@ -1753,7 +1710,10 @@ pub async fn fetch_range(
                     ));
                 }
             } else if b.number != from {
-                return Err(format!("{} range starts at {}, not {from}", NAMES[ctx], b.number));
+                return Err(format!(
+                    "{} range starts at {}, not {from}",
+                    NAMES[ctx], b.number
+                ));
             }
             out.push(b);
         }
@@ -1762,4 +1722,46 @@ pub async fn fetch_range(
         return Err(format!("{} range {from}..={to} is incomplete", NAMES[ctx]));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// The batch that holds `to` is fetched even when `to` does not end a
+    /// ten-block batch (a source stopped at `to` waited for it forever).
+    #[test]
+    fn the_batch_that_holds_to_is_fetched() {
+        let mut s = Sched {
+            pending: BTreeSet::new(),
+            state: HashMap::new(),
+            zone: BTreeMap::new(),
+            dom: [BTreeMap::new(), BTreeMap::new()],
+            dom_next: [0, 0],
+            zone_next: 0,
+            zone_end: 100,
+            to: Some(37),
+            write_pos: 0,
+            error: None,
+        };
+        s.fill();
+        let starts: Vec<u64> = s.pending.iter().map(|(_, j)| j.start).collect();
+        assert_eq!(starts, vec![0, 10, 20, 30]);
+        // Without `to`, every batch below the fetch limit.
+        s.to = None;
+        s.fill();
+        assert_eq!(s.pending.len(), 10);
+    }
+    #[test]
+    fn reply_frames_and_numbers() {
+        assert_eq!(number_bytes(0), Vec::<u8>::new());
+        assert_eq!(number_bytes(256), vec![1, 0]);
+        // QuaiMessage{response{work_object_blocks_view{views[{wo}]}}} by hand.
+        let wo = vec![0x0a, 0x00];
+        let view = [vec![0x0a, wo.len() as u8], wo.clone()].concat();
+        let outer = [vec![0x0a, view.len() as u8], view].concat();
+        let reply = [vec![0x2a, outer.len() as u8], outer].concat();
+        let frame = [vec![0x12, reply.len() as u8], reply].concat();
+        assert_eq!(reply_objects(&frame, true).unwrap(), vec![wo]);
+        assert!(reply_objects(&[0x12, 0x05, 0x00], true).is_err());
+    }
 }

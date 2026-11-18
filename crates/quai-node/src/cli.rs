@@ -290,15 +290,16 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--to" => f.to = Some(number("--to", &v)?),
             "--margin" => f.margin = Some(number("--margin", &v)?),
             "--shadow-bootstrap" => {
-                f.shadow_bootstrap = Some(if v == "auto" {
-                    None
-                } else {
-                    let raw = quai_primitives::decode_hex(&v)
-                        .map_err(|_| format!("--shadow-bootstrap: not a hash: {v:?}"))?;
-                    Some(raw.try_into().map_err(|_| {
-                        format!("--shadow-bootstrap: not a 32-byte hash: {v:?}")
-                    })?)
-                })
+                f.shadow_bootstrap =
+                    Some(if v == "auto" {
+                        None
+                    } else {
+                        let raw = quai_primitives::decode_hex(&v)
+                            .map_err(|_| format!("--shadow-bootstrap: not a hash: {v:?}"))?;
+                        Some(raw.try_into().map_err(|_| {
+                            format!("--shadow-bootstrap: not a 32-byte hash: {v:?}")
+                        })?)
+                    })
             }
             "--shadow-bootstrap-quorum" => {
                 let n: usize = number("--shadow-bootstrap-quorum", &v)?;

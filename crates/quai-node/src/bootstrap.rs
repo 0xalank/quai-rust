@@ -129,7 +129,9 @@ pub fn run(
                 }
             }
         }
-        if heads.len() >= o.quorum && Instant::now() >= wait_until.min(started + Duration::from_secs(90)) {
+        if heads.len() >= o.quorum
+            && Instant::now() >= wait_until.min(started + Duration::from_secs(90))
+        {
             break;
         }
         if Instant::now() >= wait_until {
@@ -160,7 +162,15 @@ pub fn run(
             asked.iter().map(|p| {
                 let node = node.clone();
                 let p = *p;
-                async move { (p, peers::peer_hash_at(&node, p, ctx, number).await.ok().flatten()) }
+                async move {
+                    (
+                        p,
+                        peers::peer_hash_at(&node, p, ctx, number)
+                            .await
+                            .ok()
+                            .flatten(),
+                    )
+                }
             }),
         )
     };

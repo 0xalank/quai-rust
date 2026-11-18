@@ -59,7 +59,7 @@ pub fn scale_levels(levels: u128, base: u64) -> u64 {
         .wrapping_mul(&Word::from_u64(base))
         .wrapping_div(&Word::from_u128(5u128 << 64));
     // Go big.Int.Uint64 returns the low word. Actual VM rates are small.
-    u64::from_be_bytes(word::bytes(result)[24..].try_into().unwrap())
+    word::low_u64(result)
 }
 #[cfg(test)]
 mod tests {

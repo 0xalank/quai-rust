@@ -1,6 +1,9 @@
 //! Atomic Qi spends/creation, output policy, fees, denomination rules and ETXs.
 use crate::{
-    evm::{calls, word::Word},
+    evm::{
+        calls,
+        word::{low_u64, Word},
+    },
     gas,
     qi::{self, OutPoint, Utxo, UtxoView, DENOMINATIONS},
     settlement::Error,
@@ -170,26 +173,32 @@ pub fn apply_qi(
         if !addresses.insert(a) {
             return Err(Error::Invalid("Qi address reuse"));
         }
-        *output_counts.entry(output.denomination).or_insert(0) += 1;
-        if a[0] == prefix && a[1] & 128 == 0 && qi.data.len() == 22 {
+        let local_quai = a[0] == prefix && a[1] & 128 == 0;
+        // 20 bytes of Qi data name the wrapping contract.
+        let wrapper = <[u8; 20]>::try_from(qi.data.as_slice()).ok();
+        let converts = local_quai && qi.data.len() == 22;
+        let aggregated = converts || local_quai && wrapper.is_some();
+        // Go counts every output and then uncounts the ones that conversion or
+        // wrapping aggregates (core/state_processor.go ProcessQiTx).
+        if !aggregated {
+            *output_counts.entry(output.denomination).or_insert(0) += 1;
+        }
+        if converts {
             if conversion && a != aggregate_to {
                 return Err(Error::Invalid("multiple conversion destinations"));
             }
             conversion = true;
             aggregate_to = a;
             aggregate += value;
-            *output_counts.get_mut(&output.denomination).unwrap() -= 1;
             addresses.remove(&a);
             continue;
-        } else if a[0] == prefix && a[1] & 128 == 0 && qi.data.len() == 20 {
-            let owner: [u8; 20] = qi.data.as_slice().try_into().unwrap();
+        } else if let (true, Some(owner)) = (local_quai, wrapper) {
             if !calls::local(&owner, ctx.inputs.location) {
                 return Err(Error::Invalid("Qi wrapping contract"));
             }
             wrapping = true;
             aggregate_to = a;
             aggregate += value;
-            *output_counts.get_mut(&output.denomination).unwrap() -= 1;
             addresses.remove(&a);
             if ctx.prime_number >= FORKS.qi_wrapping_change {
                 continue;
@@ -277,8 +286,7 @@ pub fn apply_qi(
         let excess = fee_quai
             .wrapping_sub(&minimum(ctx, required)?)
             .wrapping_div(&ctx.base_fee);
-        let b = crate::evm::word::bytes(excess);
-        let gas = u64::from_be_bytes(b[24..].try_into().unwrap());
+        let gas = low_u64(excess);
         let mut sender = [0; 20];
         sender[0] = prefix;
         outbound.push(

@@ -14,7 +14,10 @@ fn prime() -> BigUint {
     (BigUint::from(1u8) << 3072usize) - BigUint::from(1_103_717u32)
 }
 fn keyed(key: &[u8], input: &[u8]) -> Hash {
-    let mut m = <Blake2bMac<U32> as Mac>::new_from_slice(key).unwrap();
+    // The keys are the constants b"MuHashElement" and b"MuHashFinalize";
+    // BLAKE2b refuses only keys longer than 64 bytes.
+    let mut m = <Blake2bMac<U32> as Mac>::new_from_slice(key)
+        .expect("MuHash keys are 13 and 14 bytes; BLAKE2b allows 64");
     m.update(input);
     m.finalize().into_bytes().into()
 }

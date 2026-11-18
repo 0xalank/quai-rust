@@ -41,8 +41,14 @@ fn invalid(s: &'static str) -> Error {
 fn unsupported(s: &'static str) -> Error {
     Error::Unsupported(evm::CapabilityError::Context(s))
 }
-fn hash(v: &Option<quai_primitives::schema::common::ProtoHash>) -> Hash {
-    v.as_ref().unwrap().value.as_slice().try_into().unwrap()
+/// `Header::decode` and `BodyHeader::decode` guarantee every field read here.
+/// A missing one means the decoders changed, not that the block is invalid,
+/// so it stops the replay as unsupported.
+fn decoded<T>(v: Option<T>) -> Result<T, Error> {
+    v.ok_or_else(|| unsupported("decoded work object lost a required field"))
+}
+fn hash(v: &Option<quai_primitives::schema::common::ProtoHash>) -> Result<Hash, Error> {
+    decoded(v.as_ref().and_then(|h| h.value.as_slice().try_into().ok()))
 }
 impl EarlyReplay {
     /// A caller-provided private genesis anchor is not a consensus certificate.
@@ -109,15 +115,15 @@ impl EarlyReplay {
         let h = wh.wire();
         let body = object.header().wire();
         let number =
-            uint(from_bytes(h.number.as_deref().unwrap())).ok_or(invalid("height width"))?;
+            uint(from_bytes(decoded(h.number.as_deref())?)).ok_or(invalid("height width"))?;
         if number != self.height + 1
-            || h.parent_hash.as_ref().unwrap().value.as_slice() != self.head
+            || decoded(h.parent_hash.as_ref())?.value.as_slice() != self.head
         {
             return Err(invalid("private replay parent"));
         }
         if number > 3
-            || from_bytes(h.prime_terminus_number.as_deref().unwrap()) != Word::ZERO
-            || h.location.as_ref().unwrap().value != [0, 0]
+            || from_bytes(decoded(h.prime_terminus_number.as_deref())?) != Word::ZERO
+            || decoded(h.location.as_ref())?.value != [0, 0]
             || !object
                 .uncle_headers(FORKS.header_schedule())
                 .map_err(|_| invalid("uncle encoding"))?
@@ -135,29 +141,27 @@ impl EarlyReplay {
         {
             return Err(unsupported("early replay incoming/Qi/reward execution"));
         }
-        if from_bytes(body.base_fee.as_deref().unwrap()) != Word::ZERO
-            || from_bytes(body.total_fees.as_deref().unwrap()) != Word::ZERO
-            || from_bytes(body.avg_tx_fees.as_deref().unwrap()) != Word::ZERO
+        if from_bytes(decoded(body.base_fee.as_deref())?) != Word::ZERO
+            || from_bytes(decoded(body.total_fees.as_deref())?) != Word::ZERO
+            || from_bytes(decoded(body.avg_tx_fees.as_deref())?) != Word::ZERO
         {
             return Err(unsupported(
                 "early zero-fee empty-allocation private blocks",
             ));
         }
-        let gas_limit = body.gas_limit.unwrap();
-        let state_limit = body.state_limit.unwrap();
+        let gas_limit = decoded(body.gas_limit)?;
+        let state_limit = decoded(body.state_limit)?;
+        let coinbase: [u8; 20] = decoded(
+            h.primary_coinbase
+                .as_ref()
+                .and_then(|v| v.value.as_slice().try_into().ok()),
+        )?;
         let mut block = BlockContext {
             vm: evm::Context {
                 address: [0; 20],
                 caller: [0; 20],
                 origin: [0; 20],
-                coinbase: h
-                    .primary_coinbase
-                    .as_ref()
-                    .unwrap()
-                    .value
-                    .as_slice()
-                    .try_into()
-                    .unwrap(),
+                coinbase,
                 etx_sender: [0; 20],
                 location: [0, 0],
                 tx_type: 0,
@@ -165,7 +169,7 @@ impl EarlyReplay {
                 gas_price: Word::ZERO,
                 block_number: Word::from_u64(number),
                 timestamp: Word::from_u64(self.time),
-                difficulty: from_bytes(h.difficulty.as_deref().unwrap()),
+                difficulty: from_bytes(decoded(h.difficulty.as_deref())?),
                 base_fee: Word::ZERO,
                 chain_id: Word::from_u64(1337),
                 state_size: Word::from_u64(self.world.account_count()),
@@ -189,8 +193,9 @@ impl EarlyReplay {
         let mut staged = self.world.clone();
         let mut receipts = vec![];
         for tx in object.transactions() {
+            // The check above refused every other transaction kind.
             let Kind::Quai(q) = tx.kind() else {
-                unreachable!()
+                return Err(unsupported("early replay incoming/Qi/reward execution"));
             };
             if from_bytes(&q.gas_price) != Word::ZERO {
                 return Err(unsupported("early zero fee transaction"));
@@ -219,25 +224,25 @@ impl EarlyReplay {
         let etx_root =
             quai_primitives::trie::secure_root(&[]).map_err(|_| invalid("empty ETX root"))?;
         let utxo_root = MuHash::default().hash();
-        if evm_root != hash(&body.evm_root)
-            || etx_root != hash(&body.etx_set_root)
-            || utxo_root != hash(&body.utxo_root)
+        if evm_root != hash(&body.evm_root)?
+            || etx_root != hash(&body.etx_set_root)?
+            || utxo_root != hash(&body.utxo_root)?
         {
             return Err(invalid("block state commitments"));
         }
         if receipts_root(&receipts).map_err(|_| unsupported("block receipt bounds"))?
-            != hash(&body.receipt_hash)
+            != hash(&body.receipt_hash)?
         {
             return Err(invalid("block receipt commitment"));
         }
-        if block.cumulative_gas != body.gas_used.unwrap()
-            || block.state_used != body.state_used.unwrap()
+        if block.cumulative_gas != decoded(body.gas_used)?
+            || block.state_used != decoded(body.state_used)?
             || block.cumulative_gas > gas_limit
             || block.state_used > state_limit
         {
             return Err(invalid("block execution counters"));
         }
-        if from_bytes(body.quai_state_size.as_deref().unwrap())
+        if from_bytes(decoded(body.quai_state_size.as_deref())?)
             != Word::from_u64(staged.account_count())
         {
             return Err(invalid("block Quai state size"));
@@ -246,7 +251,7 @@ impl EarlyReplay {
         self.world = staged;
         self.height = number;
         self.head = id;
-        self.time = h.time.unwrap();
+        self.time = decoded(h.time)?;
         Ok(Replayed {
             receipts,
             gas_used: block.cumulative_gas,

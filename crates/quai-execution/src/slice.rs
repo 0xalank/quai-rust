@@ -20,3 +20,12 @@ impl From<Width> for crate::qi::ReadError {
 pub(crate) fn array<const N: usize>(bytes: &[u8]) -> Result<[u8; N], Width> {
     bytes.try_into().map_err(|_| Width)
 }
+/// Copy the `N` bytes at offset `at`, or return `Width` when they are not all
+/// there.
+pub(crate) fn field<const N: usize>(bytes: &[u8], at: usize) -> Result<[u8; N], Width> {
+    bytes
+        .get(at..)
+        .and_then(|b| b.first_chunk::<N>())
+        .copied()
+        .ok_or(Width)
+}

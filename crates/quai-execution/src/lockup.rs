@@ -119,7 +119,9 @@ pub fn wrap(
         world.insert(a, Default::default())?;
     }
     let deferred = world.in_block();
-    let v = world.account_mut(&a)?.unwrap();
+    let v = world.account_mut(&a)?.ok_or_else(|| {
+        crate::state_error::ReadError::Unavailable("lockup contract missing after insert".into())
+    })?;
     let key = deposit_key(owner, beneficiary);
     let old = v.get(key)?;
     let before = from_bytes(&old);

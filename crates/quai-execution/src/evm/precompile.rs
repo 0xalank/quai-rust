@@ -1,5 +1,8 @@
 //! Native Ethereum-compatible precompiles used by Quai, with shard translation.
-use super::{CapabilityError, Fault};
+use super::{
+    word::{from_bytes, low_u64},
+    CapabilityError, Fault,
+};
 use num_bigint::BigUint;
 use quai_primitives::transaction::{keccak, Address};
 use sha2::{Digest, Sha256};
@@ -68,7 +71,7 @@ fn get_data(input: &[u8], start: u64, size: u64) -> Vec<u8> {
 /// base and modulus need `ceil(len / 8)² / 3` gas, and a nonzero base or
 /// modulus makes a long exponent cost `8 × (len - 32) / 3` gas.
 fn modexp(input: &[u8]) -> Vec<u8> {
-    let length = |i: u64| u64::from_be_bytes(get_data(input, i * 32 + 24, 8).try_into().unwrap());
+    let length = |i: u64| low_u64(from_bytes(&get_data(input, i * 32, 32)));
     let (b, e, m) = (length(0), length(1), length(2));
     if b == 0 && m == 0 {
         return vec![];
@@ -97,16 +100,16 @@ pub fn required_gas(id: u8, input: &[u8]) -> u64 {
         6 => 150,
         7 => 6000,
         8 => 45000 + 34000 * (input.len() as u64 / 192),
-        9 => {
-            if input.len() == 213 {
-                u32::from_be_bytes(input[..4].try_into().unwrap()) as u64
-            } else {
-                0
-            }
-        }
+        // EIP-152: the round count in the first four bytes of a 213-byte input.
+        9 => match input.first_chunk::<4>() {
+            Some(rounds) if input.len() == 213 => u32::from_be_bytes(*rounds) as u64,
+            _ => 0,
+        },
         _ => u64::MAX,
     }
 }
+// `g1` reads 64 and `g2` 128 bytes: callers pass `data` padded input or
+// `chunks_exact(192)` pieces of exactly those lengths.
 fn g1(input: &[u8]) -> Result<G1, Fault> {
     if input.iter().all(|b| *b == 0) {
         return Ok(G1::zero());
@@ -129,10 +132,13 @@ fn g2(input: &[u8]) -> Result<G2, Fault> {
         .map_err(|_| Fault::Precompile)
 }
 fn encode_g1(value: G1) -> Vec<u8> {
+    // `Fq::to_big_endian` fails only when the slice is not 32 bytes long.
+    const HALF: &str = "a 64-byte buffer splits into two 32-byte coordinates";
     let mut out = vec![0; 64];
     if let Some(a) = AffineG1::from_jacobian(value) {
-        a.x().to_big_endian(&mut out[..32]).unwrap();
-        a.y().to_big_endian(&mut out[32..]).unwrap();
+        let (x, y) = out.split_at_mut(32);
+        a.x().to_big_endian(x).expect(HALF);
+        a.y().to_big_endian(y).expect(HALF);
     }
     out
 }
@@ -241,24 +247,25 @@ fn mix(v: &mut [u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64
     v[c] = v[c].wrapping_add(v[d]);
     v[b] = (v[b] ^ v[c]).rotate_right(63);
 }
-fn blake2f(b: &[u8]) -> Result<Vec<u8>, Fault> {
-    if b.len() != 213 || b[212] > 1 {
+fn blake2f(input: &[u8]) -> Result<Vec<u8>, Fault> {
+    // EIP-152 input: rounds (4 bytes, big-endian), h (8 words), m (16 words),
+    // t (2 words), final-block flag; each word is a little-endian u64.
+    let Ok(b) = <&[u8; 213]>::try_from(input) else {
+        return Err(Fault::Precompile);
+    };
+    if b[212] > 1 {
         return Err(Fault::Precompile);
     }
-    let rounds = u32::from_be_bytes(b[..4].try_into().unwrap());
-    let mut h = [0; 8];
-    let mut m = [0; 16];
-    for (i, v) in h.iter_mut().enumerate() {
-        *v = u64::from_le_bytes(b[4 + i * 8..12 + i * 8].try_into().unwrap());
-    }
-    for (i, v) in m.iter_mut().enumerate() {
-        *v = u64::from_le_bytes(b[68 + i * 8..76 + i * 8].try_into().unwrap());
-    }
+    // Word `i` occupies bytes 4 + 8i .. 12 + 8i; i <= 25 stays below 212.
+    let word = |i: usize| u64::from_le_bytes(std::array::from_fn(|j| b[4 + i * 8 + j]));
+    let rounds = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+    let h: [u64; 8] = std::array::from_fn(word);
+    let m: [u64; 16] = std::array::from_fn(|i| word(8 + i));
     let mut v = [0; 16];
     v[..8].copy_from_slice(&h);
     v[8..].copy_from_slice(&IV);
-    v[12] ^= u64::from_le_bytes(b[196..204].try_into().unwrap());
-    v[13] ^= u64::from_le_bytes(b[204..212].try_into().unwrap());
+    v[12] ^= word(24);
+    v[13] ^= word(25);
     if b[212] == 1 {
         v[14] = !v[14];
     }

@@ -190,6 +190,14 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 		// 4,100 LOG0 entries of one byte each.
 		code = []byte{0x61, 0x10, 0x04, 0x5b, 0x80, 0x60, 0, 0x53, 0x60, 1, 0x60, 0, 0xa0, 0x60, 1, 0x90, 0x03, 0x80, 0x60, 3, 0x57, 0x00}
 		gas = 3000000
+	case "deep-calls":
+		// CALL(GAS, ADDRESS, 0, 0, 0, 0, 0): the contract calls itself with all
+		// the gas a frame may pass on (63/64), so the call chain only ends when a
+		// frame runs out of gas, more than 500 frames deep.
+		code = []byte{0x60, 0, 0x60, 0, 0x60, 0, 0x60, 0, 0x60, 0, 0x30, 0x5a, 0xf1, 0x00}
+		value = 0
+		gas = 30000000
+		pool = 30000000
 	case "bounds-access":
 		// 4,098 access-list tuples and 4,097 keys; the last tuple and key are read.
 		code = append([]byte{0x61, 0x10, 0x00, 0x54, 0x50, 0x73}, boundsAddress(loc, 4096).Bytes()...)
@@ -377,9 +385,9 @@ func main() {
 		}
 	}
 	// Gas-only bounds: call data and log data above 128 KiB, a transaction
-	// above 1 MiB, more than 4,096 access-list tuples and keys, and more than
-	// 4,096 logs in one receipt.
-	for _, kind := range []string{"bounds-data-log", "bounds-access", "bounds-logs", "bounds-wire"} {
+	// above 1 MiB, more than 4,096 access-list tuples and keys, more than
+	// 4,096 logs in one receipt, and a call chain deeper than 500 frames.
+	for _, kind := range []string{"bounds-data-log", "bounds-access", "bounds-logs", "bounds-wire", "deep-calls"} {
 		v = append(v, run(kind, common.Location{0, 0}, 2444574, true))
 	}
 	must(json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"reference_revision": referenceRevision, "vectors": v, "scope": "Actual signed Quai transactions through core.ApplyMessage and actual applyTransaction finalization on identical committed private pre-state; consensus errors are rolled back as rejected block transactions. No full block admission or public network."}))

@@ -72,6 +72,14 @@ pub struct AppliedTransaction {
     pub reverted: bool,
     pub contract_address: Option<Address>,
 }
+/// An account that `set_balance` created or updated earlier in the same
+/// transaction. Only a bug can make it absent; that stops settlement as
+/// unavailable state and never rejects the transaction.
+fn existing<'a>(world: &'a mut World, a: &Address) -> Result<&'a mut Account, Error> {
+    world
+        .account_mut(a)?
+        .ok_or_else(|| Error::Unavailable("settled account missing".into()))
+}
 fn balance(world: &World, a: &Address) -> Result<Word, Error> {
     Ok(world.account(a)?.map(|v| v.balance).unwrap_or(Word::ZERO))
 }
@@ -203,7 +211,7 @@ fn apply_authenticated(
         let height =
             evm::word::uint(context.block_number).ok_or(Error::Invalid("authority height"))?;
         if height < crate::economic_state::YEAR {
-            staged.account_mut(&sender)?.unwrap().nonce = nonce.wrapping_add(1);
+            existing(&mut staged, &sender)?.nonce = nonce.wrapping_add(1);
         }
         let successful =
             crate::economic_state::authority(&mut staged, &tx.data, height, tx.to.is_none())?;
@@ -229,9 +237,13 @@ fn apply_authenticated(
         )
     } else if let Some(target) = tx.to {
         context.address = target;
-        if tx.data.len() == 27 && tx.data.starts_with(b"Suicide") && target == sender {
+        // "Suicide" followed by a 20-byte beneficiary: 27 bytes of data.
+        let suicide = tx
+            .data
+            .strip_prefix(b"Suicide")
+            .and_then(|rest| Address::try_from(rest).ok());
+        if let (Some(beneficiary), true) = (suicide, target == sender) {
             early_return = true;
-            let beneficiary: Address = tx.data[7..].try_into().unwrap();
             if !calls::local(&beneficiary, context.location) {
                 return Err(Error::Invalid("selfdestruct_beneficiary"));
             }
@@ -241,7 +253,7 @@ fn apply_authenticated(
                 .ok_or(CapabilityError::Context("selfdestruct prime context"))?;
             let amount = balance(&staged, &sender)?;
             if prime >= FORKS.polaris {
-                staged.account_mut(&sender)?.unwrap().nonce = nonce.wrapping_add(1);
+                existing(&mut staged, &sender)?.nonce = nonce.wrapping_add(1);
                 set_balance(&mut staged, sender, Word::ZERO)?;
                 if beneficiary != sender {
                     add_balance(&mut staged, beneficiary, amount)?;
@@ -274,7 +286,7 @@ fn apply_authenticated(
                 None,
             )
         } else {
-            staged.account_mut(&sender)?.unwrap().nonce = nonce.wrapping_add(1);
+            existing(&mut staged, &sender)?.nonce = nonce.wrapping_add(1);
             (
                 calls::execute_call_with_env(
                     &mut staged,
@@ -449,8 +461,8 @@ pub fn apply_external(
                 &environment,
             )?
         } else {
-            let nonce = staged.account(&zero)?.unwrap().nonce;
-            staged.account_mut(&zero)?.unwrap().nonce = nonce.wrapping_add(1);
+            let account = existing(&mut staged, &zero)?;
+            account.nonce = account.nonce.wrapping_add(1);
             (
                 calls::execute_call_with_env(
                     &mut staged,

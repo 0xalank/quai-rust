@@ -1,5 +1,6 @@
 //! Fixed-width EVM arithmetic, including 512-bit intermediates for modular ops.
 use crypto_bigint::{Encoding, U256, U512};
+use quai_primitives::transaction::Address;
 pub type Word = U256;
 pub fn bytes(v: Word) -> [u8; 32] {
     v.to_be_bytes()
@@ -11,12 +12,27 @@ pub fn from_bytes(v: &[u8]) -> Word {
     Word::from_be_slice(&b)
 }
 pub fn uint(v: Word) -> Option<u64> {
-    let b = bytes(v);
-    if b[..24].iter().any(|b| *b != 0) {
+    let [high @ .., b0, b1, b2, b3, b4, b5, b6, b7] = bytes(v);
+    if high.iter().any(|b| *b != 0) {
         None
     } else {
-        Some(u64::from_be_bytes(b[24..].try_into().unwrap()))
+        Some(u64::from_be_bytes([b0, b1, b2, b3, b4, b5, b6, b7]))
     }
+}
+/// The low 64 bits of `v`, as Go `big.Int.Uint64` returns them.
+pub fn low_u64(v: Word) -> u64 {
+    let [.., b0, b1, b2, b3, b4, b5, b6, b7] = bytes(v);
+    u64::from_be_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
+}
+/// The low 20 bytes of a 32-byte value: the address in a stack word (Go
+/// `Bytes20`) or in a Keccak-256 hash (Go `Keccak256(...)[12:]`).
+pub fn low_address(b: [u8; 32]) -> Address {
+    let [_, _, _, _, _, _, _, _, _, _, _, _, address @ ..] = b;
+    address
+}
+/// The address in a stack word.
+pub fn address(v: Word) -> Address {
+    low_address(bytes(v))
 }
 pub fn negative(v: Word) -> bool {
     v.bit_vartime(255)

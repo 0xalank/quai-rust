@@ -118,9 +118,9 @@ fn latest(export: &Path, data: &Path) -> Checkpoint {
     let (_, path) = checkpoint::list(&dir).unwrap().into_iter().next().unwrap();
     checkpoint::read(&path).unwrap()
 }
-/// Roots, digest, confirmations, window and counters: everything a
-/// continuation depends on, without the version id (which depends on where
-/// the earlier commits fell).
+/// Roots, digest, confirmations, window, prime controller state, region
+/// rollups and counters: everything a continuation depends on, without the
+/// version id (which depends on where the earlier commits fell).
 fn essence(c: &Checkpoint) -> impl PartialEq + std::fmt::Debug {
     let s = c.state.clone().unwrap();
     (
@@ -132,6 +132,7 @@ fn essence(c: &Checkpoint) -> impl PartialEq + std::fmt::Debug {
         c.orders.clone(),
         c.counters.clone(),
         (c.height, c.block),
+        c.prime.clone(),
     )
 }
 
@@ -305,5 +306,61 @@ fn a_killed_process_resumes_from_the_previous_checkpoint() {
     assert_eq!(s.failure, None, "{}", s.line());
     assert_eq!((s.resumed_from, s.highest_passed), (Some(3), Some(8)));
     assert!(!partial.exists());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn checkpoints_without_a_prime_section_resume_before_the_kick_in() {
+    // A checkpoint written before the prime controllers were ported has no
+    // prime section and keeps the region rollups in its state section. The
+    // replay rebuilds the controller state (every prime block keeps the
+    // starting rate before ControllerKickInBlock) and ends where a straight
+    // run ends.
+    let export = mainnet_slice();
+    let base = unique("prime-baseline");
+    run(&options(&export, &base, None, false)).unwrap();
+    let expected = latest(&export, &base);
+    assert!(expected.prime.is_some());
+    let data = unique("prime-legacy");
+    run(&options(&export, &data, Some(5), false)).unwrap();
+    let dir = dir_of(&export, &data);
+    let path = checkpoint::path(&dir, 5);
+    let mut legacy = checkpoint::read(&path).unwrap();
+    let prime = legacy.prime.take().unwrap();
+    for (id, _, rollup) in &mut legacy.state.as_mut().unwrap().confirmations {
+        *rollup = prime
+            .rollups
+            .iter()
+            .find(|(h, _)| h == id)
+            .map(|(_, r)| r.clone());
+    }
+    std::fs::write(&path, legacy.encode()).unwrap();
+    let s = run(&options(&export, &data, None, true)).unwrap();
+    assert_eq!(s.failure, None, "{}", s.line());
+    assert_eq!((s.resumed_from, s.highest_passed), (Some(5), Some(8)));
+    assert_eq!(essence(&latest(&export, &data)), essence(&expected));
+    // A prime section whose rates are not the rates of its prime records,
+    // or whose state does not follow the prime head, is refused.
+    let path = checkpoint::path(&dir, 8);
+    let good = checkpoint::read(&path).unwrap();
+    let mut wrong = good.clone();
+    let rates = &mut wrong.prime.as_mut().unwrap().rates;
+    let last = rates.len() - 1;
+    rates[last][31] ^= 1;
+    std::fs::write(&path, wrong.encode()).unwrap();
+    let e = run(&options(&export, &data, None, true)).unwrap_err();
+    assert!(
+        e.contains("checkpoint 8 rejected") && e.contains("rate of prime"),
+        "{e}"
+    );
+    let mut wrong = good.clone();
+    wrong.prime.as_mut().unwrap().head = [9; 32];
+    std::fs::write(&path, wrong.encode()).unwrap();
+    let e = run(&options(&export, &data, None, true)).unwrap_err();
+    assert!(e.contains("checkpoint 8 rejected"), "{e}");
+    std::fs::write(&path, good.encode()).unwrap();
+    let s = run(&options(&export, &data, None, true)).unwrap();
+    assert_eq!((s.end, s.resumed_from), (End::Complete, Some(8)));
+    std::fs::remove_dir_all(base).unwrap();
     std::fs::remove_dir_all(data).unwrap();
 }

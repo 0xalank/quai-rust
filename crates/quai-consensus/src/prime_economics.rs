@@ -30,7 +30,11 @@ fn add(a: Uint, b: Uint) -> Result<Uint, Error> {
 }
 pub(crate) fn ratio(a: Uint, b: Uint, d: Uint) -> Result<Uint, Error> {
     if d == Uint::ZERO {
-        return Err(Error::Invalid("zero prime conversion divisor"));
+        // Only a zero conversion total reaches this: big.Int.Div panics in
+        // core/slice.go Append, so go-quai has no rule to apply.
+        return Err(Error::Unsupported(
+            "zero prime conversion divisor (go-quai panics)",
+        ));
     }
     narrow(
         a.resize::<8>()
@@ -93,10 +97,15 @@ fn conversions_impl(
 ) -> Result<Converted, Error> {
     let number = parent.number(0)?;
     let h = parent.object().header().wire();
-    let exchange = share_rules::uint(h.exchange_rate.as_deref().unwrap())?;
-    let discount = share_rules::uint(h.k_quai_discount.as_deref().unwrap())?;
+    let exchange = share_rules::uint(h.exchange_rate.as_deref().unwrap_or_default())?;
+    let discount = share_rules::uint(h.k_quai_discount.as_deref().unwrap_or_default())?;
     if discount > u(controllers::DISCOUNT_SCALE) {
-        return Err(Error::Invalid("prime discount range"));
+        // A valid prime block keeps its discount at most KQuaiDiscountMultiplier
+        // (an EWMA of bounded values from StartingKQuaiDiscount); the signed
+        // arithmetic beyond it is not ported.
+        return Err(Error::Unsupported(
+            "prime discount above KQuaiDiscountMultiplier",
+        ));
     }
     let increasing = if number > controllers::WINDOW {
         exchange > old_exchange.ok_or(Error::Unavailable("prime conversion historical rate"))?
@@ -106,8 +115,8 @@ fn conversions_impl(
     let quote = economics::reward_quote_at_difficulty(
         parent.header(),
         exchange,
-        share_rules::uint(h.avg_tx_fees.as_deref().unwrap())?,
-        share_rules::uint(h.miner_difficulty.as_deref().unwrap())?,
+        share_rules::uint(h.avg_tx_fees.as_deref().unwrap_or_default())?,
+        share_rules::uint(h.miner_difficulty.as_deref().unwrap_or_default())?,
     )?;
     let to_quai = |n| ratio(n, quote.conversion_quai, quote.qi);
     let to_qi = |n| ratio(n, quote.qi, quote.conversion_quai);
@@ -115,11 +124,11 @@ fn conversions_impl(
         if number > quai_primitives::spec::FORKS.conversion_slip_change {
             cubic_discount::apply(
                 amount,
-                share_rules::uint(h.conversion_flow_amount.as_deref().unwrap())?,
+                share_rules::uint(h.conversion_flow_amount.as_deref().unwrap_or_default())?,
             )
         } else {
             cubic_discount::apply(
-                share_rules::uint(h.conversion_flow_amount.as_deref().unwrap())?,
+                share_rules::uint(h.conversion_flow_amount.as_deref().unwrap_or_default())?,
                 amount,
             )
         }
@@ -260,11 +269,13 @@ impl Prepared {
             return Err(Error::Invalid("prime controller child binding"));
         }
         let h = child.object().header().wire();
-        if share_rules::uint(h.conversion_flow_amount.as_deref().unwrap())?
+        if share_rules::uint(h.conversion_flow_amount.as_deref().unwrap_or_default())?
             != self.fields.conversion_flow
-            || share_rules::uint(h.exchange_rate.as_deref().unwrap())? != self.fields.exchange_rate
-            || share_rules::uint(h.k_quai_discount.as_deref().unwrap())? != self.fields.discount
-            || share_rules::uint(h.miner_difficulty.as_deref().unwrap())?
+            || share_rules::uint(h.exchange_rate.as_deref().unwrap_or_default())?
+                != self.fields.exchange_rate
+            || share_rules::uint(h.k_quai_discount.as_deref().unwrap_or_default())?
+                != self.fields.discount
+            || share_rules::uint(h.miner_difficulty.as_deref().unwrap_or_default())?
                 != self.fields.miner_difficulty
         {
             return Err(Error::Invalid("prime economic controller fields"));
@@ -305,8 +316,8 @@ pub fn prepare_component(
         return Err(Error::Invalid("prime controller override branch"));
     }
     let h = parent.object().header().wire();
-    let previous = share_rules::uint(h.exchange_rate.as_deref().unwrap())?;
-    let miner = share_rules::uint(h.miner_difficulty.as_deref().unwrap())?;
+    let previous = share_rules::uint(h.exchange_rate.as_deref().unwrap_or_default())?;
+    let miner = share_rules::uint(h.miner_difficulty.as_deref().unwrap_or_default())?;
     let choice = choice_window::derive(
         grandparent,
         previous,
@@ -323,19 +334,26 @@ pub fn prepare_component(
     };
     let fields = Fields {
         conversion_flow: controllers::conversion_flow(
-            share_rules::uint(h.conversion_flow_amount.as_deref().unwrap())?,
+            share_rules::uint(h.conversion_flow_amount.as_deref().unwrap_or_default())?,
             converted.actual,
         )?,
         exchange_rate: exchange,
         discount: controllers::k_quai_discount(
             number,
-            share_rules::uint(h.k_quai_discount.as_deref().unwrap())?,
+            share_rules::uint(h.k_quai_discount.as_deref().unwrap_or_default())?,
             old_exchange,
             exchange,
         )?,
         miner_difficulty: controllers::miner_difficulty(
             number,
-            share_rules::uint(parent.header().wire().difficulty.as_deref().unwrap())?,
+            share_rules::uint(
+                parent
+                    .header()
+                    .wire()
+                    .difficulty
+                    .as_deref()
+                    .unwrap_or_default(),
+            )?,
             miner,
         )?,
     };

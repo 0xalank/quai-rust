@@ -30,9 +30,12 @@ fn narrow(n: U512) -> Result<Uint, Error> {
 fn low64(n: Uint) -> u64 {
     u64::from_be_bytes(n.to_be_bytes()[24..].try_into().unwrap())
 }
-/// Normalize the actual ETXs using parent miner difficulty and reference uint64
-/// wrap semantics. Signed corrections retain Go's two Euclidean divisions.
-/// Negative final difficulty is outside this explicitly bounded component.
+/// core/exchange_controller.go CalculateTokenChoicesSet, the choices of one
+/// block: normalize the priced ETXs with the parent's miner difficulty and
+/// Go's uint64 wrap. Signed corrections keep Go's two Euclidean divisions.
+/// Go has no bound on the number of ETXs. A negative final difficulty needs
+/// a realized amount above six times the actual amount, which the conversion
+/// pricing cannot produce; it stops as unsupported.
 pub fn derive(
     parent: &Record,
     exchange: Uint,
@@ -41,9 +44,6 @@ pub fn derive(
     realized: Uint,
     miner: Uint,
 ) -> Result<Choice, Error> {
-    if etxs.len() > 8192 {
-        return Err(Error::ResourceLimit("token choice ETXs"));
-    }
     let body = parent.object().header().wire();
     let quote = economics::reward_quote_at_difficulty(
         parent.header(),
@@ -362,5 +362,76 @@ impl Window {
     }
     pub fn exchange_rate(&self, parent: Uint, miner: Uint) -> Result<Uint, Error> {
         controllers::exchange_rate_from_sum(self.number, parent, miner, self.sum)
+    }
+    /// The block's parent, when the window was advanced from it.
+    pub fn parent(&self) -> Option<Hash> {
+        self.parent
+    }
+    /// The rows in logical order (types.TokenChoiceSet index order).
+    pub fn choices(&self) -> Vec<Choice> {
+        (0..N).map(|i| self.choice(i).unwrap()).collect()
+    }
+    /// A window bound to `block` at `number` from rows in logical order, as
+    /// rawdb.ReadTokenChoicesSet returns them.
+    pub fn from_choices(
+        block: Hash,
+        number: u64,
+        parent: Option<Hash>,
+        rows: &[Choice],
+    ) -> Result<Self, Error> {
+        if rows.len() != N {
+            return Err(Error::Invalid("token choice set size"));
+        }
+        let mut out = Self::empty_at(block, number);
+        out.parent = parent;
+        for (i, row) in rows.iter().enumerate() {
+            if *row != Choice::default() {
+                Arc::make_mut(&mut out.chunks[i / CHUNK])[i % CHUNK] = *row;
+                out.sum = out.sum.wrapping_add(&row.difficulty.resize());
+            }
+        }
+        Ok(out)
+    }
+    /// Block, number, parent and the rows in logical order (replay checkpoints).
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + 8 + 33 + N * 48);
+        out.extend(self.block);
+        out.extend(self.number.to_be_bytes());
+        match self.parent {
+            Some(p) => {
+                out.push(1);
+                out.extend(p);
+            }
+            None => out.push(0),
+        }
+        for i in 0..N {
+            out.extend(self.choice(i).unwrap().encode());
+        }
+        out
+    }
+    pub fn decode(raw: &[u8]) -> io::Result<Self> {
+        need(raw.len() >= 41, "choice window bytes")?;
+        let block = crate::slice::array(&raw[..32])?;
+        let number = u64::from_be_bytes(crate::slice::array(&raw[32..40])?);
+        let (parent, rows) = match raw[40] {
+            0 => (None, &raw[41..]),
+            1 => {
+                need(raw.len() >= 73, "choice window parent")?;
+                (Some(crate::slice::array(&raw[41..73])?), &raw[73..])
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "choice window flag",
+                ))
+            }
+        };
+        need(rows.len() == N * 48, "choice window rows")?;
+        let rows = rows
+            .chunks(48)
+            .map(Choice::decode)
+            .collect::<io::Result<Vec<_>>>()?;
+        Self::from_choices(block, number, parent, &rows)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "choice window rows"))
     }
 }

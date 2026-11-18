@@ -10,9 +10,19 @@
 //! body  environment, genesis hash, reference revision, height, zone hash,
 //!       counters, context heads, ancestry windows (record bytes and append
 //!       snapshots), prime views, orders, and for --state: version id,
-//!       roots, digest, confirmation and rollup lists
+//!       roots, digest, confirmation lists (with the region rollups in
+//!       checkpoints without a prime section);
+//!       then, in checkpoints of this version, the prime section: the prime
+//!       controller state (head, exchange rates by prime number, the head's
+//!       inbound ETXs, the token choice sets of the head and its parent) and
+//!       the region rollups of recent region and prime blocks
 //! sha256 of magic and body (32 bytes)
 //! ```
+//!
+//! A checkpoint without the prime section (written before the prime
+//! controllers were ported) is read as before; the replay rebuilds the
+//! controller state from it only while its prime head is before
+//! ControllerKickInBlock.
 //!
 //! A writer writes `<name>.tmp`, syncs it, renames it and syncs the
 //! directory, so an interrupted write never replaces a complete checkpoint.
@@ -55,6 +65,23 @@ pub struct StateSection {
     /// (block, confirmed ETXs, region rollup if the block was region or prime)
     pub confirmations: Vec<(Hash, Vec<u8>, Option<Vec<u8>>)>,
 }
+/// The prime controller state and the recent region rollups.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrimeSection {
+    pub head: Hash,
+    pub number: u64,
+    /// The prime number of `rates[0]`.
+    pub first: u64,
+    /// 32-byte big-endian exchange rates of the prime blocks `first..=number`.
+    pub rates: Vec<Hash>,
+    /// The head's inbound ETXs (`store::encode_tx_list`), when known.
+    pub inbound: Option<Vec<u8>>,
+    /// `choice_window::Window::encode` of the head's parent and of the head.
+    pub parent_window: Option<Vec<u8>>,
+    pub head_window: Vec<u8>,
+    /// (block, region rollup), oldest first.
+    pub rollups: Vec<(Hash, Vec<u8>)>,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checkpoint {
     pub environment: String,
@@ -68,6 +95,7 @@ pub struct Checkpoint {
     pub prime_views: Vec<Vec<u8>>,
     pub orders: Vec<(Hash, u8)>,
     pub state: Option<StateSection>,
+    pub prime: Option<PrimeSection>,
 }
 
 struct W(Vec<u8>);
@@ -229,6 +257,24 @@ impl Checkpoint {
             }
             None => w.u8(0),
         }
+        if let Some(p) = &self.prime {
+            w.u8(1);
+            w.hash(&p.head);
+            w.u64(p.number);
+            w.u64(p.first);
+            w.u64(p.rates.len() as u64);
+            for r in &p.rates {
+                w.hash(r);
+            }
+            w.opt_bytes(&p.inbound);
+            w.opt_bytes(&p.parent_window);
+            w.bytes(&p.head_window);
+            w.u64(p.rollups.len() as u64);
+            for (h, r) in &p.rollups {
+                w.hash(h);
+                w.bytes(r);
+            }
+        }
         let digest: Hash = Sha256::digest(&w.0).into();
         w.0.extend(digest);
         w.0
@@ -334,6 +380,36 @@ impl Checkpoint {
             }
             _ => return Err(bad("checkpoint state flag")),
         };
+        let prime = if r.at == body.len() {
+            None
+        } else {
+            if r.u8()? != 1 {
+                return Err(bad("checkpoint prime flag"));
+            }
+            let head = r.hash()?;
+            let number = r.u64()?;
+            let first = r.u64()?;
+            let n = r.count(32)?;
+            let rates = (0..n).map(|_| r.hash()).collect::<io::Result<Vec<_>>>()?;
+            let inbound = r.opt_bytes()?;
+            let parent_window = r.opt_bytes()?;
+            let head_window = r.bytes()?;
+            let n = r.count(40)?;
+            let mut rollups = Vec::with_capacity(n);
+            for _ in 0..n {
+                rollups.push((r.hash()?, r.bytes()?));
+            }
+            Some(PrimeSection {
+                head,
+                number,
+                first,
+                rates,
+                inbound,
+                parent_window,
+                head_window,
+                rollups,
+            })
+        };
         if r.at != body.len() {
             return Err(bad("checkpoint trailing bytes"));
         }
@@ -348,6 +424,7 @@ impl Checkpoint {
             prime_views,
             orders,
             state,
+            prime,
         })
     }
 }
@@ -406,7 +483,7 @@ pub fn read(path: &Path) -> io::Result<Checkpoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn sample(state: bool) -> Checkpoint {
+    fn sample(state: bool, prime: bool) -> Checkpoint {
         Checkpoint {
             environment: "colosseum".into(),
             genesis: [1; 32],
@@ -443,12 +520,22 @@ mod tests {
                 digest: [11; 32],
                 confirmations: vec![([12; 32], vec![0, 0, 0, 0], None)],
             }),
+            prime: prime.then(|| PrimeSection {
+                head: [3; 32],
+                number: 3,
+                first: 0,
+                rates: vec![[13; 32]; 4],
+                inbound: Some(vec![0, 0, 0, 0]),
+                parent_window: None,
+                head_window: vec![14; 41],
+                rollups: vec![([15; 32], vec![0, 0, 0, 0])],
+            }),
         }
     }
     #[test]
     fn encoding_round_trips_and_any_changed_byte_is_rejected() {
-        for state in [false, true] {
-            let c = sample(state);
+        for (state, prime) in [(false, false), (true, false), (false, true), (true, true)] {
+            let c = sample(state, prime);
             let raw = c.encode();
             assert_eq!(Checkpoint::decode(&raw).unwrap(), c);
             for i in [0, MAGIC.len(), raw.len() / 2, raw.len() - 1] {

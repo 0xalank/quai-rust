@@ -7,8 +7,8 @@
 //! ETXs of a block are the ETXs its parent confirmed, and the shared
 //! `quai_consensus::confirmation::confirm` (go-quai core/slice.go
 //! CollectNewlyConfirmedEtxs) derives what the block confirms. This module
-//! supplies what that reads: the orders of recent blocks and the region
-//! rollups and confirmations recorded here.
+//! supplies what that reads besides the orders and region rollups the replay
+//! keeps in both modes: the confirmations recorded here.
 //!
 //! The state is the lazy World, UTXO, ETX and lockup state of
 //! `state_store::restore_sparse` over the replay's state database
@@ -36,7 +36,7 @@ use std::io;
 use std::sync::Arc;
 
 /// Confirmation and rollup lists kept for recent blocks.
-const KEEP: usize = 4096;
+pub const KEEP: usize = 4096;
 
 pub struct StateReplay {
     pub profile: Profile,
@@ -46,22 +46,21 @@ pub struct StateReplay {
     pub past: PastDb,
     pub store: StateStore,
     confirmed: HashMap<Hash, Arc<Vec<Transaction>>>,
-    region_rollups: HashMap<Hash, Arc<Vec<Transaction>>>,
     log: VecDeque<Hash>,
     pub executed: u64,
     /// Zone height of the last committed version.
     pub committed_height: u64,
 }
-/// The orders of recent blocks and, with `--state`, this replay's recorded
-/// region rollups and confirmations: what `Verifier::validate_block` reads
+/// The orders and region rollups of recent blocks and, with `--state`, this
+/// replay's recorded confirmations: what `Verifier::validate_block` reads
 /// through `confirmation::Known`.
 pub struct KnownView<'a> {
     pub orders: &'a HashMap<Hash, u8>,
+    pub region_rollups: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
     pub maps: Option<Maps<'a>>,
 }
-/// The recorded region rollups and confirmations of a state replay.
+/// The recorded confirmations of a state replay.
 pub struct Maps<'a> {
-    region_rollups: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
     confirmed: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
 }
 impl Known for KnownView<'_> {
@@ -72,9 +71,9 @@ impl Known for KnownView<'_> {
             .ok_or(Error::Unavailable("confirmed ancestry order"))
     }
     fn region_rollup(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
-        self.maps
-            .as_ref()
-            .and_then(|m| m.region_rollups.get(id).cloned())
+        self.region_rollups
+            .get(id)
+            .cloned()
             .ok_or(Error::Unavailable("committed region rollup"))
     }
     fn confirmed(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
@@ -100,16 +99,16 @@ impl StateReplay {
             past,
             store,
             confirmed: HashMap::new(),
-            region_rollups: HashMap::new(),
             log: VecDeque::new(),
             executed: 0,
             committed_height: 0,
         };
         s.confirmed.insert(genesis, Arc::new(vec![]));
-        s.region_rollups.insert(genesis, Arc::new(vec![]));
         Ok(s)
     }
-    /// Continue from a checkpoint: `store` already holds its version.
+    /// Continue from a checkpoint: `store` already holds its version. The
+    /// region rollups of a checkpoint without a prime section come back too.
+    #[allow(clippy::type_complexity)]
     pub fn resume(
         profile: Profile,
         genesis: Hash,
@@ -118,22 +117,22 @@ impl StateReplay {
         section: &StateSection,
         height: u64,
         executed: u64,
-    ) -> io::Result<Self> {
+    ) -> io::Result<(Self, Vec<(Hash, Arc<Vec<Transaction>>)>)> {
         let mut s = Self::create(profile, genesis, store, past)?;
         s.committed_height = height;
         s.executed = executed;
+        let mut rollups = vec![];
         for (id, confirmed, rollup) in &section.confirmations {
             s.confirmed
                 .insert(*id, Arc::new(store::decode_tx_list(confirmed)?));
             if let Some(r) = rollup {
-                s.region_rollups
-                    .insert(*id, Arc::new(store::decode_tx_list(r)?));
+                rollups.push((*id, Arc::new(store::decode_tx_list(r)?)));
             }
             if *id != genesis {
                 s.log.push_back(*id);
             }
         }
-        Ok(s)
+        Ok((s, rollups))
     }
     /// Persist the overlay as the version of `block` and restart the overlay.
     pub fn commit_state(&mut self, height: u64, block: Hash) -> io::Result<()> {
@@ -167,37 +166,23 @@ impl StateReplay {
             accounts: c.roots.accounts,
             utxo_count: c.roots.utxo_count,
             digest: c.digest,
+            // The region rollups live in the checkpoint's prime section.
             confirmations: self
                 .confirmed
                 .iter()
                 .filter(|(id, _)| !in_log.contains(id))
-                .map(|(id, list)| {
-                    (
-                        *id,
-                        store::encode_tx_list(list),
-                        self.region_rollups
-                            .get(id)
-                            .map(|r| store::encode_tx_list(r)),
-                    )
-                })
+                .map(|(id, list)| (*id, store::encode_tx_list(list), None))
                 .chain(self.log.iter().filter_map(|id| {
-                    Some((
-                        *id,
-                        store::encode_tx_list(self.confirmed.get(id)?),
-                        self.region_rollups
-                            .get(id)
-                            .map(|r| store::encode_tx_list(r)),
-                    ))
+                    Some((*id, store::encode_tx_list(self.confirmed.get(id)?), None))
                 }))
                 .collect(),
         }
     }
-    /// The recorded maps and the execution parent state, borrowed together
-    /// for one `Verifier::validate_block` call.
+    /// The recorded confirmations and the execution parent state, borrowed
+    /// together for one `Verifier::validate_block` call.
     pub fn split(&mut self) -> (Maps<'_>, ParentState<'_, PastDb>) {
         (
             Maps {
-                region_rollups: &self.region_rollups,
                 confirmed: &self.confirmed,
             },
             ParentState {
@@ -211,8 +196,6 @@ impl StateReplay {
     pub fn record(
         &mut self,
         zone: &Record,
-        order: u8,
-        cross: Vec<Transaction>,
         confirmed: Vec<Transaction>,
         created: Vec<(OutPoint, u8)>,
     ) -> Result<(), Error> {
@@ -228,14 +211,10 @@ impl StateReplay {
                 .collect(),
             created,
         );
-        if order <= 1 {
-            self.region_rollups.insert(id, Arc::new(cross));
-        }
         self.confirmed.insert(id, Arc::new(confirmed));
         self.log.push_back(id);
         if self.log.len() > KEEP {
             let old = self.log.pop_front().unwrap();
-            self.region_rollups.remove(&old);
             self.confirmed.remove(&old);
         }
         self.executed += 1;

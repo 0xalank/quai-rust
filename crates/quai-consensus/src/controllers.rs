@@ -48,8 +48,9 @@ pub fn miner_difficulty(number: u64, difficulty: Uint, previous: Uint) -> Result
     )
 }
 
-/// `old_exchange` is the authenticated prime rate WINDOW blocks behind the
-/// input block. A missing historical rate must never become a zero/default.
+/// core/headerchain.go ComputeKQuaiDiscount. `old_exchange` is the rate of
+/// the canonical prime block WINDOW blocks behind the input block. A missing
+/// historical rate never becomes a zero/default.
 pub fn k_quai_discount(
     number: u64,
     previous: Uint,
@@ -61,9 +62,15 @@ pub fn k_quai_discount(
             quai_primitives::spec::ECONOMICS.k_quai_discount,
         ));
     }
+    if number <= WINDOW {
+        return Ok(Uint::ZERO);
+    }
     let old = old_exchange.ok_or(Error::Unavailable("controller historical exchange rate"))?;
     if old == Uint::ZERO {
-        return Err(Error::Invalid("controller zero historical exchange rate"));
+        // big.Int.Div by zero: go-quai panics, it has no rule to apply.
+        return Err(Error::Unsupported(
+            "controller zero historical exchange rate (go-quai panics)",
+        ));
     }
     let increasing = exchange > old;
     let delta = if increasing {
@@ -95,7 +102,10 @@ pub fn calculate_k_quai(
     xb_star: Uint,
 ) -> Result<Uint, Error> {
     if miner == Uint::ZERO {
-        return Err(Error::Invalid("controller zero miner difficulty"));
+        // big.Int.Quo by a zero denominator: go-quai panics.
+        return Err(Error::Unsupported(
+            "controller zero miner difficulty (go-quai panics)",
+        ));
     }
     let d1 = miner.resize::<16>().shl_vartime(64);
     let denominator = d1.wrapping_mul(&U1024::from_u64(1000));
@@ -191,13 +201,21 @@ fn exchange_rate_with_sum(
     }
     let best = narrow(sum().wrapping_div(&u(WINDOW)))?;
     if best <= Uint::ONE {
-        return Err(Error::Invalid("controller zero choice logarithm"));
+        // common.LogBig(bestDiff) is zero (or BinaryLog of zero): the
+        // division in CalculateBetaFromMiningChoiceAndConversions panics.
+        return Err(Error::Unsupported(
+            "controller zero choice logarithm (go-quai panics)",
+        ));
     }
     let logarithm = quai_execution::evm::state_gas::log_q64(best);
-    let xb: Uint = best
+    let xb = best
         .resize::<16>()
         .shl_vartime(64)
-        .wrapping_div(&U1024::from_u128(logarithm))
-        .resize();
-    calculate_k_quai(number, parent, miner, xb)
+        .wrapping_div(&U1024::from_u128(logarithm));
+    if xb.bits_vartime() > 256 {
+        return Err(Error::Unsupported(
+            "controller choice signal exceeds 256 bits",
+        ));
+    }
+    calculate_k_quai(number, parent, miner, xb.resize())
 }

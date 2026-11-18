@@ -10,9 +10,14 @@
 //!    binding, parent hash and number in each context, body commitments, the
 //!    block proof-of-work, the computed order against the exported records,
 //!    header/inclusion/append rules and PCRC in each coincident context, the
-//!    uncled entropy, the prime starting values, the ETX rollup root and the
-//!    region/zone rollup agreement; with `--state`, the confirmed ETXs and
-//!    the execution of the zone block with every state root.
+//!    uncled entropy, the prime controllers (`prime_controller`: the starting
+//!    values up to ControllerKickInBlock, then the controller fields computed
+//!    on the parent and the conversion pricing of Append), the ETX rollup root
+//!    and the region/zone rollup agreement; with `--state`, the confirmed ETXs
+//!    and the execution of the zone block with every state root.
+//!
+//! Both modes keep the region rollups of recent blocks and the prime
+//! controller state; checkpoints carry them in their prime section.
 use crate::checkpoint::{self, Checkpoint};
 use crate::log::Log;
 use crate::pow::{Done, Job, Pool};
@@ -21,15 +26,19 @@ use crate::spec::Chain;
 use crate::state::{self, StateReplay};
 use crate::store::{self, PastDb, StateStore};
 use crate::window::Window;
+use crypto_bigint::Encoding as _;
 use quai_consensus::{
-    block,
+    block, choice_window,
     history::{History, Record},
     placement::{self, CandidateIndex, Snapshot},
     pow::SharedCaches,
+    prime_controller,
+    rules::Uint,
     share_rules,
     verifier::Verifier,
     Error,
 };
+use quai_primitives::transaction::Transaction;
 use quai_primitives::{encode_hex, work, Hash};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -239,6 +248,11 @@ struct Checker {
     heads: [Option<(Hash, u64)>; 3],
     orders: HashMap<Hash, u8>,
     order_log: VecDeque<Hash>,
+    /// Region rollups of recent region and prime blocks (both modes).
+    rollups: HashMap<Hash, Arc<Vec<Transaction>>>,
+    rollup_log: VecDeque<Hash>,
+    /// The prime controller state after the prime head.
+    controller: Option<prime_controller::State>,
     now: u64,
     /// The export carries the stored zone receipts.
     receipts: bool,
@@ -286,6 +300,9 @@ impl Checker {
             heads: [None; 3],
             orders: HashMap::new(),
             order_log: VecDeque::new(),
+            rollups: HashMap::new(),
+            rollup_log: VecDeque::new(),
+            controller: None,
             now: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
@@ -301,6 +318,15 @@ impl Checker {
         if self.order_log.len() > 4096 {
             let old = self.order_log.pop_front().unwrap();
             self.orders.remove(&old);
+        }
+    }
+    fn remember_rollup(&mut self, id: Hash, rollup: Arc<Vec<Transaction>>) {
+        if self.rollups.insert(id, rollup).is_none() {
+            self.rollup_log.push_back(id);
+        }
+        if self.rollup_log.len() > state::KEEP {
+            let old = self.rollup_log.pop_front().unwrap();
+            self.rollups.remove(&old);
         }
     }
     fn genesis(&mut self, slot: Slot) -> Result<(), Fail> {
@@ -340,6 +366,17 @@ impl Checker {
             self.heads[c] = Some((expected, 0));
         }
         self.remember_order(expected, 0);
+        self.remember_rollup(expected, Arc::new(vec![]));
+        self.controller = Some(
+            prime_controller::State::genesis(self.chain.genesis()).map_err(|e| {
+                fail(
+                    Context::Prime,
+                    "prime controllers",
+                    "the genesis controller state",
+                    describe(&e),
+                )
+            })?,
+        );
         Ok(())
     }
     /// The trusted genesis in every context, as the chain spec builds it.
@@ -390,10 +427,38 @@ impl Checker {
                 .filter_map(|id| Some((*id, *self.orders.get(id)?)))
                 .collect(),
             state,
+            prime: Some(self.prime_section()?),
         })
     }
-    /// Rebuild the ordered checks from a checkpoint.
-    fn restore(&mut self, cp: &Checkpoint) -> Result<(), String> {
+    /// The prime controller state and the recent region rollups.
+    fn prime_section(&self) -> Result<checkpoint::PrimeSection, String> {
+        let c = self
+            .controller
+            .as_ref()
+            .ok_or("checkpoint without a prime controller state")?
+            .parts();
+        Ok(checkpoint::PrimeSection {
+            head: c.head,
+            number: c.number,
+            first: c.first,
+            rates: c.rates.iter().map(|r| r.to_be_bytes()).collect(),
+            inbound: c.inbound.as_ref().map(|v| store::encode_tx_list(v)),
+            parent_window: c.parent_window.as_ref().map(|w| w.encode()),
+            head_window: c.head_window.encode(),
+            rollups: self
+                .rollup_log
+                .iter()
+                .filter_map(|id| Some((*id, store::encode_tx_list(self.rollups.get(id)?))))
+                .collect(),
+        })
+    }
+    /// Rebuild the ordered checks from a checkpoint. `rollups` are the
+    /// region rollups of a state section without a prime section.
+    fn restore(
+        &mut self,
+        cp: &Checkpoint,
+        rollups: Vec<(Hash, Arc<Vec<Transaction>>)>,
+    ) -> Result<(), String> {
         self.install_genesis();
         for (id, order) in &cp.orders {
             self.remember_order(*id, *order);
@@ -446,6 +511,95 @@ impl Checker {
         if self.heads[2] != Some((cp.block, cp.height)) {
             return Err("checkpoint zone head is not its block".into());
         }
+        self.restore_prime(cp, rollups)
+    }
+    /// The prime controller state and region rollups of a checkpoint. A
+    /// checkpoint without a prime section gets the state the controllers
+    /// imply before ControllerKickInBlock (every prime block keeps
+    /// params.ExchangeRate and nothing else is read before the kick-in).
+    fn restore_prime(
+        &mut self,
+        cp: &Checkpoint,
+        rollups: Vec<(Hash, Arc<Vec<Transaction>>)>,
+    ) -> Result<(), String> {
+        let (head, number) = cp.heads[0].ok_or("checkpoint without a prime head")?;
+        let head_record = self.histories[0]
+            .get(&head)
+            .map_err(|e| format!("checkpoint prime head record: {}", describe(&e)))?;
+        let parent = (number > 0)
+            .then(|| head_record.parent(0))
+            .transpose()
+            .map_err(|e| describe(&e))?;
+        let controller = match &cp.prime {
+            Some(p) => {
+                for (id, raw) in &p.rollups {
+                    let list = store::decode_tx_list(raw)
+                        .map_err(|e| format!("checkpoint region rollup: {e}"))?;
+                    self.remember_rollup(*id, Arc::new(list));
+                }
+                let window = |raw: &[u8]| {
+                    choice_window::Window::decode(raw)
+                        .map_err(|e| format!("checkpoint token choice set: {e}"))
+                };
+                prime_controller::State::from_parts(prime_controller::Parts {
+                    head: p.head,
+                    number: p.number,
+                    first: p.first,
+                    rates: p.rates.iter().map(|r| Uint::from_be_bytes(*r)).collect(),
+                    inbound: p
+                        .inbound
+                        .as_ref()
+                        .map(|raw| store::decode_tx_list(raw))
+                        .transpose()
+                        .map_err(|e| format!("checkpoint prime inbound ETXs: {e}"))?,
+                    parent_window: p.parent_window.as_deref().map(window).transpose()?,
+                    head_window: window(&p.head_window)?,
+                })
+                .map_err(|e| format!("checkpoint prime controllers: {}", describe(&e)))?
+            }
+            None => {
+                for (id, list) in rollups {
+                    self.remember_rollup(id, list);
+                }
+                prime_controller::State::before_kick_in(head, number, parent).map_err(|e| {
+                    format!(
+                        "checkpoint {} has no prime controller state: {}",
+                        cp.height,
+                        describe(&e)
+                    )
+                })?
+            }
+        };
+        // The state must follow the prime head, and its rates must be the
+        // rates of the prime records the checkpoint holds.
+        if controller.head() != (head, number)
+            || controller.parent_window().map(|w| w.block()) != parent
+        {
+            return Err("checkpoint prime controllers do not follow its prime head".into());
+        }
+        for (raw, _) in &cp.windows[0] {
+            let r = Record::decode(raw).map_err(|e| describe(&e))?;
+            let n = r.number(0).map_err(|e| describe(&e))?;
+            let rate = share_rules::uint(
+                r.object()
+                    .header()
+                    .wire()
+                    .exchange_rate
+                    .as_deref()
+                    .unwrap_or_default(),
+            )
+            .map_err(|e| describe(&e))?;
+            if let Ok(kept) = controller.rate_at(n) {
+                if kept != rate {
+                    return Err(format!(
+                        "checkpoint prime controllers: the rate of prime {n} is {}, its header has {}",
+                        block::uint(kept),
+                        block::uint(rate)
+                    ));
+                }
+            }
+        }
+        self.controller = Some(controller);
         Ok(())
     }
     /// The header roots of the zone head, for the state checkpoint check.
@@ -523,13 +677,22 @@ impl Checker {
         self.verifier.reuse_inclusion_work_memo(done.work);
         // 2-8. Verifier::validate_block against the window: parent links,
         // bodies, proof-of-work, order, header/append rules, uncled entropy,
-        // prime starting values, rollups and, with --state, execution.
+        // prime controllers, rollups and, with --state, execution.
         let heads = self.heads.map(|h| h.expect("genesis checked first"));
+        let controller = self.controller.as_ref().ok_or_else(|| {
+            fail(
+                Context::Prime,
+                "prime controllers",
+                "a controller state",
+                "none",
+            )
+        })?;
         let validated = match self.state.as_mut() {
             Some(st) => {
                 let (maps, mut parent_state) = st.split();
                 let known = state::KnownView {
                     orders: &self.orders,
+                    region_rollups: &self.rollups,
                     maps: Some(maps),
                 };
                 let parent = block::Parent {
@@ -538,6 +701,7 @@ impl Checker {
                     indexes: &self.indexes,
                     heads,
                     known: &known,
+                    controller,
                     now: self.now,
                 };
                 self.verifier
@@ -546,6 +710,7 @@ impl Checker {
             None => {
                 let known = state::KnownView {
                     orders: &self.orders,
+                    region_rollups: &self.rollups,
                     maps: None,
                 };
                 let parent = block::Parent {
@@ -554,6 +719,7 @@ impl Checker {
                     indexes: &self.indexes,
                     heads,
                     known: &known,
+                    controller,
                     now: self.now,
                 };
                 self.verifier
@@ -569,21 +735,15 @@ impl Checker {
         let block::Validated { checked, executed } = validated;
         let order = checked.order;
         if let (Some(st), Some(x)) = (self.state.as_mut(), executed) {
-            st.record(
-                &zone,
-                order,
-                checked.cross.clone(),
-                x.confirmed,
-                x.execution.created_keys,
-            )
-            .map_err(|e| {
-                fail(
-                    Context::Zone,
-                    "state: commit",
-                    "recorded history",
-                    describe(&e),
-                )
-            })?;
+            st.record(&zone, x.confirmed, x.execution.created_keys)
+                .map_err(|e| {
+                    fail(
+                        Context::Zone,
+                        "state: commit",
+                        "recorded history",
+                        describe(&e),
+                    )
+                })?;
         }
         // Commit to the window.
         let mut next = checked.next;
@@ -597,6 +757,12 @@ impl Checker {
             self.window.pin_prime_view(zone.clone());
         }
         self.remember_order(zone.id(), order);
+        if order <= 1 {
+            self.remember_rollup(zone.id(), Arc::new(checked.cross));
+        }
+        if let Some(step) = checked.prime {
+            self.controller = Some(step.into_state());
+        }
         Ok(order)
     }
 }
@@ -771,6 +937,8 @@ pub fn checkpoint_dir(datadir: &std::path::Path, chain: &Chain, state: bool) -> 
 struct Resumed {
     checkpoint: Checkpoint,
     state: Option<StateReplay>,
+    /// Region rollups of a state section (checkpoints without a prime section).
+    rollups: Vec<(Hash, Arc<Vec<Transaction>>)>,
 }
 fn load_checkpoint(
     dir: &std::path::Path,
@@ -796,8 +964,8 @@ fn load_checkpoint(
     if cp.state.is_some() != state {
         return Err(format!("checkpoint {height} rejected: state mode differs"));
     }
-    let state = match &cp.state {
-        None => None,
+    let (state, rollups) = match &cp.state {
+        None => (None, vec![]),
         Some(section) => {
             let profile = state::profile_for(chain).map_err(|e| describe(&e))?;
             let commitment = quai_execution::state_store::Commitment {
@@ -820,23 +988,23 @@ fn load_checkpoint(
             .map_err(|e| format!("checkpoint {height} rejected: {e}"))?;
             let mut past = PastDb::open(&dir.join("past.redb")).map_err(io_err("past.redb"))?;
             past.truncate_above(*height).map_err(io_err("past.redb"))?;
-            Some(
-                StateReplay::resume(
-                    profile,
-                    chain.genesis_hash(),
-                    store,
-                    past,
-                    section,
-                    *height,
-                    cp.counters.state_blocks,
-                )
-                .map_err(|e| format!("checkpoint {height} rejected: state: {e}"))?,
+            let (replay, rollups) = StateReplay::resume(
+                profile,
+                chain.genesis_hash(),
+                store,
+                past,
+                section,
+                *height,
+                cp.counters.state_blocks,
             )
+            .map_err(|e| format!("checkpoint {height} rejected: state: {e}"))?;
+            (Some(replay), rollups)
         }
     };
     Ok(Some(Resumed {
         checkpoint: cp,
         state,
+        rollups,
     }))
 }
 /// Keep the two latest checkpoints, their state files and the history that
@@ -1034,7 +1202,9 @@ pub fn run_with(
     let mut checker = match resumed {
         Some(r) => {
             let mut checker = Checker::new(spec, caches, receipts, r.state);
-            checker.restore(&r.checkpoint)?;
+            checker
+                .restore(&r.checkpoint, r.rollups)
+                .map_err(|e| format!("checkpoint {start} rejected: {e}"))?;
             if let Some(st) = &checker.state {
                 // The roots the checkpoint holds must be the header roots there.
                 let (evm, etx, utxo, size) = checker.head_roots()?;

@@ -60,6 +60,7 @@ pub mod choice_window;
 pub mod controllers;
 pub mod cubic_discount;
 pub mod economics;
+pub mod prime_controller;
 pub mod prime_economics;
 pub mod prime_forward;
 pub mod zone_header;

@@ -692,3 +692,90 @@ fn diagnostic_account_export_stops_before_exceeding_aggregate_slot_budget() {
     assert!(matches!(world.materialize(), Err(ReadError::Invalid(_))));
     assert_eq!(node.calls.load(std::sync::atomic::Ordering::Relaxed), 16);
 }
+#[test]
+fn lazy_overlay_slots_have_no_cap() {
+    // The lazy overlay used to stop at 65,536 written slots per stored account
+    // and at 4,096 per new account (no backing yet). go-quai has no slot cap.
+    // An empty stored base needs no node reads, so the test stays fast.
+    let node = Arc::new(ExportSlots {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        values: BTreeMap::new(),
+    });
+    let slots = 65_537u64;
+    let mut stored = Account {
+        nonce: 1,
+        backing: Some(StorageBase {
+            reader: node,
+            root: mpt::empty_root(),
+            count: 0,
+        }),
+        ..Default::default()
+    };
+    let mut fresh = Account {
+        nonce: 1,
+        ..Default::default()
+    };
+    for n in 0..slots {
+        stored.put(slot(n), slot(n + 1)).unwrap();
+        fresh.put(slot(n), slot(n + 1)).unwrap();
+    }
+    assert_eq!((stored.storage_len(), fresh.storage_len()), (slots, slots));
+    // Path updates over the stored base and the fallback for a new account
+    // above the bulk builder's item limit give the same storage root.
+    assert_eq!(
+        stored.storage_root().unwrap(),
+        fresh.storage_root().unwrap()
+    );
+    let reader = Arc::new(ExportAccounts {
+        rows: BTreeMap::new(),
+    });
+    let mut world = World::from_reader(reader, mpt::empty_root(), 0);
+    world.insert(address(1), stored).unwrap();
+    world.insert(address(2), fresh).unwrap();
+    world.validate().unwrap();
+    let mut journal = Journal::new(world).unwrap();
+    let revision = journal.snapshot().unwrap();
+    journal
+        .set_storage(address(2), slot(slots), slot(1))
+        .unwrap();
+    journal.commit(revision).unwrap();
+    let after = journal.into_world().unwrap();
+    assert_eq!(
+        after.account(&address(2)).unwrap().unwrap().storage_len(),
+        slots + 1
+    );
+}
+#[test]
+fn lazy_overlay_accounts_and_bytes_have_no_cap() {
+    // The lazy overlay used to stop at 65,536 changed accounts and at 64 MiB.
+    // Value transfers to 2,050 contracts with 32 KiB of code each pass 64 MiB.
+    // `insert`, `account_mut` and `validate` held those caps, so an empty
+    // in-memory reader is enough; it keeps the test fast in debug builds.
+    let reader = Arc::new(ExportAccounts {
+        rows: BTreeMap::new(),
+    });
+    let mut world = World::from_reader(reader, mpt::empty_root(), 0);
+    let code = vec![0x5b; 32_768];
+    for n in 1..=65_537 {
+        let account = Account {
+            nonce: 1,
+            balance: Word::ONE,
+            code: if n <= 2_050 { code.clone() } else { vec![] },
+            ..Default::default()
+        };
+        world.insert(address(n), account).unwrap();
+    }
+    world.validate().unwrap();
+    let mut journal = Journal::new(world).unwrap();
+    let revision = journal.snapshot().unwrap();
+    journal
+        .transfer(address(1), address(65_538), Word::ONE)
+        .unwrap();
+    journal.commit(revision).unwrap();
+    let after = journal.into_world().unwrap();
+    assert_eq!(after.account_count(), 65_538);
+    assert_eq!(
+        after.account(&address(65_538)).unwrap().unwrap().balance,
+        Word::ONE
+    );
+}

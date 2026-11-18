@@ -76,7 +76,7 @@ pub fn verify_observed(
             qi_reward: from_bytes(&b(&row["qi_reward"])),
             eligible_slices: b(&row["eligible_slices"]).try_into().unwrap(),
             first_qi: row["first_qi"].as_bool().unwrap(),
-            block_gas_limit: 30000000,
+            block_gas_limit: row["block_gas_limit"].as_u64().unwrap_or(30000000),
             gas_remaining: row["gas_pool_initial"].as_u64().unwrap(),
             used_gas: row["used_initial"].as_u64().unwrap(),
             region_etx_remaining: row["region_initial"].as_u64().unwrap(),

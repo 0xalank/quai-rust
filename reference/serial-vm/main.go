@@ -124,6 +124,7 @@ type testCase struct {
 	txType                 byte
 	stateSize              *big.Int
 	location               common.Location
+	warmCount              int
 }
 
 func runCase(c testCase, rng *rand.Rand) map[string]interface{} {
@@ -188,6 +189,11 @@ func runCase(c testCase, rng *rand.Rand) map[string]interface{} {
 			s.AddSlotToAccessList(address.Bytes20(), key)
 			warmKeys = append(warmKeys, key.Hex())
 		}
+	}
+	for i := 0; i < c.warmCount; i++ {
+		key := common.BigToHash(big.NewInt(int64(i)))
+		s.AddSlotToAccessList(address.Bytes20(), key)
+		warmKeys = append(warmKeys, key.Hex())
 	}
 	snapshot := s.Snapshot()
 	tr := new(trace)
@@ -463,6 +469,35 @@ func main() {
 			}
 		}
 	}
+	// Gas-only bounds. Each frame passes a cap that the native interpreter had
+	// and go-quai never had: 200,000 steps, 1 MiB of memory, 4,096 logs,
+	// 131,072 bytes of input and 4,096 warm slots. A separate generator keeps
+	// every earlier vector and the state-gas table unchanged.
+	bounds := rand.New(rand.NewSource(2026111701))
+	boundWord := func() []byte { v := make([]byte, 32); bounds.Read(v); return v }
+	// countdown runs body n times with the counter on the stack; body must keep
+	// the stack height. The counter (now zero) stays on the stack afterwards.
+	countdown := func(n uint64, body []byte) []byte {
+		head := p(n)
+		return join(head, []byte{0x5b}, body, p(1), []byte{0x90, 0x03, 0x80}, p(uint64(len(head))), []byte{0x57})
+	}
+	boundCases := []testCase{
+		{id: "bounds-steps-224008", code: output(join(countdown(32000, nil), []byte{0x50, 0x5a})), gas: 3000000},
+		{id: "bounds-memory-2mib", code: join(push(boundWord()), p(0x200000), []byte{0x52, 0x59}, p(32), []byte{0x52}, p(0x200000), []byte{0x51}, p(0), []byte{0x52}, p(64), p(0), []byte{0xf3}), gas: 10000000},
+		{id: "bounds-memory-2mib-out-of-gas", code: join(push(boundWord()), p(0x200000), []byte{0x52}, p(32), p(0x200000), []byte{0xf3}), gas: 8500000},
+		{id: "bounds-logs-4100", code: output(join(countdown(4100, join([]byte{0x80}, p(0), []byte{0x53}, p(1), p(0), []byte{0xa0})), []byte{0x50, 0x5a})), gas: 3000000},
+		{id: "bounds-input-140000", code: join([]byte{0x36}, p(0), p(0), []byte{0x37, 0x36}, p(0), []byte{0x20}, p(0), []byte{0x52}, p(139968), []byte{0x35}, p(32), []byte{0x52, 0x36}, p(64), []byte{0x52}, p(96), p(0), []byte{0xf3}), gas: 3000000},
+		{id: "bounds-warm-slots-5000", code: output(join(p(4999), []byte{0x54, 0x50}, p(5000), []byte{0x54, 0x50, 0x5a})), gas: 3000000, warmCount: 5000},
+	}
+	for _, c := range boundCases {
+		c.height = 4000000
+		c.listed = true
+		if c.id == "bounds-input-140000" {
+			c.input = make([]byte, 140000)
+			bounds.Read(c.input)
+		}
+		vectors = append(vectors, runCase(c, bounds))
+	}
 	valid := []int{}
 	table := vm.NewInstructionSet()
 	for i := 0; i < 256; i++ {
@@ -470,7 +505,7 @@ func main() {
 			valid = append(valid, i)
 		}
 	}
-	result := map[string]interface{}{"schema": 1, "reference_revision": referenceRevision, "kind": "serial-vm", "scope": "Bounded isolated interpreter frames with account/storage roots, gas/refund/logs and trace hashes. No calls/creation/precompiles/value-transfer/transaction-fees or full block validity.", "new_ops_height": params.MaxCodeSizeForkHeight, "go_instruction_set": valid, "vectors": vectors, "state_gas": gasVectors}
+	result := map[string]interface{}{"schema": 1, "reference_revision": referenceRevision, "kind": "serial-vm", "scope": "Isolated interpreter frames with account/storage roots, gas/refund/logs and trace hashes, including frames past former native step, memory, log, input and warm-slot caps. No calls/creation/precompiles/value-transfer/transaction-fees or full block validity.", "new_ops_height": params.MaxCodeSizeForkHeight, "go_instruction_set": valid, "vectors": vectors, "state_gas": gasVectors}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	must(encoder.Encode(result))

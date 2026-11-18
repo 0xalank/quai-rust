@@ -90,6 +90,7 @@ fn routing_bits_follow_ledger_and_origin_rules() {
 }
 #[test]
 fn malformed_and_out_of_domain_input_is_rejected() {
+    // These inputs are malformed, not large: a zero byte is field number 0.
     for bytes in [vec![], vec![255], vec![0; 1024 * 1024 + 1]] {
         assert!(Transaction::decode(&bytes).is_err());
     }
@@ -98,13 +99,70 @@ fn malformed_and_out_of_domain_input_is_rejected() {
     let mut p =
         w::Transaction::decode(decode_hex(v["input"].as_str().unwrap()).unwrap().as_slice())
             .unwrap();
-    p.data = Some(vec![0; 128 * 1024 + 1]);
-    assert!(Transaction::decode(&p.encode_to_vec()).is_err());
-    p.data = Some(vec![]);
     p.chain_id = Some(vec![1; 33]);
     assert!(Transaction::decode(&p.encode_to_vec()).is_err());
     assert_eq!(
         encode_hex(&transaction::keccak(&[])),
         "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
     );
+}
+#[test]
+fn decoding_has_no_size_or_item_cap() {
+    // go-quai Transaction.ProtoDecode has no data, wire, access-list or Qi
+    // input/output cap. The settlement and Qi settlement corpora run such
+    // transactions through the pinned Go oracle; this test keeps the codec
+    // property local to this crate.
+    let c = corpus();
+    let wire = |v: &serde_json::Value| {
+        w::Transaction::decode(decode_hex(v["input"].as_str().unwrap()).unwrap().as_slice())
+            .unwrap()
+    };
+    let mut quai = wire(&c["transactions"][1]);
+    quai.data = Some(vec![7; 1024 * 1024 + 1]);
+    quai.access_list = Some(w::AccessList {
+        tuples: (0..4097u32)
+            .map(|i| w::AccessTuple {
+                address: [i.to_be_bytes().to_vec(), vec![0; 16]].concat(),
+                storage_keys: vec![BytesValue { value: vec![9; 32] }; 2],
+            })
+            .collect(),
+    });
+    let raw = quai.encode_to_vec();
+    assert!(raw.len() > 1024 * 1024);
+    let tx = Transaction::decode(&raw).unwrap();
+    let Kind::Quai(q) = tx.kind() else {
+        panic!("type")
+    };
+    assert_eq!(q.data.len(), 1024 * 1024 + 1);
+    assert_eq!(q.access_list.len(), 4097);
+    assert_eq!(Transaction::decode(&tx.encode()).unwrap(), tx);
+    let v = c["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["type"] == 2)
+        .unwrap();
+    let mut qi = wire(v);
+    let ins = qi.tx_ins.as_mut().unwrap();
+    let first = ins.inputs[0].clone();
+    ins.inputs = (0..4097u32)
+        .map(|i| {
+            let mut input = first.clone();
+            input.previous.as_mut().unwrap().index = Some(i);
+            input
+        })
+        .collect();
+    let outs = qi.tx_outs.get_or_insert_default();
+    let template = w::Output {
+        denomination: Some(1),
+        address: Some(vec![1; 20]),
+        lock: Some(vec![]),
+    };
+    outs.outputs = vec![template; 4097];
+    let tx = Transaction::decode(&qi.encode_to_vec()).unwrap();
+    let Kind::Qi(q) = tx.kind() else {
+        panic!("type")
+    };
+    assert_eq!((q.inputs.len(), q.outputs.len()), (4097, 4097));
+    assert_eq!(Transaction::decode(&tx.encode()).unwrap(), tx);
 }

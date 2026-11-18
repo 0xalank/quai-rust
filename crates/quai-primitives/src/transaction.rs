@@ -1,6 +1,12 @@
-//! Bounded native transaction codecs and signature primitives, not state validation.
+//! Native transaction codecs and signature primitives, not state validation.
 //! Behavior follows pinned go-quai transaction.go, transaction_signing.go and utxo.go.
 //! MuSig2 aggregation follows btcsuite's untweaked, unsorted key aggregation.
+//!
+//! Decoding has no size or item cap. go-quai `Transaction.ProtoDecode` has
+//! none: data, access lists and Qi inputs/outputs are bounded only by gas in
+//! block validation. The 128 KB `txMaxSize` in core/tx_pool.go is pool policy.
+//! The 3 MiB message limit belongs to the network edge
+//! (`schema::MAX_MESSAGE_BYTES`, go-quai `params.MaxGossipsubPacketSize`).
 use crate::{
     wire::{tx as w, BytesValue},
     Hash,
@@ -14,9 +20,6 @@ use prost::Message;
 use sha3::{Digest, Keccak256};
 
 pub type Address = [u8; 20];
-const MAX_WIRE: usize = 1024 * 1024;
-const MAX_ITEMS: usize = 4096;
-const MAX_DATA: usize = 128 * 1024;
 const ORDER: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe,
     0xba, 0xae, 0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
@@ -114,11 +117,7 @@ fn magnitude(value: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     Ok(v[start..].to_vec())
 }
 fn data(v: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
-    let v = v.ok_or("required data missing")?;
-    if v.len() > MAX_DATA {
-        return Err("transaction data exceeds 128 KiB".into());
-    }
-    Ok(v)
+    v.ok_or_else(|| "required data missing".into())
 }
 fn work(p: &w::Transaction) -> Work {
     Work {
@@ -129,16 +128,6 @@ fn work(p: &w::Transaction) -> Work {
 }
 fn access(v: Option<w::AccessList>) -> Result<Vec<AccessTuple>, String> {
     let list = v.ok_or("required access list missing")?;
-    if list.tuples.len() > MAX_ITEMS
-        || list
-            .tuples
-            .iter()
-            .map(|v| v.storage_keys.len())
-            .sum::<usize>()
-            > MAX_ITEMS
-    {
-        return Err("access list exceeds bounded item count".into());
-    }
     Ok(list
         .tuples
         .into_iter()
@@ -203,9 +192,6 @@ impl Transaction {
         }
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() > MAX_WIRE {
-            return Err("transaction protobuf exceeds 1 MiB".into());
-        }
         let p = w::Transaction::decode(bytes).map_err(|_| "malformed transaction protobuf")?;
         let work = work(&p);
         let kind = match p.r#type.ok_or("transaction type missing")? {
@@ -247,8 +233,8 @@ impl Transaction {
             2 => {
                 let input = p.tx_ins.ok_or("inputs missing")?.inputs;
                 let output = p.tx_outs.ok_or("outputs missing")?.outputs;
-                if input.is_empty() || input.len() > MAX_ITEMS || output.len() > MAX_ITEMS {
-                    return Err("invalid bounded input/output count".into());
+                if input.is_empty() {
+                    return Err("Qi transaction without inputs".into());
                 }
                 let inputs = input
                     .into_iter()

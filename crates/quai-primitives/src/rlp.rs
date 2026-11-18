@@ -1,5 +1,12 @@
-//! Canonical bounded RLP decoding for embedded access lists and typed ingress.
+//! Canonical RLP decoding for the access list of the ETX opcode.
+//!
+//! go-quai decodes that list with `rlp.DecodeBytes` into `types.AccessList`
+//! (core/vm/instructions.go `opETX`). The Go decoder has no byte or item cap;
+//! memory gas bounds the input. A valid access list nests three lists deep, and
+//! Go rejects deeper input by its type, so the recursion depth bound here
+//! changes no result.
 use crate::transaction::AccessTuple;
+const MAX_DEPTH: usize = 8;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Item<'a> {
     Bytes(&'a [u8]),
@@ -15,11 +22,10 @@ fn length(bytes: &[u8]) -> Result<usize, String> {
             .ok_or("RLP length overflow".into())
     })
 }
-fn take<'a>(input: &mut &'a [u8], depth: usize, budget: &mut usize) -> Result<Item<'a>, String> {
-    if depth > 8 || *budget == 0 {
-        return Err("RLP resource bound".into());
+fn take<'a>(input: &mut &'a [u8], depth: usize) -> Result<Item<'a>, String> {
+    if depth > MAX_DEPTH {
+        return Err("RLP nesting exceeds the access-list shape".into());
     }
-    *budget -= 1;
     let prefix = *input.first().ok_or("truncated RLP")?;
     let (header, len, list) = match prefix {
         0..=0x7f => {
@@ -60,16 +66,13 @@ fn take<'a>(input: &mut &'a [u8], depth: usize, budget: &mut usize) -> Result<It
     let mut remaining = bytes;
     let mut children = vec![];
     while !remaining.is_empty() {
-        children.push(take(&mut remaining, depth + 1, budget)?);
+        children.push(take(&mut remaining, depth + 1)?);
     }
     Ok(Item::List(children))
 }
 pub fn decode(input: &[u8]) -> Result<Item<'_>, String> {
-    if input.len() > 1 << 20 {
-        return Err("RLP byte bound".into());
-    }
     let mut remaining = input;
-    let value = take(&mut remaining, 0, &mut 32768)?;
+    let value = take(&mut remaining, 0)?;
     if !remaining.is_empty() {
         return Err("trailing RLP data".into());
     }
@@ -79,11 +82,7 @@ pub fn access_list(input: &[u8]) -> Result<Vec<AccessTuple>, String> {
     let Item::List(rows) = decode(input)? else {
         return Err("access list is not an RLP list".into());
     };
-    if rows.len() > 4096 {
-        return Err("access-list address bound".into());
-    }
     let mut out = vec![];
-    let mut keys = 0;
     for row in rows {
         let Item::List(mut fields) = row else {
             return Err("access tuple is not a list".into());
@@ -95,10 +94,6 @@ pub fn access_list(input: &[u8]) -> Result<Vec<AccessTuple>, String> {
         else {
             return Err("access tuple is not [address bytes, key list]".into());
         };
-        keys += slots.len();
-        if keys > 4096 {
-            return Err("access-list key bound".into());
-        }
         let mut parsed = vec![];
         for k in slots {
             let Item::Bytes(k) = k else {
@@ -106,10 +101,55 @@ pub fn access_list(input: &[u8]) -> Result<Vec<AccessTuple>, String> {
             };
             parsed.push(k.try_into().map_err(|_| "access key length")?);
         }
+        // go-quai `Address.DecodeRLP` accepts a byte string of any length and
+        // applies `BytesToAddress`: keep the last 20 bytes, left-pad shorter
+        // input with zeros.
+        let mut normalized = [0; 20];
+        let tail = &address[address.len().saturating_sub(20)..];
+        normalized[20 - tail.len()..].copy_from_slice(tail);
         out.push(AccessTuple {
-            address: address.try_into().map_err(|_| "access address length")?,
+            address: normalized,
             keys: parsed,
         });
     }
     Ok(out)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trie::{bytes, list};
+    #[test]
+    fn access_lists_have_no_byte_or_item_cap() {
+        // 33,000 keys: above the former 1 MiB, 32,768-item and 4,096-key caps.
+        let keys = (0..33_000u32)
+            .map(|i| bytes(&[i.to_be_bytes().to_vec(), vec![0; 28]].concat()))
+            .collect::<Vec<_>>();
+        let tuples = (0..4_097u32).map(|i| {
+            list([
+                bytes(&[vec![1; 16], i.to_be_bytes().to_vec()].concat()),
+                list([]),
+            ])
+        });
+        let raw = list(std::iter::once(list([bytes(&[2; 20]), list(keys)])).chain(tuples));
+        assert!(raw.len() > 1 << 20);
+        let decoded = access_list(&raw).unwrap();
+        assert_eq!(decoded.len(), 4_098);
+        assert_eq!(decoded[0].keys.len(), 33_000);
+        assert_eq!(decoded[0].keys[32_999][..4], 32_999u32.to_be_bytes());
+    }
+    #[test]
+    fn addresses_follow_go_bytes_to_address() {
+        let raw = list([
+            list([bytes(&[7; 19]), list([])]),
+            list([bytes(&[[9].as_slice(), &[8; 20]].concat()), list([])]),
+            list([bytes(&[]), list([])]),
+        ]);
+        let decoded = access_list(&raw).unwrap();
+        assert_eq!(decoded[0].address[0], 0);
+        assert_eq!(decoded[0].address[1..], [7; 19]);
+        assert_eq!(decoded[1].address, [8; 20]);
+        assert_eq!(decoded[2].address, [0; 20]);
+        // Keys stay exact 32-byte strings, as for Go's [32]byte decoding.
+        assert!(access_list(&list([list([bytes(&[1; 20]), list([bytes(&[1; 31])])])])).is_err());
+    }
 }

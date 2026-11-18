@@ -344,7 +344,8 @@ fn check_inclusions_verified(
         |p| Ok(native_parent_metrics(verifier, history, p, profile)?.order),
     )
 }
-pub(crate) fn native_parent_metrics(
+/// Native parent proof, order and entropy that the zone header rules expect.
+pub fn native_parent_metrics(
     verifier: &mut Verifier,
     history: &History,
     parent: &Record,

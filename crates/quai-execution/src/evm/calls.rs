@@ -178,12 +178,12 @@ pub fn execute_call_with_env(
     if !local(&context.caller, context.location) {
         return Err(CapabilityError::Context("local Quai call required"));
     }
-    if input.len() > 131072
-        || access.len() > 4096
-        || access.iter().map(|a| a.keys.len()).sum::<usize>() > 4096
-    {
-        return Err(CapabilityError::Limit("input/access-list"));
-    }
+    // No input or access-list cap: go-quai bounds both only through intrinsic
+    // gas (core/state_transition.go `IntrinsicGas`: 4 or 16 gas per data byte,
+    // 2,400 per address, 1,900 per key). A 50,000,000-gas block allows about
+    // 12.5 MB of zero data, 20,824 addresses or 26,304 keys in one transaction.
+    // BLOCKHASH serves at most the 256 previous blocks, so a longer history is
+    // a caller error.
     if environment.block_hashes.len() > 256 {
         return Err(CapabilityError::Limit("BLOCKHASH history"));
     }

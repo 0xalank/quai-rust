@@ -53,10 +53,34 @@ pub const PINNED_SCHEDULE: Schedule = Schedule {
     kawpow_fork: rules::KAWPOW_FORK,
     transition_period: rules::TRANSITION,
 };
+/// Successful inclusion work computed by a local native verifier. Like
+/// `HeaderProofMemo`, only a verifier can fill it and it never carries strong
+/// block proofs, failures or values decoded from a peer.
+#[derive(Default)]
+pub struct InclusionWorkMemo {
+    quorum_keys: Option<[[u8; 33]; 3]>,
+    entries: VecDeque<WorkEntry>,
+}
+impl std::fmt::Debug for InclusionWorkMemo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InclusionWorkMemo")
+            .field("entries", &self.entries.len())
+            .finish()
+    }
+}
+impl InclusionWorkMemo {
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
 #[derive(Default)]
 pub struct Verifier {
     cache: Option<Arc<LightCache>>,
     key: Option<(Algorithm, u64)>,
+    shared: Option<Arc<crate::pow::SharedCaches>>,
     quorum: Option<crate::auxiliary::Quorum>,
     work: VecDeque<WorkEntry>,
     work_bytes: usize,
@@ -81,6 +105,14 @@ impl Verifier {
         Self {
             cache: Some(Arc::new(cache)),
             key: Some(key),
+            ..Self::default()
+        }
+    }
+    /// Take epoch caches from a store shared with other local verifiers, so
+    /// parallel workers generate each epoch once. Proof rules are unchanged.
+    pub fn with_shared_caches(shared: Arc<crate::pow::SharedCaches>) -> Self {
+        Self {
+            shared: Some(shared),
             ..Self::default()
         }
     }
@@ -195,10 +227,66 @@ impl Verifier {
         if self.key != Some(key) {
             self.cache = None;
             self.key = None;
-            self.cache = Some(Arc::new(LightCache::new(algorithm, height)?));
+            self.cache = Some(match &self.shared {
+                Some(shared) => shared.get(algorithm, height)?,
+                None => Arc::new(LightCache::new(algorithm, height)?),
+            });
             self.key = Some(key);
         }
         Ok(self.cache.as_deref().unwrap())
+    }
+    /// Compute and remember the native inclusion work of one share for a node
+    /// scope. Returns the work hash. Nothing here admits the share: inclusion
+    /// rules still run when a block includes it.
+    pub fn precompute_inclusion_work(
+        &mut self,
+        header: &Header,
+        node_location: &[u8],
+    ) -> Result<Hash, Error> {
+        Ok(self.work_for_inclusion(header, node_location)?.hash())
+    }
+    /// Move successful inclusion work to another local verifier. Strong block
+    /// proofs travel only through `take_header_proof_memo`.
+    pub fn take_inclusion_work_memo(&mut self) -> InclusionWorkMemo {
+        let quorum_keys = if self.work.is_empty() {
+            None
+        } else {
+            Some(
+                *self
+                    .quorum
+                    .get_or_insert_with(crate::auxiliary::Quorum::pinned)
+                    .keys(),
+            )
+        };
+        self.work_bytes = 0;
+        InclusionWorkMemo {
+            quorum_keys,
+            entries: std::mem::take(&mut self.work),
+        }
+    }
+    /// Reuse inclusion work made by a local verifier under identical trusted
+    /// quorum keys. The memo key still binds the node scope and exact header
+    /// bytes, and inclusion policy still applies on every use.
+    pub fn reuse_inclusion_work_memo(&mut self, memo: InclusionWorkMemo) -> usize {
+        if memo.entries.is_empty() {
+            return 0;
+        }
+        let keys = self
+            .quorum
+            .get_or_insert_with(crate::auxiliary::Quorum::pinned)
+            .keys();
+        if memo.quorum_keys.as_ref() != Some(keys) {
+            return 0;
+        }
+        let mut reused = 0;
+        for entry in memo.entries {
+            if self.work.iter().any(|old| old.key == entry.key) {
+                continue;
+            }
+            self.remember_work(entry.key, entry.value);
+            reused += 1;
+        }
+        reused
     }
     /// Verify a supported block header's native ProgPoW or signed KAWPOW proof.
     /// Auxiliary bindings/quorum verification precedes KAWPOW cache generation.
@@ -739,6 +827,65 @@ mod work_memo_tests {
         v.work_for_inclusion(&weak, &[0, 0]).unwrap();
         assert!(v.verify_header_proof(&weak).is_err());
         assert_eq!(v.header_proof_memo_stats().entries, 1);
+    }
+    #[test]
+    fn shared_epoch_caches_and_inclusion_handoff_keep_scope_and_role_bound() {
+        let c: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/protocol/admission.json"))
+                .unwrap();
+        let raw = quai_primitives::decode_hex(
+            c["branches"][0]["vectors"][0]["work_object"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let record = crate::history::Record::decode(&raw).unwrap();
+        let header = record.header();
+        assert!(crate::pow::SharedCaches::new(0).is_err());
+        let shared = Arc::new(crate::pow::SharedCaches::new(2).unwrap());
+        let mut producer = Verifier::with_shared_caches(shared.clone());
+        let hash = producer.precompute_inclusion_work(header, &[0, 0]).unwrap();
+        assert_eq!(producer.header_proof_memo_stats().entries, 0);
+        let mut consumer = Verifier::with_shared_caches(shared.clone());
+        assert_eq!(
+            consumer.reuse_inclusion_work_memo(producer.take_inclusion_work_memo()),
+            1
+        );
+        assert_eq!(producer.work_memo_stats().entries, 0);
+        assert_eq!(producer.work_memo_stats().logical_bytes, 0);
+        assert_eq!(
+            consumer.work_for_inclusion(header, &[0, 0]).unwrap().hash(),
+            hash
+        );
+        assert_eq!(consumer.work_memo_stats().hits, 1);
+        assert!(consumer.cache.is_none());
+        // Inclusion work never becomes a strong proof on the receiving side.
+        assert_eq!(consumer.header_proof_memo_stats().entries, 0);
+        // Another node scope is a separate entry; it reuses the shared epoch.
+        consumer.work_for_inclusion(header, &[0, 1]).unwrap();
+        assert_eq!(consumer.work_memo_stats().misses, 1);
+        assert!(Arc::ptr_eq(
+            producer.cache.as_ref().unwrap(),
+            consumer.cache.as_ref().unwrap()
+        ));
+        assert_eq!(shared.epochs(), vec![(Algorithm::Progpow, 0)]);
+        // Identical bytes under different trusted keys are not reused.
+        let mut keys = *crate::auxiliary::Quorum::pinned().keys();
+        keys.swap(0, 1);
+        let mut foreign = Verifier::with_trusted_quorum(
+            crate::auxiliary::Quorum::from_trusted_keys(keys).unwrap(),
+        );
+        let mut again = Verifier::with_shared_caches(shared);
+        again.precompute_inclusion_work(header, &[0, 0]).unwrap();
+        assert_eq!(
+            foreign.reuse_inclusion_work_memo(again.take_inclusion_work_memo()),
+            0
+        );
+        assert_eq!(foreign.work_memo_stats().entries, 0);
+        assert_eq!(
+            foreign.reuse_inclusion_work_memo(InclusionWorkMemo::default()),
+            0
+        );
     }
     #[test]
     fn full_header_proof_memo_is_bounded_and_has_no_inclusion_entries() {

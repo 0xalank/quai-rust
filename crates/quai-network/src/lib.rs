@@ -1,5 +1,6 @@
 //! Quai application messages, stream framing and per-peer request correlation.
-//! Optional `native-transport` adds enrolled loopback-only libp2p components.
+//! Optional `native-transport` adds enrolled loopback-only libp2p components
+//! and a separate, explicit read-only public probe profile (`public`).
 //! Complete block admission and native chain synchronization remain unavailable.
 use prost::Message;
 use quai_primitives::{
@@ -321,3 +322,6 @@ pub mod transport;
 
 #[cfg(feature = "native-transport")]
 pub mod private_sync;
+
+#[cfg(feature = "native-transport")]
+pub mod public;

@@ -107,6 +107,36 @@ fn answers_equal_go_quai_for_zone_0_to_8() {
 }
 
 #[test]
+fn base_fee_is_the_childs_base_fee() {
+    // go-quai's header validation requires each zone block's base fee to
+    // equal `CalcBaseFee(parent)`, which `quai_gasPrice` raises by 20% for
+    // the head (core/headerchain_validation.go, internal/quaiapi).
+    let v = view();
+    for h in 0..8u64 {
+        let block = v.block_by_number(h).unwrap().unwrap();
+        let child = v.block_by_number(h + 1).unwrap().unwrap();
+        let fee = v.calc_base_fee(&block).unwrap();
+        let raw = child
+            .object
+            .header()
+            .wire()
+            .base_fee
+            .clone()
+            .unwrap_or_default();
+        let start = fee.iter().position(|b| *b != 0).unwrap_or(32);
+        assert_eq!(fee[start..], raw[..], "height {h}");
+    }
+    let price = quai_rpc::native::dispatch(v.as_ref(), "quai_gasPrice", &Value::Array(vec![]));
+    let head = v
+        .calc_base_fee(&v.block_by_number(8).unwrap().unwrap())
+        .unwrap();
+    assert_eq!(
+        price.unwrap(),
+        quai_rpc::native::json::big_hex(&quai_rpc::native::fees::gas_price(&head))
+    );
+}
+
+#[test]
 fn head_entropy_is_computed_as_the_child_records_it() {
     // For blocks below the head the view takes the total entropy from the
     // child's zone parent entropy; the head needs the native computation.

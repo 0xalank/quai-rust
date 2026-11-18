@@ -3,9 +3,10 @@
 //! A `ChainView` holds validated chain data: canonical blocks with their
 //! derived fields (order, total entropy, uncle classes), the stored receipts,
 //! a transaction index, the account and UTXO state of the blocks whose state
-//! it keeps, and a read-only execution entry for `quai_call` and
-//! `quai_estimateGas`. The native handlers (`native.rs`) turn these values
-//! into the JSON that go-quai v0.57.0 writes for the same block.
+//! it keeps, and a read-only execution entry for `quai_call`,
+//! `quai_estimateGas` and `quai_createAccessList`. The native handlers
+//! (`native/mod.rs`) turn these values into the JSON that go-quai v0.57.0
+//! writes for the same block.
 //!
 //! The first implementation is `quai_node::rpc_view::ExportView`: a QEX1
 //! export plus the state of one replay checkpoint. A live node implements the

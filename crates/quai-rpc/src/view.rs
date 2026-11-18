@@ -215,6 +215,12 @@ pub trait ChainView: Send + Sync + 'static {
     /// discard every change.
     fn call(&self, block: &BlockData, request: &CallRequest) -> Result<CallResult, CallError>;
 
+    /// The view one call reads. A view whose head moves (a running node)
+    /// returns a snapshot of its current head, so that every read of the
+    /// call sees the same head, blocks and state. None: read this view.
+    fn pinned(&self) -> Option<Arc<dyn ChainView>> {
+        None
+    }
     /// New canonical heads, for filters and subscriptions. A view without a
     /// live head has none.
     fn head_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {

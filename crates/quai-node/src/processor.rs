@@ -21,6 +21,7 @@
 //!
 //! Both modes keep the region rollups of recent blocks and the prime
 //! controller state; checkpoints carry them in their prime section.
+use crate::blockstore::{self, Accepted, BlockStore, Created, UtxoChanges};
 use crate::checkpoint::{self, Checkpoint};
 use crate::log::Log;
 use crate::pow::{Done, Job, Pool};
@@ -28,6 +29,7 @@ use crate::qex::{Context, Height};
 use crate::spec::Chain;
 use crate::state::{self, StateReplay};
 use crate::store::{self, PastDb, StateStore};
+use crate::uncles;
 use crate::window::Window;
 use crypto_bigint::Encoding as _;
 use quai_consensus::{
@@ -41,7 +43,8 @@ use quai_consensus::{
     verifier::Verifier,
     Error,
 };
-use quai_primitives::transaction::Transaction;
+use quai_execution::qi::{OutPoint, UtxoView};
+use quai_primitives::transaction::{Kind, Transaction};
 use quai_primitives::{encode_hex, work, Hash};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -271,6 +274,9 @@ struct Checker {
     /// The source carries the stored zone receipts.
     receipts: bool,
     state: Option<StateReplay>,
+    /// Build what the block store keeps of each accepted block.
+    collect: bool,
+    caches: Arc<SharedCaches>,
 }
 struct Fail {
     context: Context,
@@ -315,7 +321,9 @@ impl Checker {
             histories: std::array::from_fn(|c| History::with_reader(window.history_reader(c))),
             indexes: std::array::from_fn(|c| CandidateIndex::with_reader(window.index_reader(c))),
             profiles,
-            verifier: Verifier::with_shared_caches(caches),
+            verifier: Verifier::with_shared_caches(caches.clone()),
+            caches,
+            collect: false,
             window,
             heads: [None; 3],
             orders: HashMap::new(),
@@ -630,7 +638,7 @@ impl Checker {
             size,
         ))
     }
-    fn check(&mut self, slot: Slot, done: Option<Done>) -> Result<u8, Fail> {
+    fn check(&mut self, slot: Slot, done: Option<Done>) -> Result<(u8, Option<Accepted>), Fail> {
         let h = &slot.height;
         // 1. decode, hash and record number
         let mut records: [Option<Arc<Record>>; 3] = [None, None, None];
@@ -746,6 +754,11 @@ impl Checker {
         })?;
         let block::Validated { checked, executed } = validated;
         let order = checked.order;
+        let accepted = if self.collect {
+            Some(self.accepted(&zone, order, h, executed.as_ref()))
+        } else {
+            None
+        };
         if let (Some(st), Some(x)) = (self.state.as_mut(), executed) {
             st.record(&zone, x.confirmed, x.execution.created_keys)
                 .map_err(|e| {
@@ -775,8 +788,234 @@ impl Checker {
         if let Some(step) = checked.prime {
             self.controller = Some(step.into_state());
         }
-        Ok(order)
+        Ok((order, accepted))
     }
+    /// What the block store keeps of a block that passed every check.
+    fn accepted(
+        &mut self,
+        zone: &Record,
+        order: u8,
+        h: &Height,
+        executed: Option<&block::Executed>,
+    ) -> Accepted {
+        let location = self.chain.location();
+        let txs = zone.object().transactions();
+        let tx_hashes: Vec<Hash> = txs
+            .iter()
+            .map(|t| t.id(Some(location)).unwrap_or_default())
+            .collect();
+        let receipts = if self.receipts {
+            Some(h.zone().receipts.clone())
+        } else {
+            executed.map(|x| storage_receipts(zone, &tx_hashes, &x.execution, location))
+        };
+        let uncle_kinds = zone
+            .uncles()
+            .unwrap_or_default()
+            .iter()
+            .map(|u| {
+                let pow = self
+                    .verifier
+                    .precompute_inclusion_work(u, &location)
+                    .or_else(|_| uncles::pow_hash(&self.caches, u));
+                uncles::code(uncles::kind(u, pow))
+            })
+            .collect();
+        let utxos = match (executed, self.state.as_ref()) {
+            (Some(x), Some(st)) => {
+                let mut created = vec![];
+                for (point, _) in &x.execution.created_keys {
+                    if let Ok(Some(u)) = st.state.utxos.get(point) {
+                        created.push(Created {
+                            point: *point,
+                            denomination: u.denomination,
+                            address: u.address,
+                            lock: u.lock.clone(),
+                        });
+                    }
+                }
+                let mut removed: Vec<OutPoint> = x
+                    .execution
+                    .trimmed
+                    .iter()
+                    .map(|t| t.point)
+                    .collect();
+                for tx in txs {
+                    if let Kind::Qi(q) = tx.kind() {
+                        removed.extend(q.inputs.iter().map(|i| OutPoint {
+                            hash: i.hash,
+                            index: i.index,
+                        }));
+                    }
+                }
+                Some(UtxoChanges { created, removed })
+            }
+            _ => None,
+        };
+        Accepted {
+            number: zone.number(2).unwrap_or_default(),
+            hash: zone.id(),
+            parent: zone.parent(2).unwrap_or_default(),
+            order,
+            block: h.zone().block.clone(),
+            receipts,
+            tx_hashes,
+            uncle_kinds,
+            parent_entropy: zone
+                .object()
+                .header()
+                .wire()
+                .parent_entropy
+                .get(2)
+                .map(|v| u256(v)),
+            utxos,
+        }
+    }
+    /// The checkpoint block, as the first block of a new store.
+    fn base_block(&mut self) -> Result<Accepted, String> {
+        let (hash, number) = self.heads[2].ok_or("no zone head")?;
+        let zone = self.histories[2]
+            .get(&hash)
+            .map_err(|e| format!("checkpoint block record: {}", describe(&e)))?;
+        let order = *self.orders.get(&hash).ok_or("checkpoint block order")?;
+        let location = self.chain.location();
+        let tx_hashes = zone
+            .object()
+            .transactions()
+            .iter()
+            .map(|t| t.id(Some(location)).unwrap_or_default())
+            .collect();
+        let uncle_kinds = zone
+            .uncles()
+            .unwrap_or_default()
+            .iter()
+            .map(|u| uncles::code(uncles::kind(u, uncles::pow_hash(&self.caches, u))))
+            .collect();
+        Ok(Accepted {
+            number,
+            hash,
+            parent: zone.parent(2).unwrap_or_default(),
+            order,
+            block: zone.bytes().to_vec(),
+            receipts: None,
+            tx_hashes,
+            uncle_kinds,
+            parent_entropy: zone
+                .object()
+                .header()
+                .wire()
+                .parent_entropy
+                .get(2)
+                .map(|v| u256(v)),
+            utxos: self.state.as_ref().map(|_| UtxoChanges::default()),
+        })
+    }
+    /// Every unspent output at the head, to seed a new store's address index.
+    fn all_utxos(&self) -> Option<Vec<Created>> {
+        let st = self.state.as_ref()?;
+        let all = st.state.utxos.materialize().ok()?;
+        Some(
+            all.iter()
+                .map(|(p, u)| Created {
+                    point: *p,
+                    denomination: u.denomination,
+                    address: u.address,
+                    lock: u.lock.clone(),
+                })
+                .collect(),
+        )
+    }
+}
+fn u256(v: &[u8]) -> Hash {
+    let mut out = [0u8; 32];
+    let take = v.len().min(32);
+    out[32 - take..].copy_from_slice(&v[v.len() - take..]);
+    out
+}
+/// go-quai's storage receipts (`ReceiptForStorage`) of an executed block:
+/// the consensus receipt, the transaction hash, the gas the transaction used
+/// and, for a successful contract creation, the contract address.
+fn storage_receipts(
+    zone: &Record,
+    tx_hashes: &[Hash],
+    x: &quai_consensus::zone_execution::Executed,
+    location: [u8; 2],
+) -> Vec<u8> {
+    use prost::Message;
+    use quai_primitives::schema::{
+        block::{
+            ProtoLogForStorage, ProtoLogsForStorage, ProtoReceiptForStorage,
+            ProtoReceiptsForStorage, ProtoTransaction, ProtoTransactions,
+        },
+        common::{ProtoAddress, ProtoHash},
+    };
+    let txs = zone.object().transactions();
+    let number = zone.number(2).unwrap_or_default();
+    let mut previous = 0u64;
+    let mut out = ProtoReceiptsForStorage::default();
+    for (r, &i) in x.receipts.iter().zip(&x.receipt_txs) {
+        let tx = &txs[i as usize];
+        let gas_used = r.cumulative_gas_used.saturating_sub(previous);
+        previous = r.cumulative_gas_used;
+        let contract_address = match tx.kind() {
+            Kind::Quai(q) if q.to.is_none() && r.status != 0 => tx.sender().ok().and_then(|from| {
+                quai_execution::evm::calls::creation_address(
+                    from,
+                    q.nonce,
+                    &q.data,
+                    None,
+                    number,
+                    location,
+                    u64::MAX,
+                )
+                .ok()
+                .map(|(a, _)| ProtoAddress { value: a.to_vec() })
+            }),
+            _ => None,
+        };
+        out.receipts.push(ProtoReceiptForStorage {
+            // go-quai `statusEncoding`: every status but failed is stored
+            // as successful (the coinbase lock status 2 included).
+            post_state_or_status: if !r.post_state.is_empty() {
+                r.post_state.clone()
+            } else if r.status == 0 {
+                vec![]
+            } else {
+                vec![1]
+            },
+            cumulative_gas_used: r.cumulative_gas_used,
+            logs: Some(ProtoLogsForStorage {
+                logs: r
+                    .logs
+                    .iter()
+                    .map(|l| ProtoLogForStorage {
+                        address: Some(ProtoAddress {
+                            value: l.address.to_vec(),
+                        }),
+                        topics: l
+                            .topics
+                            .iter()
+                            .map(|t| ProtoHash { value: t.to_vec() })
+                            .collect(),
+                        data: l.data.clone(),
+                    })
+                    .collect(),
+            }),
+            tx_hash: Some(ProtoHash {
+                value: tx_hashes.get(i as usize).copied().unwrap_or_default().to_vec(),
+            }),
+            contract_address,
+            gas_used,
+            outbound_etxs: Some(ProtoTransactions {
+                transactions: r
+                    .outbound_etxs
+                    .iter()
+                    .filter_map(|e| ProtoTransaction::decode(e.encode().as_slice()).ok())
+                    .collect(),
+            }),
+        });
+    }
+    out.encode_to_vec()
 }
 
 fn fixed<const N: usize>(v: &[u8]) -> Option<[u8; N]> {
@@ -1063,7 +1302,11 @@ pub struct Settings {
     pub checkpoint_every: u64,
     /// Zone heights between state commits (`--state`).
     pub commit_every: u64,
+    /// Keep the accepted blocks in the block store (`blockstore.rs`).
+    pub store: bool,
 }
+/// Staged blocks the store writes in one non-durable transaction.
+const STORE_BATCH: usize = 256;
 
 /// The per-height pipeline, its ancestry window and its durable state.
 pub struct Processor {
@@ -1079,6 +1322,7 @@ pub struct Processor {
     seq: u64,
     verify_first: bool,
     stop: Arc<AtomicBool>,
+    store: Option<BlockStore>,
 }
 impl Processor {
     /// Open the processor for `chain`: resume from the latest checkpoint in
@@ -1199,6 +1443,18 @@ impl Processor {
                 (Checker::new(chain, caches, false, state), 0)
             }
         };
+        let mut checker = checker;
+        let store = match (&dir, settings.store) {
+            (Some(dir), true) => Some(open_store(
+                dir,
+                &mut checker,
+                start,
+                summary.resumed_from.is_some(),
+                settings.state,
+            )?),
+            (None, true) => return Err("--store keeps the block store under the data directory".into()),
+            _ => None,
+        };
         Ok(Self {
             verify_first: summary.resumed_from.is_some(),
             checker,
@@ -1211,6 +1467,7 @@ impl Processor {
             ahead: VecDeque::new(),
             seq: 0,
             stop: Arc::new(AtomicBool::new(false)),
+            store,
         })
     }
     /// The first zone height a source must deliver: 0, or the checkpoint
@@ -1270,6 +1527,10 @@ impl Processor {
                 if source_done {
                     break;
                 }
+                // Nothing to check: make the head visible, then wait.
+                if let Some(store) = self.store.as_mut() {
+                    store.flush(false).map_err(io_err("block store"))?;
+                }
                 source.wait(&self.stop);
                 continue;
             };
@@ -1306,13 +1567,20 @@ impl Processor {
             });
             let shares = done.as_ref().map_or(0, |d| d.shares as u64);
             let result = if zone_height == 0 {
-                self.checker.genesis(slot).map(|_| 0)
+                let genesis = self.checker.collect.then(|| genesis_block(&slot, self.checker.receipts, self.checker.state.is_some()));
+                self.checker.genesis(slot).map(|_| (0, genesis))
             } else {
                 self.checker.check(slot, done)
             };
             self.summary.timing.ordered_checks += t.elapsed();
             match result {
-                Ok(order) => {
+                Ok((order, accepted)) => {
+                    if let (Some(store), Some(a)) = (self.store.as_mut(), accepted) {
+                        store.stage(a).map_err(io_err("block store"))?;
+                        if store.pending() >= STORE_BATCH {
+                            store.flush(false).map_err(io_err("block store"))?;
+                        }
+                    }
                     let s = &mut self.summary;
                     s.highest_passed = Some(zone_height);
                     s.heights += 1;
@@ -1344,6 +1612,10 @@ impl Processor {
                     (self.checker.state.as_mut(), self.checker.heads[2])
                 {
                     if h > 0 && h % self.settings.commit_every == 0 {
+                        // The store is durable before the state it serves.
+                        if let Some(store) = self.store.as_mut() {
+                            store.flush(true).map_err(io_err("block store"))?;
+                        }
                         st.commit_state(h, block).map_err(io_err("state commit"))?;
                     }
                 }
@@ -1417,12 +1689,19 @@ impl Processor {
                 self.summary.checkpoint = Some(self.write_checkpoint(log)?);
             }
         }
+        if let Some(store) = self.store.as_mut() {
+            store.flush(true).map_err(io_err("block store"))?;
+        }
         self.summary.state_blocks = self.checker.state.as_ref().map(|s| s.executed);
         self.summary.elapsed = self.started.elapsed();
         Ok(self.summary)
     }
     fn write_checkpoint(&mut self, log: &Log) -> Result<u64, String> {
         let dir = self.dir.clone().ok_or("no checkpoint directory")?;
+        // The store is durable before the checkpoint that it must not trail.
+        if let Some(store) = self.store.as_mut() {
+            store.flush(true).map_err(io_err("block store"))?;
+        }
         let checker = &mut self.checker;
         let (block, height) = checker.heads[2].ok_or("checkpoint before genesis")?;
         let started = Instant::now();
@@ -1464,4 +1743,72 @@ impl Processor {
         ));
         Ok(height)
     }
+}
+
+/// The genesis as the store keeps it.
+fn genesis_block(slot: &Slot, receipts: bool, state: bool) -> Accepted {
+    let zone = slot.height.zone();
+    Accepted {
+        number: 0,
+        hash: zone.hash,
+        parent: [0; 32],
+        order: 0,
+        block: zone.block.clone(),
+        // The genesis has no transactions: its receipts are known to be
+        // none whenever the node keeps receipts (Go export or execution).
+        receipts: (receipts || state).then(|| zone.receipts.clone()),
+        tx_hashes: vec![],
+        uncle_kinds: vec![],
+        parent_entropy: None,
+        utxos: state.then(UtxoChanges::default),
+    }
+}
+/// Open the block store of a checkpoint directory and bring it to the
+/// processor's start: a fresh start replaces it; a resume rolls it back to
+/// the checkpoint, or starts a new store at the checkpoint block.
+fn open_store(
+    dir: &Path,
+    checker: &mut Checker,
+    start: u64,
+    resumed: bool,
+    state: bool,
+) -> Result<BlockStore, String> {
+    let path = blockstore::path(dir);
+    if !resumed && path.exists() {
+        std::fs::remove_file(&path).map_err(io_err("old block store"))?;
+    }
+    let mut store = BlockStore::open(&path, state).map_err(io_err("block store"))?;
+    if resumed {
+        match store.head() {
+            None => {
+                store
+                    .stage(checker.base_block()?)
+                    .map_err(io_err("block store"))?;
+                if let Some(all) = checker.all_utxos() {
+                    store.seed_utxos(&all).map_err(io_err("block store"))?;
+                }
+                store.flush(true).map_err(io_err("block store"))?;
+            }
+            Some((h, _)) if h > start => {
+                store.rollback_to(start).map_err(io_err("block store"))?;
+            }
+            Some((h, _)) if h < start => {
+                return Err(format!(
+                    "the block store {} ends at zone {h}, below checkpoint {start}; remove it to start a new store at the checkpoint",
+                    path.display()
+                ))
+            }
+            _ => {}
+        }
+        let expected = checker.heads[2].map(|h| h.0);
+        let reader = store.reader().map_err(io_err("block store"))?;
+        if reader.hash_at(start).map_err(io_err("block store"))? != expected {
+            return Err(format!(
+                "the block store {} does not hold the checkpoint block at {start}",
+                path.display()
+            ));
+        }
+    }
+    checker.collect = true;
+    Ok(store)
 }

@@ -59,11 +59,94 @@ fn answer(raw: &[u8]) -> Value {
     Value::Object(out)
 }
 
+/// A state replay of zone 0..=8 into the block store, served from the store.
+/// `receipts: false` replays a copy of the export without go-quai's
+/// receipts, so the store keeps the receipts of the node's own execution.
+fn store_view(receipts: bool) -> Arc<ExportView> {
+    static WITH: OnceLock<Arc<ExportView>> = OnceLock::new();
+    static WITHOUT: OnceLock<Arc<ExportView>> = OnceLock::new();
+    let cell = if receipts { &WITH } else { &WITHOUT };
+    cell.get_or_init(|| {
+        let root = std::env::temp_dir().join(format!(
+            "quai-node-rpc-store-{receipts}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let export = if receipts {
+            mainnet_slice()
+        } else {
+            strip_receipts(&mainnet_slice(), &root.join("export"))
+        };
+        let data = root.join("data");
+        let mut o = Options::new(export);
+        o.jobs = 2;
+        o.progress = Duration::from_secs(3600);
+        o.state = true;
+        o.store = true;
+        o.datadir = Some(data.clone());
+        let caches = Arc::new(SharedCaches::new(2).unwrap());
+        let summary = replay::run_with(&o, &Log::new(Level::Warn), Some(caches)).unwrap();
+        assert_eq!(summary.highest_passed, Some(8), "{}", summary.line());
+        Arc::new(ExportView::open_store(&data, "colosseum", &Log::new(Level::Warn)).unwrap())
+    })
+    .clone()
+}
+/// A copy of an export without the receipts.
+fn strip_receipts(src: &Path, dst: &Path) -> PathBuf {
+    use quai_node::qex::{ExportReader, ExportWriter, Manifest};
+    let manifest = Manifest::load(src).unwrap();
+    let genesis = manifest.genesis_hash;
+    let mut reader = ExportReader::new(src, manifest, None);
+    std::fs::create_dir_all(dst).unwrap();
+    let mut w = ExportWriter::new(dst, "colosseum", genesis, false);
+    while let Some(h) = reader.next_height().unwrap() {
+        let records: Vec<_> = h
+            .records
+            .into_iter()
+            .flatten()
+            .map(|mut r| {
+                r.receipts.clear();
+                r
+            })
+            .collect();
+        w.push(&records).unwrap();
+    }
+    w.finish().unwrap();
+    dst.to_path_buf()
+}
+fn native_app(view: Arc<dyn ChainView>) -> Arc<quai_rpc::App> {
+    let config = quai_rpc::Config {
+        mode: "native".into(),
+        timeout_ms: 60_000,
+        ..quai_rpc::Config::default()
+    };
+    quai_rpc::App::native(config, view).unwrap()
+}
+
 #[test]
 fn answers_equal_go_quai_for_zone_0_to_8() {
+    fixture_answers(app(), |_| true);
+}
+#[test]
+fn block_store_answers_equal_go_quai_for_zone_0_to_8() {
+    fixture_answers(native_app(store_view(true)), |_| true);
+}
+#[test]
+fn receipts_of_the_nodes_own_execution_equal_go_quai() {
+    let view = store_view(false);
+    let mut receipts = 0;
+    for n in 0..=8 {
+        let block = view.block_by_number(n).unwrap().unwrap();
+        receipts += view.receipts(&block).unwrap().len();
+    }
+    assert!(receipts > 0);
+    fixture_answers(native_app(view), |m| {
+        m == "quai_getTransactionReceipt" || m == "quai_getLogs"
+    });
+}
+fn fixture_answers(app: Arc<quai_rpc::App>, methods: impl Fn(&str) -> bool) {
     let doc = fixture();
     assert_eq!(doc["head"], 8);
-    let app = app();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -72,6 +155,9 @@ fn answers_equal_go_quai_for_zone_0_to_8() {
     let mut failures = vec![];
     for (i, v) in doc["vectors"].as_array().unwrap().iter().enumerate() {
         let method = v["method"].as_str().unwrap();
+        if !methods(method) {
+            continue;
+        }
         let request =
             serde_json::json!({"jsonrpc":"2.0","id":i,"method":method,"params":v["params"]});
         let raw = runtime

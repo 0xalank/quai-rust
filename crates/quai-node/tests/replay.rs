@@ -515,12 +515,12 @@ fn mainnet_slice_prepares_through_the_hierarchy_with_the_colosseum_spec() {
     assert_eq!(orders.iter().filter(|o| **o == 0).count(), 2);
 }
 
-/// A source that has nothing ready on every other call. The processor waits
-/// and gives the result the export gives.
+/// A source that has a height ready only after the processor waited for
+/// it. The processor waits and gives the result the export gives.
 struct Waiting {
     heights: std::collections::VecDeque<Vec<RawRecord>>,
     zone: u64,
-    ready: bool,
+    armed: bool,
     waits: u64,
 }
 impl quai_node::processor::BlockSource for Waiting {
@@ -528,8 +528,7 @@ impl quai_node::processor::BlockSource for Waiting {
         &mut self,
     ) -> Result<quai_node::processor::Next, quai_node::processor::SourceError> {
         use quai_node::processor::Next;
-        self.ready = !self.ready;
-        if !self.ready {
+        if !std::mem::take(&mut self.armed) {
             return Ok(Next::Wait);
         }
         let Some(records) = self.heights.pop_front() else {
@@ -548,6 +547,7 @@ impl quai_node::processor::BlockSource for Waiting {
     }
     fn wait(&mut self, _: &std::sync::atomic::AtomicBool) {
         self.waits += 1;
+        self.armed = true;
     }
     fn target(&self) -> Option<u64> {
         None
@@ -568,6 +568,7 @@ fn a_source_that_waits_gives_the_export_result() {
         resume: false,
         checkpoint_every: 10_000,
         commit_every: 1_000,
+        store: false,
     };
     let chain = quai_node::spec::Chain::for_environment("local").unwrap();
     let mut p = Processor::open(chain, settings, Some(caches()), std::time::Instant::now()).unwrap();
@@ -575,7 +576,7 @@ fn a_source_that_waits_gives_the_export_result() {
     let mut source = Waiting {
         heights: heights().into(),
         zone: 0,
-        ready: false,
+        armed: false,
         waits: 0,
     };
     let log = Log::new(Level::Warn);

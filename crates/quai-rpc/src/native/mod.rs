@@ -110,6 +110,8 @@ pub const METHODS: &[&str] = &[
 /// Answer one call. View calls do disk reads and proof-of-work, so they run
 /// on a blocking thread.
 pub async fn handle(view: Arc<dyn ChainView>, method: &str, params: &Value) -> R<Value> {
+    // One snapshot per call: a running node's head can move meanwhile.
+    let view = view.pinned().unwrap_or(view);
     let method = method.to_string();
     let params = params.clone();
     match tokio::task::spawn_blocking(move || dispatch(view.as_ref(), &method, &params)).await {

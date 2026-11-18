@@ -12,13 +12,15 @@ Usage: quai-node [GLOBAL OPTIONS] <COMMAND> [OPTIONS]
 Commands:
   replay    Check go-quai blocks exported in the QEX1 format with the Rust
             consensus code; with --state, also execute them
-  rpc       Serve JSON-RPC from an export and the latest replay checkpoint
-            of the data directory (blocks, receipts, logs, state, calls)
+  rpc       Serve JSON-RPC from the block store and the latest checkpoint of
+            the data directory, or from an export (--export): blocks,
+            receipts, logs, state, calls
   run       Run a node (not available yet)
   help      Print this help
 
 Global options:
   --datadir <DIR>       Data directory (default: $HOME/.quai-node)
+  --network <NAME>      Chain environment: colosseum (mainnet, default) or local
   --log-level <LEVEL>   error, warn, info or debug (default: info)
 
 Replay options:
@@ -32,15 +34,20 @@ Replay options:
   --resume              Continue from the latest checkpoint, after checking it
   --checkpoint-every <N>  Zone heights between checkpoints (default: 10000)
   --commit-every <N>    Zone heights between state commits (default: 1000)
+  --store               Keep the accepted blocks in the block store
+                        (<checkpoint dir>/blocks.redb) for `rpc`
   --no-report           Do not write <datadir>/replay/last.json
 
 RPC options:
-  --export <DIR>        The export the replay checked (required)
+  --export <DIR>        Serve this export (the one the replay checked)
+                        instead of the block store
   --listen <ADDR>       Listen address (default: 127.0.0.1:8547)
 
-The RPC serves zone blocks from genesis to the latest state checkpoint in
-<datadir>/replay/<chain>/state/, with go-quai v0.57.0's JSON. The tag latest
-is the checkpoint block. It keeps only that state, as a pruned go-quai node would.
+The RPC serves zone blocks to the latest state checkpoint in
+<datadir>/replay/<chain>/state/ (the block store of `run` or `replay --store`,
+or the export), with go-quai v0.57.0's JSON. The tag latest is the checkpoint
+block. It keeps only that state, as a pruned go-quai node would. A block
+store without state (headers/) is served to its head, without state.
 
 Checkpoints go to <datadir>/replay/<chain>/{state,headers}/ every
 --checkpoint-every heights and at the end. A run without --resume refuses a
@@ -58,7 +65,7 @@ pub enum Command {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct RpcArgs {
-    pub export: PathBuf,
+    pub export: Option<PathBuf>,
     pub listen: String,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -72,10 +79,12 @@ pub struct ReplayArgs {
     pub resume: bool,
     pub checkpoint_every: u64,
     pub commit_every: u64,
+    pub store: bool,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
     pub datadir: PathBuf,
+    pub network: String,
     pub level: Level,
     pub command: Command,
 }
@@ -93,6 +102,8 @@ fn number<T: std::str::FromStr>(flag: &str, value: &str) -> Result<T, String> {
 
 pub fn parse(args: &[String]) -> Result<Args, String> {
     let mut datadir = None;
+    let mut network = None;
+    let mut store = false;
     let mut level = Level::Info;
     let mut command: Option<String> = None;
     let mut export = None;
@@ -115,6 +126,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         let takes_value = matches!(
             flag.as_str(),
             "--datadir"
+                | "--network"
                 | "--log-level"
                 | "--export"
                 | "--to"
@@ -144,6 +156,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         };
         match flag.as_str() {
             "--datadir" => datadir = Some(PathBuf::from(value.unwrap())),
+            "--network" => network = value,
             "--log-level" => {
                 let v = value.unwrap();
                 level =
@@ -167,6 +180,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--no-report" => report = false,
             "--state" => state = true,
+            "--store" => store = true,
             "--resume" => resume = true,
             "--checkpoint-every" | "--commit-every" => {
                 let n: u64 = number(&flag, &value.unwrap())?;
@@ -199,6 +213,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     let replay_only = to.is_some()
         || jobs.is_some()
         || !report
+        || store
         || state
         || resume
         || checkpoint_every.is_some()
@@ -216,15 +231,16 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             resume,
             checkpoint_every: checkpoint_every.unwrap_or(10_000),
             commit_every: commit_every.unwrap_or(1_000),
+            store,
         }),
         Some("rpc") => Command::Rpc(RpcArgs {
-            export: export.take().ok_or("rpc needs --export <DIR>")?,
+            export: export.take(),
             listen: listen.take().unwrap_or_else(|| "127.0.0.1:8547".into()),
         }),
         Some(c) => return Err(format!("unknown command {c:?}")),
     };
     if replay_only && !matches!(command, Command::Replay(_)) {
-        return Err("--to, --jobs, --state, --resume, --checkpoint-every, --commit-every and --no-report belong to replay".into());
+        return Err("--to, --jobs, --state, --store, --resume, --checkpoint-every, --commit-every and --no-report belong to replay".into());
     }
     if export.is_some() && !matches!(command, Command::Replay(_)) {
         return Err("--export belongs to replay and rpc".into());
@@ -234,6 +250,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     }
     Ok(Args {
         datadir,
+        network: network.unwrap_or_else(|| "colosseum".into()),
         level,
         command,
     })
@@ -259,7 +276,11 @@ pub fn main_with(args: &[String]) -> i32 {
             2
         }
         Command::Rpc(r) => {
-            let view = match crate::rpc_view::ExportView::open(&r.export, &args.datadir, &log) {
+            let opened = match &r.export {
+                Some(export) => crate::rpc_view::ExportView::open(export, &args.datadir, &log),
+                None => crate::rpc_view::ExportView::open_store(&args.datadir, &args.network, &log),
+            };
+            let view = match opened {
                 Ok(v) => v,
                 Err(e) => {
                     log.error(&format!("rpc setup: {e}"));
@@ -291,6 +312,7 @@ pub fn main_with(args: &[String]) -> i32 {
                 resume: r.resume,
                 checkpoint_every: r.checkpoint_every,
                 commit_every: r.commit_every,
+                store: r.store,
             };
             let summary = match replay::run(&opts, &log) {
                 Ok(s) => s,
@@ -364,6 +386,7 @@ mod tests {
                 resume: false,
                 checkpoint_every: 10_000,
                 commit_every: 1_000,
+                store: false,
             })
         );
         assert_eq!(parse(&args(&[])).unwrap().command, Command::Help);
@@ -377,7 +400,7 @@ mod tests {
                 .unwrap()
                 .command,
             Command::Rpc(RpcArgs {
-                export: "/x".into(),
+                export: Some("/x".into()),
                 listen: "127.0.0.1:8547".into(),
             })
         );
@@ -386,11 +409,18 @@ mod tests {
                 .unwrap()
                 .command,
             Command::Rpc(RpcArgs {
-                export: "/x".into(),
+                export: Some("/x".into()),
                 listen: "0.0.0.0:1".into(),
             })
         );
-        assert!(parse(&args(&["rpc"])).is_err());
+        assert_eq!(
+            parse(&args(&["rpc"])).unwrap().command,
+            Command::Rpc(RpcArgs {
+                export: None,
+                listen: "127.0.0.1:8547".into(),
+            })
+        );
+        assert!(parse(&args(&["rpc", "--store"])).is_err());
         assert!(parse(&args(&["rpc", "--export", "/x", "--state"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--listen", "a"])).is_err());
         assert!(parse(&args(&["--log-level", "loud", "run"])).is_err());

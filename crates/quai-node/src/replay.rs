@@ -38,6 +38,8 @@ pub struct Options {
     pub checkpoint_every: u64,
     /// Zone heights between state commits (`--state`).
     pub commit_every: u64,
+    /// Keep the accepted blocks in the block store (`--store`).
+    pub store: bool,
 }
 impl Options {
     pub fn new(export: PathBuf) -> Self {
@@ -51,6 +53,7 @@ impl Options {
             resume: false,
             checkpoint_every: 10_000,
             commit_every: 1_000,
+            store: false,
         }
     }
 }
@@ -142,6 +145,7 @@ pub fn run_until(
         resume: opts.resume,
         checkpoint_every: opts.checkpoint_every,
         commit_every: opts.commit_every,
+        store: opts.store,
     };
     let mut processor = Processor::open(spec, settings, caches, started)?;
     if let Some(stop) = stop {

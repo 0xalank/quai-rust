@@ -1,4 +1,24 @@
-//! Account snapshots with pinned read providers and bounded write overlays.
+//! Account snapshots with pinned read providers and write overlays.
+//!
+//! A `World` has two forms:
+//!
+//! - Lazy (`World::from_reader`, from `state_store::restore_sparse`). This is
+//!   the form for block execution at mainnet scale. Its write overlay has no
+//!   count or byte cap, because go-quai has none. Gas does not give a usable
+//!   bound either: the state-scaled SSTORE and cold-access prices fall to zero
+//!   when the parent state size and the contract size are at most one entry
+//!   (params.CalculateGasWithStateScaling). The overlay also lives across
+//!   blocks until the caller persists it. For example, value transfers to
+//!   2,100 contracts with 32 KiB of code each cost less than 25,000,000 gas
+//!   (9,000 + 2,600 + 100 per call at a 2^20-account state) and put more than
+//!   64 MiB of account data into the overlay.
+//! - In memory (`World::default`). This is a complete snapshot for tests,
+//!   private chains, checkpoints and state images. `MAX_ACCOUNTS`,
+//!   `MAX_STORAGE_SLOTS` and the aggregate limits in `checked_totals` bound the
+//!   whole snapshot, not one block, and `validate` enforces them. A mainnet
+//!   state is larger than these bounds, so mainnet replay must use the lazy form.
+//!
+//! The 32,768-byte code bound in both forms is go-quai's `params.NewMaxCodeSize`.
 use super::word::{self, Word};
 pub use crate::state_error::ReadError;
 use quai_primitives::mpt::{self, ReadNodes, Trie};
@@ -11,7 +31,9 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, OnceLock},
 };
+/// Capacity of an in-memory snapshot and of explicit account exports.
 pub const MAX_ACCOUNTS: usize = 65_536;
+/// Per-account capacity of an in-memory snapshot and of storage exports.
 pub const MAX_STORAGE_SLOTS: usize = 4096;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Account {
@@ -110,16 +132,9 @@ pub(crate) fn slot_rlp(value: &Hash) -> Vec<u8> {
     }
 }
 impl Account {
+    // No slot cap here: an account created in a lazy world has no backing yet,
+    // and `World::validate` bounds in-memory snapshots.
     pub(crate) fn storage_trie(&self) -> Result<Trie, ReadError> {
-        if self.storage.len()
-            > if self.backing.is_some() {
-                65_536
-            } else {
-                MAX_STORAGE_SLOTS
-            }
-        {
-            return Err("account storage exceeds working bound".into());
-        }
         if let Some(base) = &self.backing {
             let mut trie = Trie::from_root(base.root);
             for (key, value) in &self.storage {
@@ -134,7 +149,17 @@ impl Account {
                 .filter(|(_, v)| **v != [0; 32])
                 .map(|(k, v)| (k.to_vec(), slot_rlp(v)))
                 .collect::<Vec<_>>();
-            Trie::from_secure_pairs(&pairs).map_err(|e| trie_error(e, false))
+            if pairs.len() <= quai_primitives::trie::MAX_LIST_ITEMS {
+                return Trie::from_secure_pairs(&pairs).map_err(|e| trie_error(e, false));
+            }
+            // The bulk builder stops at MAX_LIST_ITEMS entries. Path updates
+            // give the same root for a larger new account in a lazy world.
+            let mut trie = Trie::default();
+            for (key, value) in &pairs {
+                trie.update(&mpt::NoNodes, key, value)
+                    .map_err(|e| trie_error(e, false))?;
+            }
+            Ok(trie)
         }
     }
     pub fn storage_root(&self) -> Result<Hash, ReadError> {
@@ -201,14 +226,6 @@ impl Account {
                 self.storage.remove(&key);
             }
             return Ok(());
-        }
-        let limit = if self.backing.is_some() {
-            65_536
-        } else {
-            MAX_STORAGE_SLOTS
-        };
-        if !self.storage.contains_key(&key) && self.storage.len() == limit {
-            return Err("storage working bound exceeded".into());
         }
         if let Some(base) = &mut self.backing {
             base.count = if old == [0; 32] {
@@ -414,27 +431,13 @@ impl World {
     }
 
     fn checked_totals(&self) -> Result<Totals, ReadError> {
+        // A lazy overlay has no count or byte cap (see the module documentation).
+        // `insert`, `Journal::set_code` and `consensus_rlp` check the code size.
+        if self.base.is_some() {
+            return Ok(Totals::default());
+        }
         if self.accounts.len() + self.deleted.len() > MAX_ACCOUNTS {
             return Err("account count exceeds snapshot bound".into());
-        }
-        if self.base.is_some() {
-            let mut bytes = 0usize;
-            let mut slots = 0usize;
-            for account in self.accounts.values() {
-                if account.code.len() > 32768 || account.storage.len() > 65_536 {
-                    return Err("account working bound".into());
-                }
-                bytes = bytes
-                    .checked_add(account.code.len() + account.storage.len() * 64 + 128)
-                    .ok_or("account overlay bytes")?;
-                slots = slots
-                    .checked_add(account.storage.len())
-                    .ok_or("account overlay slots")?;
-            }
-            if bytes > 64 << 20 || slots > 1_000_000 {
-                return Err("account overlay working bound".into());
-            }
-            return Ok(Totals::default());
         }
         if let Some(cached) = self.root_cache.get() {
             return Ok(cached.totals);
@@ -506,17 +509,10 @@ impl World {
     }
     pub fn insert(&mut self, address: Address, account: Account) -> Result<(), ReadError> {
         let exists = self.account(&address)?.is_some();
-        if (self.base.is_none() && !exists && self.account_count == MAX_ACCOUNTS as u64)
-            || self.accounts.len() + self.deleted.len() >= MAX_ACCOUNTS
-                && !self.accounts.contains_key(&address)
-                && !self.deleted.contains(&address)
+        let snapshot = self.base.is_none();
+        if (snapshot && !exists && self.account_count == MAX_ACCOUNTS as u64)
+            || (snapshot && account.storage.len() > MAX_STORAGE_SLOTS)
             || account.code.len() > 32768
-            || account.storage.len()
-                > if account.backing.is_some() {
-                    65_536
-                } else {
-                    MAX_STORAGE_SLOTS
-                }
         {
             return Err("account working bound exceeded".into());
         }
@@ -552,12 +548,6 @@ impl World {
         let Some(account) = self.account(address)? else {
             return Ok(None);
         };
-        if self.accounts.len() + self.deleted.len() >= MAX_ACCOUNTS
-            && !self.accounts.contains_key(address)
-            && !self.deleted.contains(address)
-        {
-            return Err("account working bound".into());
-        }
         self.mark_size(*address)?;
         self.invalidate_account(*address)?;
         let entry = Arc::make_mut(&mut self.accounts)

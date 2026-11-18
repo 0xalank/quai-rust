@@ -172,7 +172,9 @@ fn storage_size_overflow_aborts_without_wrapping_the_account_root() {
     assert_eq!(world, before);
 }
 #[test]
-fn storage_capacity_exhaustion_rolls_back_earlier_writes() {
+fn in_memory_snapshot_capacity_rolls_back_earlier_writes() {
+    // The in-memory World is a bounded snapshot; mainnet replay uses the lazy
+    // World, which has no slot cap. The bound applies when the frame commits.
     let (mut world, ctx) = frame(vec![
         0x60, 1, 0x60, 0, 0x55, 0x60, 1, 0x61, 0xff, 0xff, 0x55, 0,
     ]);
@@ -187,7 +189,7 @@ fn storage_capacity_exhaustion_rolls_back_earlier_writes() {
     let before = world.clone();
     assert_eq!(
         evm::execute_frame(&mut world, &ctx, &[], 3_000_000).unwrap_err(),
-        CapabilityError::Limit("storage slots")
+        CapabilityError::Limit("world snapshot")
     );
     assert_eq!(world, before);
 }

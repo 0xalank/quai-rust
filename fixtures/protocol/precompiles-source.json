@@ -1,9 +1,9 @@
 {
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "vectors_sha256": "70964eba2c9939c5ce3bd972736aa6de3c33fa86a97da620ba42e7f7eb8c131d",
-  "driver_sha256": "67d1c5e56d2d8ddaa17643807da016f4c896eaa0a7bf407dca8bb07129a43d68",
+  "vectors_sha256": "60c9682c92b2c56704e48601614d12df7e64d09b88a92008f5c446ad11e19b26",
+  "driver_sha256": "efef74f52c7f5ba76442ef7abf2147cfe6a371fe087fb96946009a95493108d2",
   "oracle_sources": {
-    "reference/precompiles/main.go": "11d5641185cccfb19dae9ed1fb2ebd1c4bdbb7537b2b6185af6ceec0ac68cb95",
+    "reference/precompiles/main.go": "cb2e2d48409feda4027f7744bf9f3a5355b7723239508f6bc795a228cdef122d",
     "reference/settlement/core-export.go": "463368116d0ab4da0e16750ec19bfde053785c28ce145356ffd53de576d951ae"
   },
   "instrumentation": "Observe ApplyMessage result without changing its call or any branch in actual applyTransaction",

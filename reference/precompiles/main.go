@@ -921,8 +921,15 @@ func scopeCases() []tcase {
 				c.list = []common.Address{x}
 				v = append(v, c)
 			}
+			// CALLCODE with value 1 from a balance of 1: the value check
+			// passes, then the address scope decides.
+			c := base(fmt.Sprintf("scope-callcode-value-%s", name), loc)
+			c.accts = []acct{{a: outer, code: join(call(0xf2, x, 1, nil), marker()), balance: 1}}
+			c.to = &outer
+			c.list = []common.Address{x}
+			v = append(v, c)
 			// Three frames: outer -> inner -> deep -> BALANCE(x).
-			c := base(fmt.Sprintf("scope-deep-%s", name), loc)
+			c = base(fmt.Sprintf("scope-deep-%s", name), loc)
 			c.accts = []acct{{a: outer, code: join(call(0xf1, inner, 0, nil), marker())}, {a: inner, code: join(call(0xf4, deep, 0, nil), marker())}, {a: deep, code: join(account(0x31, x), marker())}}
 			c.to = &outer
 			c.list = []common.Address{inner, deep, x}
@@ -1009,6 +1016,9 @@ func balanceCases() []tcase {
 				name string
 				a    common.Address
 			}{{"other-zone", other}, {"local", local}, {"precompile", form(loc, loc.BytePrefix(), 4)}, {"other-precompile", form(loc, otherZone(loc), 4)}} {
+				if target.name == "other-zone" && balance == 1 {
+					continue // the scope group has it
+				}
 				c := base(fmt.Sprintf("balance-callcode-%s-%d", target.name, balance), loc)
 				c.accts = []acct{{a: outer, code: join(call(0xf2, target.a, 1, seq(8)), marker()), balance: balance}}
 				c.to = &outer

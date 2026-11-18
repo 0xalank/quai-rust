@@ -70,3 +70,11 @@ fn creation_access_list_matches_go() {
 fn precompile_address_of_every_zone_matches_go() {
     check_group("translation", 531);
 }
+
+/// A contract with a balance of 0 or 1 sends 1 with CALL to the lockup
+/// contract and with CALLCODE to another zone's address, a local address,
+/// the zone's identity precompile and another zone's form of it.
+#[test]
+fn value_check_order_matches_go() {
+    check_group("balance", 18);
+}

@@ -54,6 +54,22 @@ pub(crate) fn invoke(
     if depth > 1024 {
         return Ok(result(s, gas, Some(Fault::Depth)));
     }
+    // go-quai `EVM.Call` and `EVM.CallCode` check the value against the
+    // caller's balance first: before the lockup branch, the precompile lookup
+    // and the address scope (core/vm/evm.go:260-262, 366-368). The failure
+    // keeps the gas for the caller.
+    if matches!(kind, Kind::Call | Kind::CallCode)
+        && s.world()
+            .account(&parent.address)?
+            .map(|a| a.balance)
+            .unwrap_or(Word::ZERO)
+            < value
+    {
+        return Ok(result(s, gas, Some(Fault::InsufficientBalance)));
+    }
+    if kind == Kind::Call && target == crate::lockup::contract(parent.location) {
+        return super::lockup::invoke(s, parent, input, gas);
+    }
     let precompile = super::precompile::translate(target, parent.location);
     let target = precompile.map(|(_, a)| a).unwrap_or(target);
     if !local(&target, parent.location) {
@@ -74,18 +90,6 @@ pub(crate) fn invoke(
                 Ok(result(s, 0, Some(error)))
             }
         };
-    }
-    if kind == Kind::Call && target == crate::lockup::contract(parent.location) {
-        return super::lockup::invoke(s, parent, input, gas);
-    }
-    if matches!(kind, Kind::Call | Kind::CallCode)
-        && s.world()
-            .account(&parent.address)?
-            .map(|a| a.balance)
-            .unwrap_or(Word::ZERO)
-            < value
-    {
-        return Ok(result(s, gas, Some(Fault::InsufficientBalance)));
     }
     let checkpoint = s.snapshot()?;
     let mut state_gas = 0;

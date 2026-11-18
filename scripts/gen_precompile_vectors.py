@@ -14,7 +14,7 @@ import argparse, json, os, subprocess, tempfile
 from pathlib import Path
 from gen_foundation_vectors import ROOT, PIN, checked_reference, sha
 
-GROUPS = {'creation': 98, 'translation': 531, 'balance': 20, 'scope': 168, 'lockup': 88}
+GROUPS = {'creation': 98, 'translation': 531, 'balance': 18, 'scope': 180, 'lockup': 88}
 RUNS = 668
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--go-quai', required=True)

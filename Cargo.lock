@@ -2497,6 +2497,8 @@ dependencies = [
  "quai-consensus",
  "quai-execution",
  "quai-primitives",
+ "quai-store",
+ "redb",
  "serde",
  "serde_json",
  "sha2",

@@ -400,6 +400,31 @@ fn preimage(key: Hash, raw: &[u8], n: usize) -> io::Result<&[u8]> {
     need(keccak(p) == key, "state preimage/hash binding")?;
     Ok(p)
 }
+/// Copy one execution version into a new database at `dest`, without the
+/// nodes that only other versions reach (`StateDatabase::copy_version`).
+/// Account storage tries are found through the account records.
+pub fn compact(
+    db: &quai_store::state_db::StateDatabase,
+    version: Hash,
+    dest: &std::path::Path,
+) -> io::Result<quai_store::state_db::CopyStats> {
+    let snapshot = db.snapshot(Some(version))?;
+    let mut storage = vec![];
+    snapshot.scan(b"account-data", usize::MAX, usize::MAX, &mut |_, value| {
+        // account_record: address, nonce, balance, storage size, code hash,
+        // storage root, slot count.
+        need(value.len() == 164, "account record width")?;
+        let root: Hash = value[124..156].try_into().unwrap();
+        if root != mpt::empty_root() {
+            storage.push(root);
+        }
+        Ok(())
+    })?;
+    drop(snapshot);
+    storage.sort_unstable();
+    storage.dedup();
+    db.copy_version(version, &storage, dest)
+}
 /// Materialize a local version with independent EVM/ETX roots and exact raw
 /// Qi membership plus independent MuHash/count. This is not a peer importer.
 pub fn restore(snapshot: &Snapshot, expected: &Commitment) -> io::Result<(World, UtxoState)> {
@@ -811,6 +836,95 @@ mod tests {
         drop(changed);
         drop(sparse);
         drop(db);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    #[test]
+    fn compacted_copy_restores_the_same_lazy_state() {
+        let path = std::env::temp_dir().join(format!(
+            "quai-compact-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let db = StateDatabase::open(&path.join("state.redb"), [23; 32]).unwrap();
+        let empty = World::default();
+        let none = UtxoState::default();
+        let (genesis, _, _) = commit(&db, None, [0; 32], &empty, &none, &empty, &none, true);
+        let mut world = World::default();
+        for n in 0..40u8 {
+            let mut account = Account {
+                balance: Word::from_u64(1000 + n as u64),
+                ..Default::default()
+            };
+            if n % 4 == 0 {
+                account.code = vec![0x60, n];
+                for k in 0..3u8 {
+                    account.storage.insert([k + 1; 32], [n + 1; 32]);
+                }
+            }
+            world.insert([n; 20], account).unwrap();
+        }
+        let (first, c1, _) = commit(
+            &db,
+            Some(genesis),
+            [1; 32],
+            &empty,
+            &none,
+            &world,
+            &none,
+            true,
+        );
+        let (base, base_u) =
+            restore_sparse(Arc::new(Mutex::new(db.snapshot(Some(first)).unwrap())), &c1).unwrap();
+        let mut next = base.clone();
+        let mut changed = next.account(&[4; 20]).unwrap().unwrap().as_ref().clone();
+        changed.put([2; 32], [99; 32]).unwrap();
+        changed.balance = Word::from_u64(7);
+        next.insert([4; 20], changed).unwrap();
+        next.remove(&[5; 20]).unwrap();
+        let (second, c2, _) = commit(
+            &db,
+            Some(first),
+            [2; 32],
+            &base,
+            &base_u,
+            &next,
+            &base_u,
+            true,
+        );
+        drop((base, base_u, next));
+        let copy = path.join("copy.redb");
+        let stats = compact(&db, second, &copy).unwrap();
+        assert!(stats.nodes > 0);
+        let (expected, expected_u) = restore_sparse(
+            Arc::new(Mutex::new(db.snapshot(Some(second)).unwrap())),
+            &c2,
+        )
+        .unwrap();
+        let compacted = StateDatabase::open(&copy, [23; 32]).unwrap();
+        let (world, utxos) = restore_sparse(
+            Arc::new(Mutex::new(compacted.snapshot(Some(second)).unwrap())),
+            &c2,
+        )
+        .unwrap();
+        assert_eq!(world.root().unwrap(), expected.root().unwrap());
+        assert_eq!(world.account_count(), 39);
+        assert_eq!(utxos.root(), expected_u.root());
+        let account = world.account(&[4; 20]).unwrap().unwrap();
+        assert_eq!(account.get([2; 32]).unwrap(), [99; 32]);
+        assert_eq!(account.get([1; 32]).unwrap(), [5; 32]);
+        assert_eq!(account.code, vec![0x60, 4]);
+        assert!(world.account(&[5; 20]).unwrap().is_none());
+        // The first version's state is pruned from the copy.
+        assert!(restore_sparse(
+            Arc::new(Mutex::new(compacted.snapshot(Some(first)).unwrap())),
+            &c1
+        )
+        .is_err());
+        drop((world, utxos, expected, expected_u, compacted, db));
         std::fs::remove_dir_all(path).unwrap();
     }
     #[cfg(unix)]

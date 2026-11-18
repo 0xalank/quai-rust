@@ -112,14 +112,36 @@ fn replay(dir: &Path, to: Option<u64>) -> Summary {
     run(dir, to, false)
 }
 fn run(dir: &Path, to: Option<u64>, state: bool) -> Summary {
-    let opts = Options {
-        export: dir.to_path_buf(),
-        to,
-        jobs: 2,
-        progress: Duration::from_secs(3600),
-        state,
-    };
-    replay::run_with(&opts, &Log::new(Level::Warn), Some(caches())).unwrap()
+    let mut opts = Options::new(dir.to_path_buf());
+    opts.to = to;
+    opts.jobs = 2;
+    opts.progress = Duration::from_secs(3600);
+    opts.state = state;
+    // --state keeps its state on disk: give each run its own data directory.
+    let data = state.then(|| {
+        let d = std::env::temp_dir().join(format!(
+            "quai-node-data-{}-{:x}",
+            std::process::id(),
+            rand_id()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    });
+    opts.datadir = data.clone();
+    let s = replay::run_with(&opts, &Log::new(Level::Warn), Some(caches())).unwrap();
+    if let Some(d) = data {
+        std::fs::remove_dir_all(d).unwrap();
+    }
+    s
+}
+fn rand_id() -> u128 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+        ^ N.fetch_add(1, Ordering::Relaxed) as u128
 }
 
 #[test]
@@ -271,13 +293,8 @@ fn container_and_link_faults_are_reported_with_the_last_good_height() {
         w.push(h).unwrap();
     }
     w.finish().unwrap();
-    let opts = Options {
-        export: dir.clone(),
-        to: None,
-        jobs: 1,
-        progress: Duration::from_secs(3600),
-        state: false,
-    };
+    let mut opts = Options::new(dir.clone());
+    opts.progress = Duration::from_secs(3600);
     let e = replay::run_with(&opts, &Log::new(Level::Warn), Some(caches())).unwrap_err();
     assert!(e.contains("genesis"), "{e}");
     std::fs::remove_dir_all(dir).unwrap();

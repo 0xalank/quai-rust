@@ -7,19 +7,30 @@
 //! confirmation follows `confirmation::Hierarchy::prepare_scoped` (which is
 //! bound to the private chain profile): a prime block confirms the region
 //! rollups in its manifest, a region block the zone outbound ETXs since the
-//! last region block. State is kept in memory, so this suits early heights.
+//! last region block.
+//!
+//! The state is the lazy World, UTXO, ETX and lockup state of
+//! `state_store::restore_sparse` over the replay's state database
+//! (`store::StateStore`). Changes stay in an overlay until the next commit,
+//! every `commit_every` heights, which writes them as a new version and
+//! restarts the overlay from it. The ETX and lockup overlays refuse more than
+//! 65,536 changes, so commits come long before that (about 18 ETX changes per
+//! early mainnet block). The redemption and trim history is `store::PastDb`.
+use crate::checkpoint::StateSection;
+use crate::store::{self, PastDb, StateStore};
 use quai_consensus::{
     confirmation::filter_to_sub,
     history::{History, Record},
     zone_execution::{self, Profile, State},
     Error,
 };
-use quai_execution::{historical, qi::OutPoint, settlement};
+use quai_execution::{qi::OutPoint, state_store::Commitment};
 use quai_primitives::{
     transaction::{Kind, Transaction},
     Hash,
 };
 use std::collections::{HashMap, VecDeque};
+use std::io;
 use std::sync::Arc;
 
 /// Rust limit of the private composition, kept as is.
@@ -27,36 +38,19 @@ const MAX_ETXS: usize = 8192;
 /// Confirmation and rollup lists kept for recent blocks.
 const KEEP: usize = 4096;
 
-#[derive(Default)]
-pub struct Past {
-    incoming: HashMap<u64, Vec<Transaction>>,
-    created: HashMap<u64, Vec<(OutPoint, u8)>>,
-}
-impl historical::History for Past {
-    fn incoming_at(&self, height: u64) -> Result<Vec<Transaction>, settlement::Error> {
-        self.incoming
-            .get(&height)
-            .cloned()
-            .ok_or(settlement::Error::Invalid(
-                "missing replay redemption ancestry",
-            ))
-    }
-    fn created_at(&self, height: u64) -> Result<Vec<(OutPoint, u8)>, settlement::Error> {
-        self.created
-            .get(&height)
-            .cloned()
-            .ok_or(settlement::Error::Invalid("missing replay trim ancestry"))
-    }
-}
-
 pub struct StateReplay {
     pub profile: Profile,
+    /// The state as of the last commit; `state` is derived from it.
+    pub base: State,
     pub state: State,
-    pub past: Past,
+    pub past: PastDb,
+    pub store: StateStore,
     confirmed: HashMap<Hash, Arc<Vec<Transaction>>>,
     region_rollups: HashMap<Hash, Arc<Vec<Transaction>>>,
     log: VecDeque<Hash>,
     pub executed: u64,
+    /// Zone height of the last committed version.
+    pub committed_height: u64,
 }
 fn extend(out: &mut Vec<Transaction>, part: &[Transaction]) -> Result<(), Error> {
     if out.len() + part.len() > MAX_ETXS {
@@ -66,19 +60,112 @@ fn extend(out: &mut Vec<Transaction>, part: &[Transaction]) -> Result<(), Error>
     Ok(())
 }
 impl StateReplay {
-    pub fn new(profile: Profile, genesis: Hash) -> Self {
+    /// A fresh replay state at genesis: an empty state database and history.
+    pub fn create(
+        profile: Profile,
+        genesis: Hash,
+        store: StateStore,
+        past: PastDb,
+    ) -> io::Result<Self> {
+        let base = store.restore()?;
         let mut s = Self {
             profile,
-            state: State::default(),
-            past: Past::default(),
+            state: base.clone(),
+            base,
+            past,
+            store,
             confirmed: HashMap::new(),
             region_rollups: HashMap::new(),
             log: VecDeque::new(),
             executed: 0,
+            committed_height: 0,
         };
         s.confirmed.insert(genesis, Arc::new(vec![]));
         s.region_rollups.insert(genesis, Arc::new(vec![]));
-        s
+        Ok(s)
+    }
+    /// Continue from a checkpoint: `store` already holds its version.
+    pub fn resume(
+        profile: Profile,
+        genesis: Hash,
+        store: StateStore,
+        past: PastDb,
+        section: &StateSection,
+        height: u64,
+        executed: u64,
+    ) -> io::Result<Self> {
+        let mut s = Self::create(profile, genesis, store, past)?;
+        s.committed_height = height;
+        s.executed = executed;
+        for (id, confirmed, rollup) in &section.confirmations {
+            s.confirmed
+                .insert(*id, Arc::new(store::decode_tx_list(confirmed)?));
+            if let Some(r) = rollup {
+                s.region_rollups
+                    .insert(*id, Arc::new(store::decode_tx_list(r)?));
+            }
+            if *id != genesis {
+                s.log.push_back(*id);
+            }
+        }
+        Ok(s)
+    }
+    /// Persist the overlay as the version of `block` and restart the overlay.
+    pub fn commit_state(&mut self, height: u64, block: Hash) -> io::Result<()> {
+        if height == self.committed_height {
+            return Ok(());
+        }
+        self.store.commit(height, block, &self.base, &self.state)?;
+        self.past.flush()?;
+        self.committed_height = height;
+        self.rebase()
+    }
+    /// Reload the lazy state from the last committed version.
+    pub fn rebase(&mut self) -> io::Result<()> {
+        let base = self.store.restore()?;
+        self.state = base.clone();
+        self.base = base;
+        Ok(())
+    }
+    pub fn commitment(&self) -> &Commitment {
+        &self.store.commitment
+    }
+    /// The checkpoint section for the last committed version.
+    pub fn section(&self) -> StateSection {
+        let c = &self.store.commitment;
+        let in_log: std::collections::HashSet<&Hash> = self.log.iter().collect();
+        StateSection {
+            version: self.store.version,
+            evm: c.roots.evm,
+            etx: c.roots.etx,
+            utxo: c.roots.utxo,
+            accounts: c.roots.accounts,
+            utxo_count: c.roots.utxo_count,
+            digest: c.digest,
+            confirmations: self
+                .confirmed
+                .iter()
+                .filter(|(id, _)| !in_log.contains(id))
+                .map(|(id, list)| {
+                    (
+                        *id,
+                        store::encode_tx_list(list),
+                        self.region_rollups
+                            .get(id)
+                            .map(|r| store::encode_tx_list(r)),
+                    )
+                })
+                .chain(self.log.iter().filter_map(|id| {
+                    Some((
+                        *id,
+                        store::encode_tx_list(self.confirmed.get(id)?),
+                        self.region_rollups
+                            .get(id)
+                            .map(|r| store::encode_tx_list(r)),
+                    ))
+                }))
+                .collect(),
+        }
     }
     fn region(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
         self.region_rollups
@@ -189,7 +276,7 @@ impl StateReplay {
         })
     }
     /// Record a block that executed and passed every check.
-    pub fn commit(
+    pub fn record(
         &mut self,
         zone: &Record,
         order: u8,
@@ -199,7 +286,7 @@ impl StateReplay {
     ) -> Result<(), Error> {
         let id = zone.id();
         let height = zone.number(2)?;
-        self.past.incoming.insert(
+        self.past.record(
             height,
             zone.object()
                 .transactions()
@@ -207,8 +294,8 @@ impl StateReplay {
                 .filter(|tx| matches!(tx.kind(), Kind::External(_)))
                 .cloned()
                 .collect(),
+            created,
         );
-        self.past.created.insert(height, created);
         if order <= 1 {
             self.region_rollups.insert(id, Arc::new(cross));
         }
@@ -221,9 +308,6 @@ impl StateReplay {
         }
         self.executed += 1;
         Ok(())
-    }
-    pub fn execute_profile(&self) -> &Profile {
-        &self.profile
     }
 }
 pub fn profile_for(

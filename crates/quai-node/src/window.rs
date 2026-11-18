@@ -109,6 +109,25 @@ impl Window {
     pub fn len(&self, context: usize) -> usize {
         self.inner.read().unwrap().order[context].len()
     }
+    /// Records and snapshots per context, oldest first, and the pinned prime
+    /// views, for a checkpoint. The genesis is not included.
+    #[allow(clippy::type_complexity)]
+    pub fn export(&self) -> ([Vec<(Arc<Record>, Arc<Snapshot>)>; 3], Vec<Arc<Record>>) {
+        let w = self.inner.read().unwrap();
+        let windows = std::array::from_fn(|c| {
+            w.order[c]
+                .iter()
+                .filter_map(|id| {
+                    Some((
+                        w.records[c].get(id)?.clone(),
+                        w.snapshots[c].get(id)?.clone(),
+                    ))
+                })
+                .collect()
+        });
+        let views = w.prime_views.iter().map(|(_, r)| r.clone()).collect();
+        (windows, views)
+    }
     pub fn history_reader(self: &Arc<Self>, context: usize) -> Arc<dyn history::Reader> {
         Arc::new(View {
             window: self.clone(),

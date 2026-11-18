@@ -90,6 +90,10 @@ The RPC serves zone blocks to the latest state checkpoint in
 or the export), with go-quai v0.57.0's JSON. The tag latest is the checkpoint
 block. It keeps only that state, as a pruned go-quai node would. A block
 store without state (headers/) is served to its head, without state.
+The same address serves JSON-RPC over WebSocket (ws://ADDR/) with
+quai_subscribe (newHeads, logs, newPendingTransactions); filters and
+subscriptions follow the head of `run`. Browser origins other than
+http://localhost and http://<this host> are refused, as in go-quai.
 
 Checkpoints go to <datadir>/replay/<chain>/{state,headers}/ every
 --checkpoint-every heights and when the command stops. A replay without

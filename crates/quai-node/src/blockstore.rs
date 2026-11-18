@@ -692,6 +692,16 @@ impl StoreReader {
             .map(|v| decode_created(v.value()))
             .transpose()
     }
+    /// The address-index entries block `number` removed (state mode), in
+    /// the order the processor reported them: trimmed outputs, then the
+    /// inputs of its Qi transactions.
+    pub fn spent(&self, number: u64) -> io::Result<Option<Vec<(OutPoint, Address)>>> {
+        let t = self.txn.open_table(SPENT).map_err(store_err)?;
+        t.get(number)
+            .map_err(store_err)?
+            .map(|v| decode_spent(v.value()))
+            .transpose()
+    }
     /// The indexed unspent outputs of an address (state mode).
     pub fn outpoints(&self, address: &Address) -> io::Result<Vec<OutPoint>> {
         let t = self.txn.open_table(ADDR).map_err(store_err)?;
@@ -788,6 +798,8 @@ mod tests {
         assert_eq!(r.transaction(&[9; 32]).unwrap(), Some((2, 0)));
         assert_eq!(r.outpoints(&[7; 20]).unwrap(), vec![point(2)]);
         assert_eq!(r.outpoints(&[8; 20]).unwrap(), vec![point(3)]);
+        assert_eq!(r.spent(2).unwrap(), Some(vec![(point(1), [7; 20])]));
+        assert_eq!(r.spent(1).unwrap(), Some(vec![]));
         assert_eq!(r.entropy(&b1.hash).unwrap(), Some([2; 32]));
         assert_eq!(r.block(&b1.hash).unwrap().unwrap().uncle_kinds, vec![1, 2]);
         assert_eq!(r.canonical_number(&b2.hash).unwrap(), Some(2));

@@ -7,7 +7,7 @@ p=argparse.ArgumentParser();p.add_argument('--go-quai',required=True);m=p.add_mu
 source=ROOT/'reference/qi-settlement/main.go';env={**os.environ,'GOPROXY':'off','GOTOOLCHAIN':'local'}
 with tempfile.TemporaryDirectory(prefix='quai-qi-settlement-')as directory:
  d=Path(directory);overlay=d/'overlay.json';binary=d/'oracle';overlay.write_text(json.dumps({'Replace':{str(go/'cmd/quai-qi-settlement-vectors/main.go'):str(source)}}));subprocess.run(['go','build','-overlay',str(overlay),'-ldflags','-X main.referenceRevision='+PIN,'-o',str(binary),'./cmd/quai-qi-settlement-vectors'],cwd=go,env=env,check=True);v=json.loads(subprocess.check_output([str(binary)],cwd=d,env=env))
-assert v['reference_revision']==PIN and len(v['vectors'])==756
+assert v['reference_revision']==PIN and len(v['vectors'])==757
 path=ROOT/'fixtures/protocol/qi-settlement.json';encoded=(json.dumps(v,sort_keys=True,indent=2)+'\n').encode()
 if a.write:path.write_bytes(encoded)
 elif path.read_bytes()!=encoded:raise SystemExit('Qi settlement corpus differs')

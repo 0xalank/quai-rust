@@ -104,16 +104,12 @@ fn node(entries: &[Entry<'_>], depth: usize) -> Vec<u8> {
     list(children)
 }
 /// Values are exact list consensus encodings, e.g. type-prefixed transaction RLP.
-/// Bounds are implementation scope, not qualified live-network consensus limits.
+/// The values are already in memory, so there is no byte budget: receipt lists
+/// exceed 64 MiB at the block gas limit. The item limit is above any block:
+/// a 50,000,000-gas block holds at most 13,157 transactions.
 pub fn ordered_root(values: &[Vec<u8>]) -> Result<Hash, String> {
     if values.len() > MAX_LIST_ITEMS {
         return Err("commitment list item limit exceeded".into());
-    }
-    let total = values
-        .iter()
-        .try_fold(0usize, |n, v| n.checked_add(v.len()));
-    if total.is_none_or(|n| n > MAX_VALUE_BYTES) {
-        return Err("commitment byte limit exceeded".into());
     }
     if values.is_empty() {
         return Ok(keccak(&bytes(&[])));
@@ -215,5 +211,12 @@ mod tests {
             ordered_root(&[vec![2], vec![1]])
         );
         assert!(ordered_root(&[vec![]]).is_err());
+    }
+    #[test]
+    fn ordered_root_has_no_byte_budget() {
+        // A block of minimal Qi transactions has more than 64 MiB of receipts.
+        let values = vec![vec![1; 33 << 20], vec![2; 33 << 20]];
+        assert!(values.iter().map(Vec::len).sum::<usize>() > MAX_VALUE_BYTES);
+        assert!(ordered_root(&values).is_ok());
     }
 }

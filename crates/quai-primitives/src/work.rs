@@ -228,12 +228,12 @@ impl WorkObject {
                 .encode_to_vec(),
         )?;
         body.header = Some(header.wire.clone());
+        // No transaction-count cap: go-quai bounds the list only by block gas
+        // (at least 3,800 gas per Qi transaction, so up to 13,157 entries at
+        // 50,000,000 gas) and by the 3 MiB message size checked above.
         let decode_list =
             |value: &mut Option<b::ProtoTransactions>| -> Result<Vec<Transaction>, String> {
                 let value = value.get_or_insert_default();
-                if value.transactions.len() > 4096 {
-                    return Err("work-object transaction list exceeds supported scope".into());
-                }
                 value
                     .transactions
                     .iter_mut()

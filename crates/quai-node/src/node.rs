@@ -45,6 +45,16 @@ pub struct Options {
     /// At the peers' head less the margin, follow the head through gossip
     /// with go-quai's head choice (tip mode); otherwise poll by number.
     pub gossip: bool,
+    /// Test tool for the shadow run: start a stateless node at a trusted
+    /// zone block (`bootstrap.rs`) when the data directory holds no
+    /// checkpoint (Some(None) chooses the block), and accept the checkpoints
+    /// of such a run. That block and its ancestry are not validated by this
+    /// node. None: start only from the genesis or a validated checkpoint.
+    pub shadow_bootstrap: Option<Option<quai_primitives::Hash>>,
+    /// Peers that must agree on the trusted block.
+    pub bootstrap_quorum: usize,
+    /// Zone blocks the trusted block stays below the best peer head.
+    pub bootstrap_depth: u64,
 }
 
 /// SIGINT and SIGTERM set `stop`; the code is 130 or 143. A second signal
@@ -99,6 +109,104 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             crate::processor::describe(&e)
         )
     })?;
+    // Production runs trust no block: refuse a shadow run's checkpoint
+    // before anything else (the processor refuses it too).
+    if o.shadow_bootstrap.is_none() {
+        let dir = crate::processor::checkpoint_dir(&o.datadir, &chain, !o.stateless);
+        let latest = crate::checkpoint::list(&dir)
+            .map_err(|e| format!("checkpoint directory: {e}"))?;
+        if let Some((h, path)) = latest.first() {
+            if let Some((t, at)) = crate::checkpoint::read(path).ok().and_then(|c| c.trusted) {
+                return Err(format!(
+                    "checkpoint {h} rejected: it continues a shadow run (a test tool) whose bootstrap trusted zone block {} at {at}; that block and its ancestry were not validated by this node. Without --shadow-bootstrap the node starts only from the genesis or from a checkpoint it validated itself: use another data directory",
+                    quai_primitives::encode_hex(&t)
+                ));
+            }
+        }
+    }
+    // The network first: a bootstrap fetches the trusted ancestry from it.
+    let peer_addrs = o
+        .peers
+        .iter()
+        .map(|p| p.parse::<Multiaddr>().map_err(|e| format!("peer {p}: {e}")))
+        .collect::<Result<Vec<_>, _>>()?;
+    if o.public {
+        peers::public_allowed().map_err(|e| format!("public peers: {e}"))?;
+    }
+    if !o.public && peer_addrs.is_empty() {
+        return Err("no peers: give --peer or allow public peers".into());
+    }
+    let node = {
+        let _guard = runtime.enter();
+        let policy = if o.public {
+            DialPolicy::Public
+        } else {
+            DialPolicy::Loopback
+        };
+        // Gossip needs the public profile: listening, go-quai's validators
+        // and relay; publishing stays off.
+        let config = if o.gossip && o.public {
+            NetConfig::public(0)
+        } else {
+            NetConfig::read_only(policy)
+        };
+        Arc::new(
+            PublicNode::launch(config, libp2p::identity::Keypair::generate_ed25519())
+                .map_err(|e| format!("p2p: {e}"))?,
+        )
+    };
+    if let Some(trusted) = o.shadow_bootstrap {
+        if !o.stateless {
+            return Err("--shadow-bootstrap needs --stateless: peers serve no state (go-quai GetTrieNode is not implemented), so execution has no parent state at the trusted block".into());
+        }
+        log.warn("SHADOW BOOTSTRAP (test tool, not for production): this run starts at a trusted zone block; that block and its whole ancestry are NOT validated by this node. Every block after it passes every stateless check");
+        let dir = crate::processor::checkpoint_dir(&o.datadir, &chain, false);
+        let existing = crate::checkpoint::list(&dir)
+            .map_err(|e| format!("checkpoint directory: {e}"))?;
+        match existing.first() {
+            Some((h, path)) => {
+                let cp = crate::checkpoint::read(path)
+                    .map_err(|e| format!("checkpoint {h}: {e}"))?;
+                match (cp.trusted, trusted) {
+                    (Some((t, at)), Some(want)) if t != want => {
+                        return Err(format!(
+                            "{} continues a shadow run from zone block {} at {at}, not {}; use another data directory",
+                            dir.display(),
+                            quai_primitives::encode_hex(&t),
+                            quai_primitives::encode_hex(&want)
+                        ))
+                    }
+                    (Some((t, at)), _) => log.warn(&format!(
+                        "SHADOW BOOTSTRAP: resuming from checkpoint {h}; the trusted block is {} at {at} (evidence: {})",
+                        quai_primitives::encode_hex(&t),
+                        dir.join("bootstrap.json").display()
+                    )),
+                    (None, _) => log.info(&format!(
+                        "shadow bootstrap: {} holds the validated checkpoint {h}; resuming from it without a trusted block",
+                        dir.display()
+                    )),
+                }
+            }
+            None => {
+                crate::bootstrap::run(
+                    runtime.handle(),
+                    node.clone(),
+                    chain.clone(),
+                    &o.datadir,
+                    &crate::bootstrap::Options {
+                        trusted,
+                        quorum: o.bootstrap_quorum,
+                        depth: o.bootstrap_depth,
+                        peers: peer_addrs.clone(),
+                        public: o.public,
+                        max_peers: o.max_peers,
+                    },
+                    &stop,
+                    log,
+                )?;
+            }
+        }
+    }
     let settings = Settings {
         jobs: o.jobs,
         progress: o.progress,
@@ -108,6 +216,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         checkpoint_every: o.checkpoint_every,
         commit_every: o.commit_every,
         store: true,
+        shadow: o.shadow_bootstrap.is_some(),
     };
     let mut processor = Processor::open(chain.clone(), settings, None, started)?;
     processor.set_stop_flag(stop.clone());
@@ -163,37 +272,6 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             }
         });
     }
-    // Peers.
-    let peer_addrs = o
-        .peers
-        .iter()
-        .map(|p| p.parse::<Multiaddr>().map_err(|e| format!("peer {p}: {e}")))
-        .collect::<Result<Vec<_>, _>>()?;
-    if o.public {
-        peers::public_allowed().map_err(|e| format!("public peers: {e}"))?;
-    }
-    if !o.public && peer_addrs.is_empty() {
-        return Err("no peers: give --peer or allow public peers".into());
-    }
-    let node = {
-        let _guard = runtime.enter();
-        let policy = if o.public {
-            DialPolicy::Public
-        } else {
-            DialPolicy::Loopback
-        };
-        // Gossip needs the public profile: listening, go-quai's validators
-        // and relay; publishing stays off.
-        let config = if o.gossip && o.public {
-            NetConfig::public(0)
-        } else {
-            NetConfig::read_only(policy)
-        };
-        Arc::new(
-            PublicNode::launch(config, libp2p::identity::Keypair::generate_ed25519())
-                .map_err(|e| format!("p2p: {e}"))?,
-        )
-    };
     let mut source = PeerSource::start(
         runtime.handle(),
         node.clone(),

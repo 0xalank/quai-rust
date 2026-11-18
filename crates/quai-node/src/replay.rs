@@ -146,6 +146,7 @@ pub fn run_until(
         checkpoint_every: opts.checkpoint_every,
         commit_every: opts.commit_every,
         store: opts.store,
+        shadow: false,
     };
     let mut processor = Processor::open(spec, settings, caches, started)?;
     if let Some(stop) = stop {

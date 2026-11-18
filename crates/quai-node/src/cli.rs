@@ -62,6 +62,24 @@ Run options:
   --max-peers <N>       Peers to fetch from (default: 8)
   --no-gossip           At the peers' head, poll by number instead of
                         following the head through gossip
+  --shadow-bootstrap <HASH|auto>
+                        TEST TOOL for the shadow run, not for production.
+                        With --stateless and an empty data directory, start
+                        at a trusted zone block instead of the genesis: that
+                        block and its ancestry are NOT validated by this
+                        node. The node fetches the ancestry the checks read
+                        (header windows, rollups, prime controller inputs)
+                        by hash links back from it, writes a checkpoint there
+                        and checks every block after it. auto chooses the
+                        block --shadow-bootstrap-depth below the best peer
+                        head. The flag also lets run continue from the
+                        checkpoints of such a run; without it run refuses
+                        them and starts only from the genesis or a checkpoint
+                        it validated itself
+  --shadow-bootstrap-quorum <N>  Peers that must report the trusted block
+                        as canonical (default: 3)
+  --shadow-bootstrap-depth <N>  Zone blocks the trusted block stays below
+                        the best peer head (default: 1000)
   --jobs, --to, --progress, --checkpoint-every, --commit-every as for replay
 
 Observe options:
@@ -171,6 +189,9 @@ struct Flags {
     seconds: Option<u64>,
     margin: Option<u64>,
     max_peers: Option<usize>,
+    shadow_bootstrap: Option<Option<quai_primitives::Hash>>,
+    bootstrap_quorum: Option<usize>,
+    bootstrap_depth: Option<u64>,
 }
 const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report"];
 const RUN_ONLY: &[&str] = &[
@@ -182,6 +203,9 @@ const RUN_ONLY: &[&str] = &[
     "--no-gossip",
     "--margin",
     "--max-peers",
+    "--shadow-bootstrap",
+    "--shadow-bootstrap-quorum",
+    "--shadow-bootstrap-depth",
 ];
 const SYNC: &[&str] = &[
     "--to",
@@ -222,6 +246,9 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--peer"
                 | "--margin"
                 | "--max-peers"
+                | "--shadow-bootstrap"
+                | "--shadow-bootstrap-quorum"
+                | "--shadow-bootstrap-depth"
                 | "--seconds"
         );
         let value = if takes_value {
@@ -262,6 +289,27 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--peer" => f.peers.push(v),
             "--to" => f.to = Some(number("--to", &v)?),
             "--margin" => f.margin = Some(number("--margin", &v)?),
+            "--shadow-bootstrap" => {
+                f.shadow_bootstrap = Some(if v == "auto" {
+                    None
+                } else {
+                    let raw = quai_primitives::decode_hex(&v)
+                        .map_err(|_| format!("--shadow-bootstrap: not a hash: {v:?}"))?;
+                    Some(raw.try_into().map_err(|_| {
+                        format!("--shadow-bootstrap: not a 32-byte hash: {v:?}")
+                    })?)
+                })
+            }
+            "--shadow-bootstrap-quorum" => {
+                let n: usize = number("--shadow-bootstrap-quorum", &v)?;
+                if n == 0 || n > 8 {
+                    return Err("--shadow-bootstrap-quorum must be between 1 and 8".into());
+                }
+                f.bootstrap_quorum = Some(n);
+            }
+            "--shadow-bootstrap-depth" => {
+                f.bootstrap_depth = Some(number("--shadow-bootstrap-depth", &v)?)
+            }
             "--max-peers" => {
                 let n: usize = number("--max-peers", &v)?;
                 if n == 0 || n > 8 {
@@ -378,7 +426,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     .number("sync.jobs")?
                     .map_or_else(default_jobs, |n| n as usize),
             };
-            Command::Run(crate::node::Options {
+            let o = crate::node::Options {
                 datadir: datadir.clone(),
                 network: network.clone(),
                 stateless: f.stateless || config.flag("sync.stateless")?.unwrap_or(false),
@@ -416,7 +464,14 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     None => config.number("sync.commit_every")?.unwrap_or(1_000),
                 },
                 gossip: !f.no_gossip,
-            })
+                shadow_bootstrap: f.shadow_bootstrap,
+                bootstrap_quorum: f.bootstrap_quorum.unwrap_or(crate::bootstrap::QUORUM),
+                bootstrap_depth: f.bootstrap_depth.unwrap_or(crate::bootstrap::DEPTH),
+            };
+            if o.shadow_bootstrap.is_some() && !o.stateless {
+                return Err("--shadow-bootstrap needs --stateless: peers serve no state, so execution has no parent state at the trusted block".into());
+            }
+            Command::Run(o)
         }
         c => return Err(format!("unknown command {c:?}")),
     };

@@ -6,6 +6,7 @@
 //! `observe` applies go-quai's head choice to live gossip. The Phase 2 gate
 //! (two weeks at the live head without divergence from Go) is not passed.
 pub mod blockstore;
+pub mod bootstrap;
 pub mod checkpoint;
 pub mod cli;
 pub mod config;

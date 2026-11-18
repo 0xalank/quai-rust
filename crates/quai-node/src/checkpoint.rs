@@ -24,6 +24,13 @@
 //! controller state from it only while its prime head is before
 //! ControllerKickInBlock.
 //!
+//! A checkpoint of a shadow run (`quai-node run --shadow-bootstrap`, a test
+//! tool) ends with one more section, flag 2: the zone block the bootstrap
+//! trusted and its height. That block and its ancestry were not validated by
+//! the node; every later checkpoint of the run keeps the section. A run
+//! without the test flag and every replay refuse such a checkpoint, and
+//! binaries older than the section refuse it as trailing bytes.
+//!
 //! A writer writes `<name>.tmp`, syncs it, renames it and syncs the
 //! directory, so an interrupted write never replaces a complete checkpoint.
 use crate::store::{fault, sync_dir};
@@ -96,6 +103,10 @@ pub struct Checkpoint {
     pub orders: Vec<(Hash, u8)>,
     pub state: Option<StateSection>,
     pub prime: Option<PrimeSection>,
+    /// The zone block (hash, height) a shadow bootstrap trusted: it and its
+    /// ancestry were not validated by this node. None: validated from the
+    /// genesis or from a checkpoint that was.
+    pub trusted: Option<(Hash, u64)>,
 }
 
 struct W(Vec<u8>);
@@ -275,6 +286,11 @@ impl Checkpoint {
                 w.bytes(r);
             }
         }
+        if let Some((hash, height)) = &self.trusted {
+            w.u8(2);
+            w.hash(hash);
+            w.u64(*height);
+        }
         let digest: Hash = Sha256::digest(&w.0).into();
         w.0.extend(digest);
         w.0
@@ -380,7 +396,7 @@ impl Checkpoint {
             }
             _ => return Err(bad("checkpoint state flag")),
         };
-        let prime = if r.at == body.len() {
+        let prime = if r.at == body.len() || body[r.at] == 2 {
             None
         } else {
             if r.u8()? != 1 {
@@ -410,6 +426,14 @@ impl Checkpoint {
                 rollups,
             })
         };
+        let trusted = if r.at == body.len() {
+            None
+        } else {
+            if r.u8()? != 2 {
+                return Err(bad("checkpoint trusted-block flag"));
+            }
+            Some((r.hash()?, r.u64()?))
+        };
         if r.at != body.len() {
             return Err(bad("checkpoint trailing bytes"));
         }
@@ -425,6 +449,7 @@ impl Checkpoint {
             orders,
             state,
             prime,
+            trusted,
         })
     }
 }
@@ -483,7 +508,7 @@ pub fn read(path: &Path) -> io::Result<Checkpoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn sample(state: bool, prime: bool) -> Checkpoint {
+    fn sample(state: bool, prime: bool, trusted: bool) -> Checkpoint {
         Checkpoint {
             environment: "colosseum".into(),
             genesis: [1; 32],
@@ -530,12 +555,20 @@ mod tests {
                 head_window: vec![14; 41],
                 rollups: vec![([15; 32], vec![0, 0, 0, 0])],
             }),
+            trusted: trusted.then_some(([16; 32], 9_000)),
         }
     }
     #[test]
     fn encoding_round_trips_and_any_changed_byte_is_rejected() {
-        for (state, prime) in [(false, false), (true, false), (false, true), (true, true)] {
-            let c = sample(state, prime);
+        for (state, prime, trusted) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, true, true),
+            (false, false, true),
+        ] {
+            let c = sample(state, prime, trusted);
             let raw = c.encode();
             assert_eq!(Checkpoint::decode(&raw).unwrap(), c);
             for i in [0, MAGIC.len(), raw.len() / 2, raw.len() - 1] {
@@ -545,5 +578,10 @@ mod tests {
             }
             assert!(Checkpoint::decode(&raw[..raw.len() - 1]).is_err());
         }
+        // A checkpoint without the trusted-block section is one with None:
+        // the section only appends bytes.
+        let plain = sample(false, true, false).encode();
+        let marked = sample(false, true, true).encode();
+        assert_eq!(plain[..plain.len() - 32], marked[..plain.len() - 32]);
     }
 }

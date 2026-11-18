@@ -33,7 +33,7 @@ use crate::uncles;
 use crate::window::Window;
 use crypto_bigint::Encoding as _;
 use quai_consensus::{
-    block, choice_window,
+    block, choice_window, confirmation,
     history::{History, Record},
     placement::{self, CandidateIndex, Snapshot},
     pow::SharedCaches,
@@ -277,6 +277,9 @@ struct Checker {
     /// Build what the block store keeps of each accepted block.
     collect: bool,
     caches: Arc<SharedCaches>,
+    /// The zone block a shadow bootstrap trusted (test tool): it and its
+    /// ancestry were not validated here. Every checkpoint carries it on.
+    trusted: Option<(Hash, u64)>,
 }
 struct Fail {
     context: Context,
@@ -335,6 +338,7 @@ impl Checker {
             receipts,
             state,
             chain,
+            trusted: None,
         }
     }
     fn remember_order(&mut self, id: Hash, order: u8) {
@@ -477,6 +481,7 @@ impl Checker {
                 .collect(),
             state,
             prime: Some(self.prime_section(controller)),
+            trusted: self.trusted,
         })
     }
     /// The prime controller state and the recent region rollups.
@@ -556,6 +561,7 @@ impl Checker {
         if self.heads[2] != Some((cp.block, cp.height)) {
             return Err("checkpoint zone head is not its block".into());
         }
+        self.trusted = cp.trusted;
         self.restore_prime(cp, rollups)
     }
     /// The prime controller state and region rollups of a checkpoint. A
@@ -1212,12 +1218,23 @@ struct Resumed {
     /// Region rollups of a state section (checkpoints without a prime section).
     rollups: Vec<(Hash, Arc<Vec<Transaction>>)>,
 }
-fn load_checkpoint(dir: &Path, chain: &Chain, state: bool) -> Result<Option<Resumed>, String> {
+fn load_checkpoint(
+    dir: &Path,
+    chain: &Chain,
+    state: bool,
+    shadow: bool,
+) -> Result<Option<Resumed>, String> {
     let list = checkpoint::list(dir).map_err(io_err("checkpoint directory"))?;
     let Some((height, path)) = list.first() else {
         return Ok(None);
     };
     let cp = checkpoint::read(path).map_err(|e| format!("checkpoint {height} rejected: {e}"))?;
+    if let (Some((hash, at)), false) = (cp.trusted, shadow) {
+        return Err(format!(
+            "checkpoint {height} rejected: it continues a shadow run (a test tool) whose bootstrap trusted zone block {} at {at}; that block and its ancestry were not validated by this node. Without --shadow-bootstrap the node starts only from the genesis or from a checkpoint it validated itself: use another data directory",
+            hex(&hash)
+        ));
+    }
     if cp.height != *height
         || cp.environment != chain.spec().environment
         || cp.genesis != chain.genesis_hash()
@@ -1343,6 +1360,11 @@ pub struct Settings {
     pub commit_every: u64,
     /// Keep the accepted blocks in the block store (`blockstore.rs`).
     pub store: bool,
+    /// Accept a checkpoint of a shadow run (`--shadow-bootstrap`, a test
+    /// tool), whose ancestry below a trusted block was not validated here.
+    /// Off, the processor starts only from the genesis or a checkpoint whose
+    /// whole ancestry it validated.
+    pub shadow: bool,
 }
 /// Staged blocks the store writes in one non-durable transaction.
 const STORE_BATCH: usize = 256;
@@ -1396,7 +1418,7 @@ impl Processor {
             std::fs::create_dir_all(dir).map_err(io_err("checkpoint directory"))?;
         }
         let resumed = match (&dir, settings.resume) {
-            (Some(dir), true) => load_checkpoint(dir, &chain, settings.state)?,
+            (Some(dir), true) => load_checkpoint(dir, &chain, settings.state, settings.shadow)?,
             (Some(dir), false) => {
                 let existing = checkpoint::list(dir).map_err(io_err("checkpoint directory"))?;
                 if let Some((h, _)) = existing.first() {
@@ -1531,6 +1553,10 @@ impl Processor {
     }
     pub fn resumed_from(&self) -> Option<u64> {
         self.summary.resumed_from
+    }
+    /// The zone block a shadow bootstrap trusted, when this run continues one.
+    pub fn trusted(&self) -> Option<(Hash, u64)> {
+        self.checker.trusted
     }
     pub fn chain(&self) -> &Arc<Chain> {
         &self.checker.chain
@@ -2672,3 +2698,519 @@ impl Processor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shadow bootstrap (`quai-node run --stateless --shadow-bootstrap <hash>`,
+// a test tool): the ancestry windows, orders, region rollups and prime
+// controller state at a trusted zone block, derived from blocks fetched by
+// hash links back from it instead of a replay from the genesis. The trusted
+// block and its ancestry are not validated; the checkpoint carries the
+// trusted block, and a run without the test flag refuses it.
+
+/// What a bootstrap starts from besides the zone heights of its source.
+pub struct BootstrapSeed {
+    /// The trusted zone block (hash, zone height); the source ends there.
+    pub trusted: (Hash, u64),
+    /// The prime head at the trusted block (hash, prime number).
+    pub prime_head: (Hash, u64),
+    /// The prime and region views of the source's first zone block, which
+    /// must be a prime block (its zone view is the source's first height).
+    pub prime_view: Vec<u8>,
+    pub region_view: Vec<u8>,
+    /// Header exchange rates of the canonical prime blocks by prime number,
+    /// from `prime_head - 2 * WINDOW` to the first prime block: each token
+    /// choice row reads the rate WINDOW prime blocks before its block.
+    pub rates: std::collections::BTreeMap<u64, Uint>,
+}
+/// What a bootstrap derived.
+#[derive(Clone, Debug, Default)]
+pub struct BootstrapReport {
+    /// The first zone height (a prime block) and the trusted height.
+    pub start: u64,
+    pub trusted: u64,
+    /// Zone heights adopted and records per context.
+    pub heights: u64,
+    pub records: [u64; 3],
+    /// Region rollups derived and token choice rows computed.
+    pub rollups: u64,
+    pub choices: u64,
+    /// Records per context in the checkpoint.
+    pub windows: [usize; 3],
+    pub checkpoint: PathBuf,
+}
+/// The prime controller inputs gathered while the bootstrap adopts heights.
+struct Warmup {
+    prime_head: (Hash, u64),
+    rates: std::collections::BTreeMap<u64, Uint>,
+    /// The last prime record: its interlinks come with its child's body
+    /// (a prime body carries its parent's interlinks).
+    pending: Option<(Arc<Record>, Snapshot)>,
+    window: Option<choice_window::Window>,
+    parent_window: Option<choice_window::Window>,
+    inbound: Option<Vec<Transaction>>,
+    choices: u64,
+    rollups: u64,
+}
+fn err(e: Error) -> String {
+    describe(&e)
+}
+impl Checker {
+    /// Seed the windows at a prime block from its three views. A
+    /// prime-coincident block starts a manifest in the region and zone
+    /// contexts and sets the termini it is the origin of; every other termini
+    /// entry of slice [0 0] keeps the genesis.
+    fn seed(&mut self, views: [Arc<Record>; 3], warm: &mut Warmup) -> Result<(), String> {
+        self.install_genesis();
+        let id = views[2].id();
+        if views.iter().any(|r| r.id() != id) {
+            return Err("the seed views are of different blocks".into());
+        }
+        let genesis = placement::Termini::genesis(self.chain.genesis_hash());
+        let mut claim = [0u8; 32];
+        let mut snapshots = vec![];
+        for (c, r) in views.iter().enumerate() {
+            let profile = self.chain.placement_profile(c);
+            let location = location_of(r);
+            let (prev, termini) = placement::pcrc(
+                &genesis,
+                id,
+                &location,
+                &profile.location,
+                c > 0,
+                claim,
+                &profile.genesis,
+            )
+            .map_err(err)?;
+            claim = prev;
+            snapshots.push(Snapshot {
+                manifest: Some(placement::next_manifest(c, 0, id, Some(&[])).map_err(err)?),
+                interlinks: None,
+                termini: Some(termini),
+            });
+        }
+        let mut snapshots = snapshots.into_iter();
+        let prime = snapshots.next().ok_or("seed snapshot")?;
+        for c in 1..3 {
+            let s = snapshots.next().ok_or("seed snapshot")?;
+            self.window.insert(c, views[c].clone(), Arc::new(s));
+        }
+        for c in 0..3 {
+            self.heads[c] = Some((id, views[c].number(c).map_err(err)?));
+        }
+        warm.pending = Some((views[0].clone(), prime));
+        self.remember_order(id, 0);
+        self.window.pin_prime_view(views[2].clone());
+        let rate = rate_of(&views[0])?;
+        warm.rates.insert(views[0].number(0).map_err(err)?, rate);
+        Ok(())
+    }
+    /// One height of the trusted ancestry: the append snapshots, the order,
+    /// the region rollup and the prime controller inputs that the checks
+    /// derive, with the commitments the headers carry for them (parent
+    /// manifest and interlinks, PCRC, ETX rollup root, region manifest), but
+    /// without the block rules: these heights are trusted by their hash
+    /// links to the trusted block.
+    fn adopt(&mut self, slot: &Slot, warm: &mut Warmup) -> Result<u8, String> {
+        let records = records_of(slot).map_err(|f| {
+            format!(
+                "{} {}: expected {}, actual {}",
+                f.context.name(),
+                f.check,
+                f.expected,
+                f.actual
+            )
+        })?;
+        let zone = records[2].clone().ok_or("a height without a zone record")?;
+        let order = (0..3)
+            .find(|c| records[*c].is_some())
+            .ok_or("a height without records")? as u8;
+        let id = zone.id();
+        for (c, head) in self.heads.iter().enumerate().skip(order as usize) {
+            let r = records[c].as_ref().ok_or("coincident record")?;
+            let (ph, pn) = head.ok_or("no head")?;
+            if r.parent(c).map_err(err)? != ph || r.number(c).map_err(err)? != pn + 1 {
+                return Err(format!(
+                    "{} record {} does not extend the {} head {} at {pn}",
+                    CONTEXTS[c].name(),
+                    hex(&r.id()),
+                    CONTEXTS[c].name(),
+                    hex(&ph)
+                ));
+            }
+        }
+        if order == 0 {
+            // The prime body carries the parent's interlinks.
+            let r = records[0].as_ref().ok_or("prime record")?;
+            let (pending, mut snapshot) = warm.pending.take().ok_or("no prime parent record")?;
+            if pending.id() != r.parent(0).map_err(err)? {
+                return Err("prime parent is not the last prime record".into());
+            }
+            snapshot.interlinks = Some(
+                r.object()
+                    .interlink_hashes()
+                    .try_into()
+                    .map_err(|_| "prime body interlinks are not four hashes")?,
+            );
+            self.window.insert(0, pending, Arc::new(snapshot));
+        }
+        let mut claim = [0u8; 32];
+        let mut next: [Option<Snapshot>; 3] = [None, None, None];
+        for c in order as usize..3 {
+            let r = records[c].clone().ok_or("coincident record")?;
+            let profile = self.chain.placement_profile(c);
+            placement::check_append_commitments(&self.indexes[c], &r, c)
+                .map_err(|e| format!("{} {}: {}", CONTEXTS[c].name(), hex(&r.id()), err(e)))?;
+            let parent = self.indexes[c].get(&r.parent(c).map_err(err)?).map_err(err)?;
+            let (prev, termini) = placement::pcrc(
+                parent.termini.as_ref().ok_or("parent termini")?,
+                r.id(),
+                &location_of(&r),
+                &profile.location,
+                (order as usize) < c,
+                claim,
+                &profile.genesis,
+            )
+            .map_err(|e| format!("{} {}: {}", CONTEXTS[c].name(), hex(&r.id()), err(e)))?;
+            claim = prev;
+            next[c] = Some(Snapshot {
+                manifest: Some(
+                    placement::next_manifest(c, order, r.id(), parent.manifest.as_deref())
+                        .map_err(err)?,
+                ),
+                interlinks: None,
+                termini: Some(termini),
+            });
+        }
+        if order <= 1 {
+            // The cross-prime rollup of the zone parent's manifest, as the
+            // region Append builds it, checked against the header and the
+            // region body.
+            let parent = self.indexes[2].get(&zone.parent(2).map_err(err)?).map_err(err)?;
+            let manifest = parent.manifest.as_ref().ok_or("zone parent manifest")?;
+            let region = records[1].as_ref().ok_or("region record")?;
+            if region.object().manifest_hashes() != *manifest {
+                return Err(format!(
+                    "region record {}: its manifest is not the zone parent's",
+                    hex(&id)
+                ));
+            }
+            let mut accumulated = vec![];
+            for z in manifest {
+                accumulated.extend_from_slice(self.histories[2].get(z).map_err(err)?.object().outbound_etxs());
+            }
+            let cross = confirmation::cross_prime(&accumulated, self.chain.location()[0]).map_err(err)?;
+            let root = work::transactions_root(&cross)?;
+            let committed = zone
+                .object()
+                .header()
+                .wire()
+                .etx_rollup_hash
+                .as_ref()
+                .map(|h| h.value.clone())
+                .unwrap_or_default();
+            if root.as_slice() != committed.as_slice() {
+                return Err(format!(
+                    "zone {}: ETX rollup root {} is not the header's {}",
+                    hex(&id),
+                    hex(&root),
+                    hex(&committed)
+                ));
+            }
+            self.remember_rollup(id, Arc::new(cross));
+            warm.rollups += 1;
+        }
+        for c in order as usize..3 {
+            let r = records[c].clone().ok_or("coincident record")?;
+            let snapshot = next[c].take().ok_or("snapshot")?;
+            self.heads[c] = Some((r.id(), r.number(c).map_err(err)?));
+            if c == 0 {
+                warm.pending = Some((r, snapshot));
+            } else {
+                self.window.insert(c, r, Arc::new(snapshot));
+            }
+        }
+        self.remember_order(id, order);
+        if order == 0 {
+            self.window.pin_prime_view(zone);
+            let prime = records[0].clone().ok_or("prime record")?;
+            self.warm_prime(&prime, warm)?;
+        }
+        Ok(order)
+    }
+    /// The token choice row and the inbound ETXs of one prime block (the
+    /// economic branch of Append), for the last WINDOW + 1 prime blocks. A
+    /// row depends only on the block, its parent, its inbound ETXs and the
+    /// rate WINDOW prime blocks before it, so WINDOW rows rebuild the whole
+    /// set from an empty one.
+    fn warm_prime(&mut self, record: &Arc<Record>, warm: &mut Warmup) -> Result<(), String> {
+        let n = record.number(0).map_err(err)?;
+        warm.rates.insert(n, rate_of(record)?);
+        // Up to ControllerKickInBlock no token choice set or inbound list is
+        // read (prime_controller::State::before_kick_in).
+        if n < warm.prime_head.1.saturating_sub(quai_consensus::controllers::WINDOW)
+            || n <= quai_primitives::spec::FORKS.controller_kick_in
+        {
+            return Ok(());
+        }
+        let known = state::KnownView {
+            orders: &self.orders,
+            region_rollups: &self.rollups,
+            maps: None,
+        };
+        let inbound = confirmation::prime_inbound(&self.histories, &known, record)
+            .map_err(|e| format!("prime {n} inbound ETXs: {}", err(e)))?;
+        let parent = self.histories[0].get(&record.parent(0).map_err(err)?).map_err(err)?;
+        let prior = match warm.window.take() {
+            Some(w) => w,
+            None => choice_window::Window::empty_at(parent.id(), n - 1),
+        };
+        let window = quai_consensus::controllers::WINDOW;
+        let old = if n > window {
+            Some(
+                *warm
+                    .rates
+                    .get(&(n - window))
+                    .ok_or_else(|| format!("no exchange rate of prime {}", n - window))?,
+            )
+        } else {
+            None
+        };
+        let prepared = quai_consensus::prime_forward::prepare_component(
+            record,
+            &parent,
+            Some(&inbound),
+            &prior,
+            old,
+            Some(prime_controller::stored_rate(record.parent(2).map_err(err)?)),
+        )
+        .map_err(|e| format!("prime {n} token choices: {}", err(e)))?;
+        warm.parent_window = Some(prior);
+        warm.window = Some(prepared.window().clone());
+        warm.inbound = Some(inbound);
+        warm.choices += 1;
+        Ok(())
+    }
+    /// The prime head's interlinks from its proof-of-work rank and the prime
+    /// controller state after it.
+    fn finish_bootstrap(&mut self, warm: Warmup) -> Result<(), String> {
+        let (head, mut snapshot) = warm.pending.ok_or("no prime head record")?;
+        if self.heads[0] != Some(warm.prime_head) || head.id() != warm.prime_head.0 {
+            return Err(format!(
+                "the prime head is {}, the trusted block's is {} at {}",
+                self.heads[0].map_or("none".into(), |h| format!("{} at {}", hex(&h.0), h.1)),
+                hex(&warm.prime_head.0),
+                warm.prime_head.1
+            ));
+        }
+        let profile = self.chain.placement_profile(0);
+        let parent_links: [Hash; 4] = head
+            .object()
+            .interlink_hashes()
+            .try_into()
+            .map_err(|_| "prime body interlinks are not four hashes")?;
+        let rank = placement::verify_placement(&mut self.verifier, &head, &profile)
+            .map_err(|e| format!("prime head proof-of-work: {}", err(e)))?
+            .rank
+            .ok_or("prime head interlink rank")?;
+        snapshot.interlinks = Some(
+            placement::next_interlinks(
+                head.id(),
+                Some(&parent_links),
+                rank,
+                profile.genesis.contains(&head.id()),
+            )
+            .map_err(err)?,
+        );
+        // The parent's interlinks by the same rule must be the ones the head's
+        // body carries.
+        let parent = self.histories[0].get(&head.parent(0).map_err(err)?).map_err(err)?;
+        let parent_rank = placement::verify_placement(&mut self.verifier, &parent, &profile)
+            .map_err(|e| format!("prime parent proof-of-work: {}", err(e)))?
+            .rank
+            .ok_or("prime parent interlink rank")?;
+        let grand_links: [Hash; 4] = parent
+            .object()
+            .interlink_hashes()
+            .try_into()
+            .map_err(|_| "prime body interlinks are not four hashes")?;
+        let derived = placement::next_interlinks(parent.id(), Some(&grand_links), parent_rank, false)
+            .map_err(err)?;
+        if derived != parent_links {
+            return Err("the prime parent's interlinks by rank are not the ones the head carries".into());
+        }
+        self.window.insert(0, head.clone(), Arc::new(snapshot));
+        let (hash, number) = warm.prime_head;
+        if number < quai_primitives::spec::FORKS.controller_kick_in {
+            self.controller = Some(
+                prime_controller::State::before_kick_in(hash, number, Some(parent.id()))
+                    .map_err(|e| format!("prime controller state: {}", err(e)))?,
+            );
+            return Ok(());
+        }
+        let kept = prime_controller::RATES as u64;
+        let first = (number + 1).saturating_sub(kept);
+        let rates = (first..=number)
+            .map(|n| {
+                warm.rates
+                    .get(&n)
+                    .copied()
+                    .ok_or_else(|| format!("no exchange rate of prime {n}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let controller = prime_controller::State::from_parts(prime_controller::Parts {
+            head: hash,
+            number,
+            first,
+            rates,
+            inbound: warm.inbound,
+            parent_window: warm.parent_window,
+            head_window: warm.window.ok_or("no token choice set")?,
+        })
+        .map_err(|e| format!("prime controller state: {}", err(e)))?;
+        self.controller = Some(controller);
+        Ok(())
+    }
+}
+fn location_of(r: &Record) -> Vec<u8> {
+    r.header()
+        .wire()
+        .location
+        .as_ref()
+        .map(|l| l.value.clone())
+        .unwrap_or_default()
+}
+fn rate_of(r: &Record) -> Result<Uint, String> {
+    share_rules::uint(
+        r.object()
+            .header()
+            .wire()
+            .exchange_rate
+            .as_deref()
+            .unwrap_or_default(),
+    )
+    .map_err(err)
+}
+/// Build a stateless checkpoint at the trusted block from `source`, whose
+/// first height is the prime block of `seed` and whose last is the trusted
+/// block, and write it to the headers/ directory of `datadir`. Each height
+/// must extend the previous one in every context it is coincident in, so the
+/// whole ancestry links to the trusted hash.
+pub fn bootstrap_checkpoint(
+    chain: Arc<Chain>,
+    datadir: &Path,
+    seed: BootstrapSeed,
+    source: &mut dyn BlockSource,
+    stop: &AtomicBool,
+    log: &Log,
+) -> Result<BootstrapReport, String> {
+    let dir = checkpoint_dir(datadir, &chain, false);
+    std::fs::create_dir_all(&dir).map_err(io_err("checkpoint directory"))?;
+    if let Some((h, _)) = checkpoint::list(&dir)
+        .map_err(io_err("checkpoint directory"))?
+        .first()
+    {
+        return Err(format!(
+            "{} already holds checkpoint {h}; a bootstrap starts an empty directory",
+            dir.display()
+        ));
+    }
+    let caches = Arc::new(SharedCaches::new(2).map_err(err)?);
+    let mut c = Checker::new(chain.clone(), caches, false, None);
+    c.trusted = Some(seed.trusted);
+    let mut warm = Warmup {
+        prime_head: seed.prime_head,
+        rates: seed.rates,
+        pending: None,
+        window: None,
+        parent_window: None,
+        inbound: None,
+        choices: 0,
+        rollups: 0,
+    };
+    let prime = Arc::new(Record::decode(&seed.prime_view).map_err(err)?);
+    let region = Arc::new(Record::decode(&seed.region_view).map_err(err)?);
+    let mut report = BootstrapReport {
+        trusted: seed.trusted.1,
+        ..Default::default()
+    };
+    let started = Instant::now();
+    let mut last_progress = Instant::now();
+    let mut first = true;
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err("stopped".into());
+        }
+        let height = match source.next().map_err(|e| {
+            format!(
+                "{} {}: expected {}, actual {}",
+                e.context, e.check, e.expected, e.actual
+            )
+        })? {
+            Next::Height(h) => *h,
+            Next::Wait => {
+                source.wait(stop);
+                continue;
+            }
+            Next::End => {
+                return Err(format!(
+                    "the source ended before the trusted block at {}",
+                    seed.trusted.1
+                ))
+            }
+        };
+        let z = height.zone_height;
+        let slot = decode(height, 0);
+        if first {
+            first = false;
+            let zone = match slot.records[2].as_ref() {
+                Some(Ok(r)) => Arc::new(r.clone()),
+                _ => return Err(format!("zone height {z}: no zone record")),
+            };
+            if zone.id() != prime.id() || zone.number(2).map_err(err)? != z {
+                return Err(format!(
+                    "zone height {z} is {}, not the seed prime block {}",
+                    hex(&zone.id()),
+                    hex(&prime.id())
+                ));
+            }
+            c.seed([prime.clone(), region.clone(), zone], &mut warm)?;
+            report.start = z;
+        } else {
+            let order = c
+                .adopt(&slot, &mut warm)
+                .map_err(|e| format!("zone height {z}: {e}"))?;
+            for n in report.records.iter_mut().skip(order as usize) {
+                *n += 1;
+            }
+        }
+        report.heights += 1;
+        if last_progress.elapsed() >= Duration::from_secs(30) {
+            last_progress = Instant::now();
+            log.info(&format!(
+                "bootstrap: zone height {z}/{} adopted ({} prime, {} region records, {} token choice rows, {:.0}s)",
+                seed.trusted.1,
+                report.records[0],
+                report.records[1],
+                warm.choices,
+                started.elapsed().as_secs_f64()
+            ));
+        }
+        if z >= seed.trusted.1 {
+            break;
+        }
+    }
+    if c.heads[2] != Some(seed.trusted) {
+        return Err(format!(
+            "the fetched ancestry ends at {}, not at the trusted block {} at {}",
+            c.heads[2].map_or("none".into(), |h| format!("{} at {}", hex(&h.0), h.1)),
+            hex(&seed.trusted.0),
+            seed.trusted.1
+        ));
+    }
+    report.rollups = warm.rollups;
+    report.choices = warm.choices;
+    c.finish_bootstrap(warm)?;
+    let cp = c.checkpoint(checkpoint::Counters::default(), None)?;
+    report.windows = std::array::from_fn(|i| cp.windows[i].len());
+    report.checkpoint = checkpoint::write(&dir, &cp).map_err(io_err("checkpoint write"))?;
+    Ok(report)
+}

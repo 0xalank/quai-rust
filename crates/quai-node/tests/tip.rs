@@ -111,6 +111,7 @@ fn settings(data: &std::path::Path, state: bool, resume: bool) -> Settings {
         checkpoint_every: 1_000,
         commit_every: 1_000,
         store: true,
+        shadow: false,
     }
 }
 /// Heights in order from a list.

@@ -1240,6 +1240,17 @@ async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: cr
             }
         }
     });
+    // Peers connected before this source started (by a bootstrap) send no
+    // new Connected event.
+    for peer in node.verified_peers() {
+        let (shared, node) = (shared.clone(), node.clone());
+        tokio::spawn(async move {
+            match shared.add(node, peer).await {
+                Ok(()) => log.info(&format!("peer {peer}: source")),
+                Err(e) => log.debug(&format!("peer {peer}: not a source: {e}")),
+            }
+        });
+    }
     let mut targets: Vec<Multiaddr> = o.peers.clone();
     if o.public {
         match public_allowed() {
@@ -1252,7 +1263,13 @@ async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: cr
     }
     for address in targets {
         if let Err(e) = node.dial(address.clone()).await {
-            log.warn(&format!("dial {address}: {e}"));
+            // A peer that a bootstrap already connected is not news.
+            let e = e.to_string();
+            if e.contains("already connected") {
+                log.debug(&format!("dial {address}: {e}"));
+            } else {
+                log.warn(&format!("dial {address}: {e}"));
+            }
             continue;
         }
         let Some(peer) = peer_of(&address) else {
@@ -1474,4 +1491,239 @@ mod tests {
         assert_eq!(reply_objects(&frame, true).unwrap(), vec![wo]);
         assert!(reply_objects(&[0x12, 0x05, 0x00], true).is_err());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Single requests and ranges for the trusted bootstrap (`bootstrap.rs`).
+
+/// Dial the configured peers and, when allowed, the colosseum boot peers,
+/// and start a Kademlia walk for more.
+pub async fn dial_targets(
+    node: Arc<PublicNode>,
+    peers: Vec<Multiaddr>,
+    public: bool,
+    log: crate::log::Log,
+) {
+    let mut targets = peers;
+    if public {
+        match public_allowed() {
+            Ok(gateway) => {
+                log.info(&format!("public peers allowed (gateway {gateway})"));
+                targets.extend(COLOSSEUM_BOOTNODES.iter().filter_map(|a| a.parse().ok()));
+            }
+            Err(e) => log.warn(&format!("public peers not used: {e}")),
+        }
+    }
+    for address in targets {
+        if let Err(e) = node.dial(address.clone()).await {
+            // A peer that a bootstrap already connected is not news.
+            let e = e.to_string();
+            if e.contains("already connected") {
+                log.debug(&format!("dial {address}: {e}"));
+            } else {
+                log.warn(&format!("dial {address}: {e}"));
+            }
+            continue;
+        }
+        let Some(peer) = peer_of(&address) else {
+            continue;
+        };
+        if wait_connected(&node, &peer, 15).await && public {
+            let bare: Multiaddr = address
+                .iter()
+                .filter(|p| !matches!(p, libp2p::multiaddr::Protocol::P2p(_)))
+                .collect();
+            let _ = node.kad_add(peer, bare).await;
+        }
+    }
+    if public {
+        let _ = node.closest_peers(node.id.to_bytes()).await;
+    }
+}
+/// The canonical hash at `number` in context `ctx` of one peer (None: the
+/// peer has no block there).
+pub async fn peer_hash_at(
+    node: &Arc<PublicNode>,
+    peer: PeerId,
+    ctx: usize,
+    number: u64,
+) -> Result<Option<Hash>, String> {
+    let mut conn = Conn::new(node.clone(), peer)?;
+    tokio::time::timeout(Duration::from_secs(30), conn.block_hash(ctx, number))
+        .await
+        .map_err(|_| "time-out".to_string())?
+        .map_err(|f| f.to_string())
+}
+/// A peer's zone head, after its zone genesis is this network's.
+pub async fn peer_head(node: &Arc<PublicNode>, peer: PeerId, genesis: Hash) -> Result<u64, String> {
+    let mut conn = Conn::new(node.clone(), peer)?;
+    tokio::time::timeout(Duration::from_secs(120), conn.head(genesis, 0))
+        .await
+        .map_err(|_| "head probe timed out".to_string())?
+        .map_err(|f| f.to_string())
+}
+/// One block by hash in context `ctx` from one peer, decoded and checked as
+/// the Go exporter does.
+pub async fn peer_block(
+    node: &Arc<PublicNode>,
+    peer: PeerId,
+    ctx: usize,
+    hash: Hash,
+) -> Result<Block, String> {
+    let mut conn = Conn::new(node.clone(), peer)?;
+    let raws = tokio::time::timeout(Duration::from_secs(30), conn.objects(ctx, hash, false))
+        .await
+        .map_err(|_| "time-out".to_string())?
+        .map_err(|f| f.to_string())?;
+    let [raw] = <[Vec<u8>; 1]>::try_from(raws).map_err(|_| "not one block".to_string())?;
+    let b = decode_block(raw, ctx)?;
+    if b.hash != hash {
+        return Err(format!("block {} is not {}", hex(&b.hash), hex(&hash)));
+    }
+    Ok(b)
+}
+/// The canonical blocks `from..=to` of context `ctx`, by number, from
+/// `peers` in parallel (ten per request), each decoded and checked, and
+/// every block linked to the one before it. A batch that fails is asked of
+/// another peer; the range fails after `MAX_ATTEMPTS` tries of one batch.
+pub async fn fetch_range(
+    node: &Arc<PublicNode>,
+    peers: &[PeerId],
+    ctx: usize,
+    from: u64,
+    to: u64,
+    log: crate::log::Log,
+) -> Result<Vec<Block>, String> {
+    if peers.is_empty() || from > to {
+        return Err("no peers or an empty range".into());
+    }
+    let jobs: Vec<u64> = (from..=to).step_by(BATCH as usize).collect();
+    let queue = Arc::new(Mutex::new(
+        jobs.iter()
+            .map(|s| (*s, 0u32, HashSet::<usize>::new()))
+            .collect::<std::collections::VecDeque<_>>(),
+    ));
+    let done: Arc<Mutex<BTreeMap<u64, Vec<Block>>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let failed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let mut workers = vec![];
+    for (index, peer) in peers.iter().enumerate() {
+        for _ in 0..3 {
+            let (node, queue, done, failed) =
+                (node.clone(), queue.clone(), done.clone(), failed.clone());
+            let peer = *peer;
+            let peers_n = peers.len();
+            let total = jobs.len();
+            workers.push(tokio::spawn(async move {
+                let Ok(mut conn) = Conn::new(node, peer) else {
+                    return;
+                };
+                let mut strikes = 0u32;
+                loop {
+                    if lock(&failed).is_some() || strikes >= MAX_STRIKES {
+                        return;
+                    }
+                    let job = {
+                        let mut q = lock(&queue);
+                        let at = q.iter().position(|(_, _, ex)| {
+                            !ex.contains(&index) || ex.len() >= peers_n
+                        });
+                        at.and_then(|i| q.remove(i))
+                    };
+                    let Some((start, attempts, mut excluded)) = job else {
+                        if lock(&done).len() >= total {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    };
+                    let reply =
+                        tokio::time::timeout(Duration::from_secs(60), conn.batch(Job { ctx, start }, false))
+                            .await
+                            .unwrap_or_else(|_| Err(Fault::Io("time-out".into())));
+                    match reply {
+                        Ok(blocks) if !blocks.is_empty() => {
+                            strikes = 0;
+                            let keep: Vec<Block> =
+                                blocks.into_iter().filter(|b| b.number <= to).collect();
+                            lock(&done).insert(start, keep);
+                        }
+                        other => {
+                            strikes += 1;
+                            let why = match other {
+                                Err(f) => f.to_string(),
+                                Ok(_) => "empty batch".into(),
+                            };
+                            if attempts + 1 >= MAX_ATTEMPTS {
+                                *lock(&failed) = Some(format!(
+                                    "{} batch {start}: no valid reply after {} attempts (last: {why})",
+                                    NAMES[ctx],
+                                    attempts + 1
+                                ));
+                                return;
+                            }
+                            excluded.insert(index);
+                            lock(&queue).push_back((start, attempts + 1, excluded));
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+            }));
+        }
+    }
+    let started = Instant::now();
+    let mut last = Instant::now();
+    loop {
+        if let Some(e) = lock(&failed).clone() {
+            return Err(e);
+        }
+        let got = lock(&done).len();
+        if got == jobs.len() {
+            break;
+        }
+        if workers.iter().all(|w| w.is_finished()) {
+            return Err(format!(
+                "{} {from}..={to}: the peers stopped answering ({got} of {} batches)",
+                NAMES[ctx],
+                jobs.len()
+            ));
+        }
+        if last.elapsed() >= Duration::from_secs(30) {
+            last = Instant::now();
+            log.info(&format!(
+                "bootstrap: {} {from}..={to}: {got}/{} batches ({:.0}s)",
+                NAMES[ctx],
+                jobs.len(),
+                started.elapsed().as_secs_f64()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    for w in workers {
+        w.abort();
+    }
+    let done = std::mem::take(&mut *lock(&done));
+    let mut out: Vec<Block> = Vec::with_capacity((to - from + 1) as usize);
+    for (_, blocks) in done {
+        for b in blocks {
+            if let Some(prev) = out.last() {
+                if b.number != prev.number + 1 || b.parent != prev.hash {
+                    return Err(format!(
+                        "{} {}: parent {} is not the previous block {} at {}",
+                        NAMES[ctx],
+                        b.number,
+                        hex(&b.parent),
+                        hex(&prev.hash),
+                        prev.number
+                    ));
+                }
+            } else if b.number != from {
+                return Err(format!("{} range starts at {}, not {from}", NAMES[ctx], b.number));
+            }
+            out.push(b);
+        }
+    }
+    if out.last().map(|b| b.number) != Some(to) {
+        return Err(format!("{} range {from}..={to} is incomplete", NAMES[ctx]));
+    }
+    Ok(out)
 }

@@ -333,7 +333,8 @@ impl Window {
             block,
             u64::from_be_bytes(crate::slice::array(&raw[offset + 32..offset + 40])?),
         );
-        out.start = u16::from_be_bytes(crate::slice::array(&raw[offset + 40..offset + 42])?) as usize;
+        out.start =
+            u16::from_be_bytes(crate::slice::array(&raw[offset + 40..offset + 42])?) as usize;
         need(out.start < N, "choice window cursor")?;
         let expected = U512::from_be_bytes(crate::slice::array(&raw[offset + 42..offset + 106])?);
         let flag = raw[offset + 106];

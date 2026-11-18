@@ -187,13 +187,8 @@ fn old_sender(tx: &Transaction) -> Result<[u8; 20], ()> {
     if v.v.last().copied().unwrap_or(0) > 1 || sig.normalize_s().is_some() || v.v.len() > 1 {
         return Err(());
     }
-    let key = recover_k256(
-        &tx.signing_hash(),
-        &r,
-        &s,
-        v.v.last().copied().unwrap_or(0),
-    )
-    .ok_or(())?;
+    let key =
+        recover_k256(&tx.signing_hash(), &r, &s, v.v.last().copied().unwrap_or(0)).ok_or(())?;
     let mut a = [0u8; 20];
     a.copy_from_slice(&Keccak256::digest(key)[12..]);
     Ok(a)
@@ -208,7 +203,8 @@ fn go_vectors_recover_the_pinned_sender() {
     let mut n = 0;
     for v in c["transactions"].as_array().unwrap() {
         if v["type"] == 0 && v["sender"].is_string() {
-            let tx = Transaction::decode(&decode_hex(v["input"].as_str().unwrap()).unwrap()).unwrap();
+            let tx =
+                Transaction::decode(&decode_hex(v["input"].as_str().unwrap()).unwrap()).unwrap();
             let want = decode_hex(v["sender"].as_str().unwrap()).unwrap();
             assert_eq!(tx.sender().unwrap().to_vec(), want, "{}", v["id"]);
             assert_eq!(old_sender(&tx).unwrap().to_vec(), want);
@@ -237,7 +233,11 @@ fn transaction_sender_path_matches_old_rules() {
     let mut digest = 0u64;
     for i in 0..30_000usize {
         let mut p = w::Transaction::decode(base[i % base.len()].as_slice()).unwrap();
-        let r = if i % 3 == 0 { edges[(rng.next() as usize) % edges.len()] } else { rng.bytes32() };
+        let r = if i % 3 == 0 {
+            edges[(rng.next() as usize) % edges.len()]
+        } else {
+            rng.bytes32()
+        };
         let s = match i % 4 {
             0 => edges[(rng.next() as usize) % edges.len()],
             1 => {
@@ -245,7 +245,11 @@ fn transaction_sender_path_matches_old_rules() {
                 // forced low or high s derived from the same value
                 let mut l = l;
                 l[0] &= 0x7f;
-                if i % 8 == 1 { l } else { sub_n(&l) }
+                if i % 8 == 1 {
+                    l
+                } else {
+                    sub_n(&l)
+                }
             }
             _ => rng.bytes32(),
         };
@@ -261,14 +265,20 @@ fn transaction_sender_path_matches_old_rules() {
         });
         p.nonce = Some(rng.next());
         let bytes = p.encode_to_vec();
-        let old = Transaction::decode(&bytes).map_err(|_| ()).and_then(|t| old_sender(&t));
-        let new = Transaction::decode(&bytes).map_err(|_| ()).and_then(|t| t.sender().map_err(|_| ()));
+        let old = Transaction::decode(&bytes)
+            .map_err(|_| ())
+            .and_then(|t| old_sender(&t));
+        let new = Transaction::decode(&bytes)
+            .map_err(|_| ())
+            .and_then(|t| t.sender().map_err(|_| ()));
         assert_eq!(old, new, "case {i}");
         cases += 1;
         match new {
             Ok(a) => {
                 ok += 1;
-                digest = digest.wrapping_mul(1_000_003).wrapping_add(u64::from_le_bytes(a[..8].try_into().unwrap()));
+                digest = digest
+                    .wrapping_mul(1_000_003)
+                    .wrapping_add(u64::from_le_bytes(a[..8].try_into().unwrap()));
             }
             Err(_) => err += 1,
         }

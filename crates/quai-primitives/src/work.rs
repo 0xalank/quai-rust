@@ -278,10 +278,16 @@ impl WorkObject {
         self.wire.encode_to_vec()
     }
     pub fn auxiliary_work_header(&self, schedule: Schedule) -> Result<crate::Header, String> {
-        Header::decode_auxiliary(&missing(self.wire.wo_header.as_ref())?.encode_to_vec(), schedule)
+        Header::decode_auxiliary(
+            &missing(self.wire.wo_header.as_ref())?.encode_to_vec(),
+            schedule,
+        )
     }
     pub fn work_header(&self, schedule: Schedule) -> Result<crate::Header, String> {
-        crate::Header::decode(&missing(self.wire.wo_header.as_ref())?.encode_to_vec(), schedule)
+        crate::Header::decode(
+            &missing(self.wire.wo_header.as_ref())?.encode_to_vec(),
+            schedule,
+        )
     }
     pub fn header(&self) -> &BodyHeader {
         &self.header
@@ -331,7 +337,14 @@ impl WorkObject {
         hash_list(&missing(missing(self.wire.wo_body.as_ref())?.manifest.as_ref())?.manifest)
     }
     pub fn interlink_root(&self) -> Result<Hash, String> {
-        hash_list(&missing(missing(self.wire.wo_body.as_ref())?.interlink_hashes.as_ref())?.hashes)
+        hash_list(
+            &missing(
+                missing(self.wire.wo_body.as_ref())?
+                    .interlink_hashes
+                    .as_ref(),
+            )?
+            .hashes,
+        )
     }
     /// Body/header commitments only. Does not establish valid signatures, active
     /// destinations, ancestry, proof of work, execution/state roots or fork choice.

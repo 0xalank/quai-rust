@@ -211,7 +211,11 @@ pub fn drive(
         };
         let (r, peak) = peak_during(|| catch_unwind(AssertUnwindSafe(|| f(&input))));
         match r {
-            Err(_) => panic!("{name}: panic on case {i} ({} bytes): {}", input.len(), hex(&input)),
+            Err(_) => panic!(
+                "{name}: panic on case {i} ({} bytes): {}",
+                input.len(),
+                hex(&input)
+            ),
             Ok(ok) => stats.accepted += usize::from(ok),
         }
         let allowed = budget(input.len());
@@ -284,7 +288,12 @@ fn unhex(h: &str) -> Option<Vec<u8>> {
 
 /// Keep seeds `keep` accepts; thin to at most `max` evenly spaced entries,
 /// each at most `max_len` bytes.
-pub fn select(corpus: &[Vec<u8>], max: usize, max_len: usize, keep: impl Fn(&[u8]) -> bool) -> Vec<Vec<u8>> {
+pub fn select(
+    corpus: &[Vec<u8>],
+    max: usize,
+    max_len: usize,
+    keep: impl Fn(&[u8]) -> bool,
+) -> Vec<Vec<u8>> {
     let all: Vec<_> = corpus
         .iter()
         .filter(|b| b.len() <= max_len && keep(b))
@@ -294,5 +303,7 @@ pub fn select(corpus: &[Vec<u8>], max: usize, max_len: usize, keep: impl Fn(&[u8
         return all;
     }
     let step = all.len() as f64 / max as f64;
-    (0..max).map(|i| all[(i as f64 * step) as usize].clone()).collect()
+    (0..max)
+        .map(|i| all[(i as f64 * step) as usize].clone())
+        .collect()
 }

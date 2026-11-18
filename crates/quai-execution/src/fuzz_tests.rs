@@ -150,10 +150,17 @@ fn fuzz_precompiles() {
     b.extend(rng.bytes(12));
     seeds.push(b);
     for id in 1..=9u8 {
-        let s = fuzz::drive(&format!("precompile {id}"), 56 + u64::from(id), &seeds, 4_000, budget, |b| {
-            // 2 million gas bounds the work a case can ask for.
-            matches!(precompile::run(id, b, 2_000_000), Ok(Ok(_)))
-        });
+        let s = fuzz::drive(
+            &format!("precompile {id}"),
+            56 + u64::from(id),
+            &seeds,
+            4_000,
+            budget,
+            |b| {
+                // 2 million gas bounds the work a case can ask for.
+                matches!(precompile::run(id, b, 2_000_000), Ok(Ok(_)))
+            },
+        );
         let _ = s;
     }
 }

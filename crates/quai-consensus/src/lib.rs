@@ -2,9 +2,9 @@
 //! Bounded proof, auxiliary and ancestry components do not establish canonical
 //! history, economic state validity or full block consensus.
 pub mod donor;
-pub(crate) mod slice;
 pub mod pow;
 pub mod rules;
+pub(crate) mod slice;
 pub mod verifier;
 use quai_primitives::Hash;
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,10 +97,10 @@ pub mod private_canonical;
 #[cfg(test)]
 extern crate self as quai_consensus;
 #[cfg(test)]
+mod fuzz_tests;
+#[cfg(test)]
 #[allow(dead_code)]
 #[path = "../examples/check-activation.rs"]
 mod runtime_fixture;
 #[cfg(test)]
 mod runtime_profile_tests;
-#[cfg(test)]
-mod fuzz_tests;

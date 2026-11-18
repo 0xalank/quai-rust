@@ -60,7 +60,10 @@ fn fuzz_auxiliary_and_coinbase() {
             return false;
         };
         let enc = a.encode();
-        assert_eq!(Auxiliary::decode(&enc).expect("canonical decodes").encode(), enc);
+        assert_eq!(
+            Auxiliary::decode(&enc).expect("canonical decodes").encode(),
+            enc
+        );
         let _ = (a.id(), a.header().len(), a.signature().len());
         let _ = a.template();
         true
@@ -105,7 +108,9 @@ fn fuzz_termini_decode() {
 #[test]
 fn fuzz_choice_row_and_donor_hashes() {
     use crate::choice_window::Choice;
-    let seeds: Vec<Vec<u8>> = (0..30u8).map(|i| Choice::default().encode().iter().map(|b| b ^ i).collect()).collect();
+    let seeds: Vec<Vec<u8>> = (0..30u8)
+        .map(|i| Choice::default().encode().iter().map(|b| b ^ i).collect())
+        .collect();
     let s = fuzz::drive("Choice::decode", 35, &seeds, ITER, budget, |b| {
         let Ok(c) = Choice::decode(b) else {
             return false;
@@ -129,7 +134,11 @@ fn fuzz_quorum_signatures_and_keys() {
     let q = Quorum::pinned();
     let c = corpus();
     let sigs: Vec<Vec<u8>> = fuzz::select(&c, 60, 64, |b| b.len() == 64);
-    let seeds = if sigs.is_empty() { vec![vec![7; 64]] } else { sigs };
+    let seeds = if sigs.is_empty() {
+        vec![vec![7; 64]]
+    } else {
+        sigs
+    };
     fuzz::drive("Quorum::verify", 38, &seeds, 6_000, budget, |b| {
         q.verify([9; 32], b)
     });
@@ -160,10 +169,8 @@ fn fuzz_private_profile_decode() {
 
 #[test]
 fn fuzz_local_hierarchy_delta() {
-    let corpus: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../fixtures/protocol/confirmation.json"
-    ))
-    .unwrap();
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../../../fixtures/protocol/confirmation.json")).unwrap();
     let now = corpus["now"].as_u64().unwrap();
     let bytes = |v: &serde_json::Value| quai_primitives::decode_hex(v.as_str().unwrap()).unwrap();
     let mut graph = Hierarchy::new().unwrap();
@@ -190,16 +197,28 @@ fn fuzz_local_hierarchy_delta() {
     for (i, (zone, raw)) in cases.iter().enumerate() {
         // Seeds apply to their own zone record; other zone records test the binding check.
         let seeds = vec![raw.clone()];
-        let s = fuzz::drive("LocalOutputs::decode", 41 + i as u64, &seeds, 6_000, budget, |b| {
-            let Ok(d) = LocalOutputs::decode(b, zone) else {
-                return false;
-            };
-            let _ = (d.heads(), d.order(), d.region_rollup().len(), d.confirmed().len());
-            for c in 0..4 {
-                let _ = d.snapshot(c);
-            }
-            true
-        });
+        let s = fuzz::drive(
+            "LocalOutputs::decode",
+            41 + i as u64,
+            &seeds,
+            6_000,
+            budget,
+            |b| {
+                let Ok(d) = LocalOutputs::decode(b, zone) else {
+                    return false;
+                };
+                let _ = (
+                    d.heads(),
+                    d.order(),
+                    d.region_rollup().len(),
+                    d.confirmed().len(),
+                );
+                for c in 0..4 {
+                    let _ = d.snapshot(c);
+                }
+                true
+            },
+        );
         assert!(s.accepted >= 1);
     }
     let _ = pool;

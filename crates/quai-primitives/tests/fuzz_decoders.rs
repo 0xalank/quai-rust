@@ -69,7 +69,10 @@ fn fuzz_transaction_decode() {
         true
     });
     assert!(s.accepted > 100);
-    eprintln!("Transaction::decode identical re-encodings so far: {}", IDENTICAL.load(Relaxed));
+    eprintln!(
+        "Transaction::decode identical re-encodings so far: {}",
+        IDENTICAL.load(Relaxed)
+    );
 }
 
 #[test]
@@ -156,7 +159,9 @@ fn fuzz_header_decode() {
 fn fuzz_auxpow_and_template() {
     let c = corpus();
     let pow_seeds = fuzz::select(&c, 150, 100_000, |b| auxiliary::canonical_pow(b).is_ok());
-    let tpl_seeds = fuzz::select(&c, 150, 100_000, |b| auxiliary::canonical_template(b).is_ok());
+    let tpl_seeds = fuzz::select(&c, 150, 100_000, |b| {
+        auxiliary::canonical_template(b).is_ok()
+    });
     assert!(pow_seeds.len() > 5 && tpl_seeds.len() > 5);
     fuzz::drive("canonical_pow", 7, &pow_seeds, ITER, budget, |b| {
         let Ok(p) = auxiliary::canonical_pow(b) else {
@@ -175,7 +180,10 @@ fn fuzz_auxpow_and_template() {
         let enc = p.encode_to_vec();
         let q = auxiliary::canonical_template(&enc).expect("canonical form decodes");
         assert_eq!(q.encode_to_vec(), enc);
-        let _ = (auxiliary::template_signing_bytes(&p), auxiliary::template_hash(&p));
+        let _ = (
+            auxiliary::template_signing_bytes(&p),
+            auxiliary::template_hash(&p),
+        );
         true
     });
 }
@@ -245,7 +253,12 @@ impl mpt::ReadNodes for Nodes {
 fn fuzz_mpt_nodes() {
     use quai_primitives::transaction::keccak;
     let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0u32..200)
-        .map(|i| (i.to_be_bytes().to_vec(), vec![i as u8 | 1; 1 + (i as usize % 70)]))
+        .map(|i| {
+            (
+                i.to_be_bytes().to_vec(),
+                vec![i as u8 | 1; 1 + (i as usize % 70)],
+            )
+        })
         .collect();
     let trie = mpt::Trie::from_secure_pairs(&pairs).unwrap();
     let mut seeds = vec![];

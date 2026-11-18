@@ -1,9 +1,9 @@
 //! Native execution preconditions, not a complete EVM or block state transition.
 //! Compatibility sources and exclusions are recorded in NOTICE.md.
 pub mod etx;
-pub(crate) mod slice;
 pub mod gas;
 pub mod qi;
+pub(crate) mod slice;
 
 pub mod evm;
 

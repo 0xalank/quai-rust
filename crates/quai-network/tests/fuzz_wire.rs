@@ -10,8 +10,8 @@ use quai_primitives::schema::{
     block::{ProtoWorkObject, ProtoWorkObjectBlockView},
     common::{ProtoHash, ProtoLocation},
     quaiprotocol::{
-        quai_message::Payload, quai_request_message as rq, quai_response_message as rs, QuaiMessage,
-        QuaiRequestMessage, QuaiResponseMessage,
+        quai_message::Payload, quai_request_message as rq, quai_response_message as rs,
+        QuaiMessage, QuaiRequestMessage, QuaiResponseMessage,
     },
 };
 use std::io::Cursor;
@@ -41,12 +41,19 @@ fn seeds() -> Vec<Vec<u8>> {
     let c = corpus();
     let mut out = fuzz::select(&c, 80, 50_000, |b| decode_envelope(b).is_ok());
     let location = Some(ProtoLocation { value: vec![0, 0] });
-    let mk = |payload| QuaiMessage { payload: Some(payload) }.encode_to_vec();
+    let mk = |payload| {
+        QuaiMessage {
+            payload: Some(payload),
+        }
+        .encode_to_vec()
+    };
     out.push(mk(Payload::Request(QuaiRequestMessage {
         id: 9,
         location: location.clone(),
         data: Some(rq::Data::Hash(ProtoHash { value: vec![7; 32] })),
-        request: Some(rq::Request::WorkObjectBlock(ProtoWorkObjectBlockView::default())),
+        request: Some(rq::Request::WorkObjectBlock(
+            ProtoWorkObjectBlockView::default(),
+        )),
     })));
     out.push(mk(Payload::Request(QuaiRequestMessage {
         id: 10,
@@ -63,9 +70,11 @@ fn seeds() -> Vec<Vec<u8>> {
         out.push(mk(Payload::Response(QuaiResponseMessage {
             id: 3,
             location: location.clone(),
-            response: Some(rs::Response::WorkObjectBlockView(ProtoWorkObjectBlockView {
-                work_object: ProtoWorkObject::decode(b.as_slice()).ok(),
-            })),
+            response: Some(rs::Response::WorkObjectBlockView(
+                ProtoWorkObjectBlockView {
+                    work_object: ProtoWorkObject::decode(b.as_slice()).ok(),
+                },
+            )),
         })));
     }
     out
@@ -116,7 +125,14 @@ fn fuzz_frames() {
     });
     assert!(s.accepted > 100);
     // Declared lengths just around the limit, with and without payload.
-    for len in [0u32, 1, MAX_FRAME_BYTES as u32 - 1, MAX_FRAME_BYTES as u32, MAX_FRAME_BYTES as u32 + 1, u32::MAX] {
+    for len in [
+        0u32,
+        1,
+        MAX_FRAME_BYTES as u32 - 1,
+        MAX_FRAME_BYTES as u32,
+        MAX_FRAME_BYTES as u32 + 1,
+        u32::MAX,
+    ] {
         let mut b = len.to_be_bytes().to_vec();
         b.extend([5u8; 16]);
         let (r, peak) = fuzz::peak_during(|| read_frame(&mut Cursor::new(&b)));
@@ -167,7 +183,9 @@ fn fuzz_private_sync_serve() {
     let mut seeds = seeds;
     for loc in [vec![], vec![0], vec![0, 0]] {
         for data in [
-            rq::Data::Hash(ProtoHash { value: genesis_hash.to_vec() }),
+            rq::Data::Hash(ProtoHash {
+                value: genesis_hash.to_vec(),
+            }),
             rq::Data::Number(vec![0]),
             rq::Data::Number(vec![0, 0, 0, 0, 0, 0, 0, 0, 1]),
         ] {

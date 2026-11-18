@@ -432,7 +432,12 @@ impl PrivatePeer {
         rx.await.map_err(err)?
     }
     pub async fn open(&self, peer: PeerId) -> io::Result<WireStream> {
-        if !self.allowed.read().unwrap_or_else(|e| e.into_inner()).contains(&peer) {
+        if !self
+            .allowed
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&peer)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "private peer is not enrolled",

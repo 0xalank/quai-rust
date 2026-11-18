@@ -7,8 +7,8 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 1,250,000** (2026-11-18), the end of
-`peer-export-1250k`. The long replay executes mainnet zone blocks from the
+Current value: **zone 1,450,000** (2026-11-18), from the rolling replay
+(`scripts/mainnet/rolling_replay.sh`). The long replay executes mainnet zone blocks from the
 colosseum genesis, and every root equals go-quai: EVM state, ETX set, UTXO,
 receipts, outbound ETXs, gas and state counters, account count. It passed
 zone 259,200 (the first user transactions), CoinbaseLockupPrecompile at zone
@@ -16,8 +16,9 @@ zone 259,200 (the first user transactions), CoinbaseLockupPrecompile at zone
 262,000, at zone 1,223,601), with the first Quai-to-Qi conversions and the
 first feedback exchange rate (prime 266,001). Binaries: `f841a74` for
 0–180,000, `e1f4cfb` for 180,000–686,009, `d207b70` (the `controllers`
-branch, merged as `c466449`) for 686,009–1,250,000. A single-binary run from
-genesis is still to do.
+branch, merged as `c466449`) for 686,009–1,250,000, `c466449` for
+1,250,000–1,450,000, then `6e6ce8f`. A single-binary run from genesis with
+`6e6ce8f` is running.
 Earlier value: zone 27,406, rerun from genesis on the Go export (with receipts)
 by the coordinator.
 

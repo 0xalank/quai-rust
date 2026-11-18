@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/quai-rpc", "crates/quai-store", "crates/quai-primitives", "crates/quai-network", "crates/quai-execution", "crates/quai-consensus"]
+members = ["crates/quai-rpc", "crates/quai-store", "crates/quai-primitives", "crates/quai-network", "crates/quai-execution", "crates/quai-consensus", "crates/quai-node"]
 resolver = "2"
 
 [profile.release]

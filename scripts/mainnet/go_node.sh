@@ -61,7 +61,10 @@ start)
 		fi
 		;;
 	esac
-	# go-quai writes nodelogs/ under its working directory.
+	# go-quai writes nodelogs/ under its working directory. It keeps 3 rotated
+	# files per log; at its default of 500 MB per file the logs grow to about
+	# 6.5 GB, so cap the file size (GO_LOG_SIZE_MB, default 50).
+	LOG_SIZE_MB=${GO_LOG_SIZE_MB:-50}
 	cd "$DATA"
 	nohup "$DATA/bin/go-quai" start \
 		--global.data-dir "$DATA/db" \
@@ -70,6 +73,7 @@ start)
 		--node.slices "[0 0]" \
 		--node.portmap=false \
 		--node.telemetry=false \
+		--global.log-size "$LOG_SIZE_MB" \
 		>> "$DATA/logs/node.out" 2>&1 < /dev/null &
 	echo $! > "$NODE_PID"
 	nohup "$ROOT/scripts/mainnet/node_guard.sh" "$(cat "$NODE_PID")" "$DATA" "$MIN_FREE_GB" \

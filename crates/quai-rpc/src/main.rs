@@ -60,11 +60,17 @@ fn main() {
             std::process::exit(2)
         }
     };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.workers)
         .enable_all()
         .build()
-        .unwrap();
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("runtime: {error}");
+            std::process::exit(1)
+        }
+    };
     if let Err(error)=runtime.block_on(async move {
         #[cfg(feature="reference-gateway")]
         let follower = if config.follow {Some(quai_rpc::ingest::Follower::open(&config).await?)} else {None};
@@ -77,7 +83,10 @@ fn main() {
         if config.snapshot.is_some() {
             let reload_app = app.clone();
             tokio::spawn(async move {
-                let mut signals = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()).expect("SIGHUP handler");
+                let mut signals = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
+                    Ok(signals) => signals,
+                    Err(error) => {eprintln!("SIGHUP reload disabled: {error}");return;}
+                };
                 while signals.recv().await.is_some() {
                     if reload_app.config.follow {eprintln!("follower owns checkpoint; manual reload ignored");continue;}
                     let app = reload_app.clone();
@@ -90,7 +99,8 @@ fn main() {
             });
         }
         let listener=tokio::net::TcpListener::bind(&config.listen).await.map_err(|e|e.to_string())?;
-        println!("{}",json!({"ready":true,"address":listener.local_addr().unwrap().to_string(),"mode":config.mode,"version":quai_rpc::VERSION}));
+        let address=listener.local_addr().map_err(|e|e.to_string())?;
+        println!("{}",json!({"ready":true,"address":address.to_string(),"mode":config.mode,"version":quai_rpc::VERSION}));
         axum::serve(listener,router(app)).with_graceful_shutdown(async {let _=tokio::signal::ctrl_c().await;})
             .await.map_err(|e|e.to_string())
     }) {eprintln!("{error}");std::process::exit(1)}

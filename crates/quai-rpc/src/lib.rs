@@ -11,7 +11,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{io::Write, sync::Arc, time::Duration};
+use std::sync::{PoisonError, RwLockReadGuard};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
 
 #[cfg(feature = "reference-gateway")]
@@ -175,14 +176,18 @@ fn error(code: i64, message: &str) -> Outcome {
     Outcome::Error(json!({"code":code,"message":message}))
 }
 
+// serde_json fails only on a failed writer or a map key that is not a string.
+// A `Vec` writer cannot fail and a `Value` map has only string keys.
+const VALUE_WRITES: &str = "a serde_json::Value always serializes into a Vec";
+
 fn encode(id: &Value, outcome: Outcome) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(256);
     bytes.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":");
-    serde_json::to_writer(&mut bytes, id).expect("JSON Value serializes");
+    serde_json::to_writer(&mut bytes, id).expect(VALUE_WRITES);
     match outcome {
         Outcome::Result(value) => {
             bytes.extend_from_slice(b",\"result\":");
-            serde_json::to_writer(&mut bytes, &value).expect("JSON Value serializes");
+            serde_json::to_writer(&mut bytes, &value).expect(VALUE_WRITES);
         }
         Outcome::Encoded(value) => {
             // Reserve the result marker and closing brace with the payload.
@@ -192,7 +197,7 @@ fn encode(id: &Value, outcome: Outcome) -> Vec<u8> {
         }
         Outcome::Error(value) => {
             bytes.extend_from_slice(b",\"error\":");
-            serde_json::to_writer(&mut bytes, &value).expect("JSON Value serializes");
+            serde_json::to_writer(&mut bytes, &value).expect(VALUE_WRITES);
         }
     }
     bytes.push(b'}');
@@ -214,8 +219,8 @@ impl App {
         let hash = format!("0x{}", "ab".repeat(32));
         let encoded_payload_fields = format!(
             ",\"hash\":{},\"data\":{}}}",
-            serde_json::to_string(&hash).unwrap(),
-            serde_json::to_string(&payload).unwrap()
+            serde_json::to_string(&hash).map_err(|e| e.to_string())?,
+            serde_json::to_string(&payload).map_err(|e| e.to_string())?
         )
         .into_bytes();
         let store = config
@@ -246,9 +251,19 @@ impl App {
         }))
     }
 
+    /// The follower status. Writers only replace the whole `Value`, so a lock
+    /// that a panicking thread poisoned still holds a complete status.
+    pub(crate) fn ingestion_status(&self) -> RwLockReadGuard<'_, Value> {
+        self.ingestion
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
     #[cfg(feature = "reference-gateway")]
     pub(crate) fn set_ingestion_status(&self, value: Value) {
-        *self.ingestion.write().expect("ingestion lock") = value;
+        *self
+            .ingestion
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = value;
     }
     #[cfg(feature = "reference-gateway")]
     pub(crate) fn install_snapshot(&self, snapshot: quai_store::Snapshot) -> Result<(), String> {
@@ -359,7 +374,8 @@ impl App {
                     // still encoded per request. This is serialization reuse, not caching
                     // blockchain state or returning stale responses.
                     let mut out = Vec::with_capacity(self.encoded_payload_fields.len() + 48);
-                    write!(&mut out, "{{\"sequence\":{sequence}").unwrap();
+                    out.extend_from_slice(b"{\"sequence\":");
+                    out.extend_from_slice(sequence.to_string().as_bytes());
                     out.extend_from_slice(&self.encoded_payload_fields);
                     Outcome::Encoded(out)
                 } else {
@@ -383,23 +399,19 @@ impl App {
         if !is_read_method(method) {
             return error(-32601, "method not available in read-only gateway");
         }
-        if self.config.follow
-            && self.ingestion.read().expect("ingestion lock")["network_verified"] != true
-        {
+        if self.config.follow && self.ingestion_status()["network_verified"] != true {
             return error(-32098, "upstream identity not verified by follower");
         }
+        // `Config::validate` requires an upstream in gateway and hybrid mode.
+        let Some(upstream) = self.config.upstream.as_deref() else {
+            return error(-32098, "upstream not configured");
+        };
         let mut forwarded = request.clone();
         // A caller notification still needs an upstream response to verify success;
         // its result is suppressed again before writing the downstream response.
         forwarded["id"] = id.clone();
         self.upstream_calls.fetch_add(1, Ordering::Relaxed);
-        let response = match self
-            .client
-            .post(self.config.upstream.as_ref().unwrap())
-            .json(&forwarded)
-            .send()
-            .await
-        {
+        let response = match self.client.post(upstream).json(&forwarded).send().await {
             Ok(response) if response.status().is_success() => response,
             _ => return error(-32098, "upstream request failed"),
         };
@@ -638,7 +650,7 @@ async fn health(State(app): State<Arc<App>>) -> Json<Value> {
         "read_view":if app.config.mode == "snapshot" {"frozen"} else {"upstream"},
         "canonical_reads":{"enabled":app.config.native_canonical_reads,"native_receipts":app.native_receipt_hits.load(Ordering::Relaxed),"native_logs":app.native_log_hits.load(Ordering::Relaxed),"freshness_http_calls":app.freshness_http_calls.load(Ordering::Relaxed),"freshness_rpc_calls":app.freshness_http_calls.load(Ordering::Relaxed)*4,
         "fallbacks":{"unsupported":app.canonical_misses[0].load(Ordering::Relaxed),"coverage":app.canonical_misses[1].load(Ordering::Relaxed),"order":app.canonical_misses[2].load(Ordering::Relaxed),"budget":app.canonical_misses[3].load(Ordering::Relaxed),"head_mismatch":app.canonical_stale.load(Ordering::Relaxed),"unavailable":app.canonical_unavailable.load(Ordering::Relaxed)},"identity_rejections":app.canonical_identity_rejections.load(Ordering::Relaxed)},
-        "ingestion":app.ingestion.read().expect("ingestion lock").clone(),
+        "ingestion":app.ingestion_status().clone(),
         "store":app.store.as_ref().map(quai_store::Store::info)}),
     )
 }

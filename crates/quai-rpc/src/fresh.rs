@@ -62,20 +62,23 @@ impl App {
                 return Err(ProbeError::Unavailable);
             }
         }
+        // Four distinct known IDs in four replies: every lookup below succeeds.
+        let result = |id: &str| results.get(id).copied().ok_or(ProbeError::Unavailable);
         let identity = &snapshot.identity;
-        if results["chain"] != &json!(identity.chain_id)
-            || results["location"]
+        if result("chain")? != &json!(identity.chain_id)
+            || result("location")?
                 != &json!(identity
                     .location
                     .iter()
                     .map(|n| format!("0x{n:x}"))
                     .collect::<Vec<_>>())
-            || results["genesis"]["hash"] != identity.genesis_hash
+            || result("genesis")?["hash"] != identity.genesis_hash
         {
             return Err(ProbeError::Identity);
         }
-        Ok(results["head"]["hash"] == *snapshot.head().1
-            && results["head"]["woHeader"]["number"] == format!("0x{:x}", snapshot.head().0))
+        let head = result("head")?;
+        Ok(head["hash"] == *snapshot.head().1
+            && head["woHeader"]["number"] == format!("0x{:x}", snapshot.head().0))
     }
 
     pub(crate) async fn canonical_read(&self, method: &str, params: &Value) -> Option<Outcome> {
@@ -85,7 +88,7 @@ impl App {
             return None;
         }
         let snapshot = self.store.as_ref()?.snapshot();
-        if self.ingestion.read().expect("ingestion lock")["network_verified"] != true {
+        if self.ingestion_status()["network_verified"] != true {
             self.canonical_unavailable.fetch_add(1, Ordering::Relaxed);
             return None;
         }
@@ -121,7 +124,7 @@ impl App {
                 }
             }
         }
-        if self.ingestion.read().expect("ingestion lock")["network_verified"] != true {
+        if self.ingestion_status()["network_verified"] != true {
             self.canonical_unavailable.fetch_add(1, Ordering::Relaxed);
             return None;
         }

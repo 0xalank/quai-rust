@@ -17,6 +17,12 @@ pub struct Follower {
     previous: Option<Value>,
     identity: Option<Identity>,
     status: Value,
+    // Typed copies of the status counters; `status` shows them.
+    successful_polls: u64,
+    commits: u64,
+    errors: u64,
+    consecutive_errors: u64,
+    reorgs: u64,
     _lock: Arc<File>,
 }
 
@@ -131,6 +137,11 @@ impl Follower {
             previous,
             identity,
             status: json!({"enabled":true,"network_verified":false,"state":"starting","successful_polls":0,"commits":0,"errors":0,"consecutive_errors":0,"reorgs":0,"poll_ms":config.poll_ms,"window_blocks":config.window_blocks,"last_success_unix":null,"last_error":null,"upstream_head_number":null,"upstream_head_hash":null,"lag_blocks":null}),
+            successful_polls: 0,
+            commits: 0,
+            errors: 0,
+            consecutive_errors: 0,
+            reorgs: 0,
             _lock: Arc::new(lock),
         };
         // A valid existing checkpoint can start during an outage, after identity
@@ -143,19 +154,14 @@ impl Follower {
             follower.commit(next, None).await?;
         }
         if let Some(previous) = &follower.previous {
-            let height = previous["base_number"].as_u64().unwrap_or(0)
-                + previous["canonical"]
-                    .as_array()
-                    .ok_or("missing canonical view")?
-                    .len() as u64
-                - 1;
-            follower.status["indexed_head_number"] = json!(height);
-            follower.status["indexed_head_hash"] = previous["canonical"]
+            let canonical = previous["canonical"]
                 .as_array()
-                .unwrap()
-                .last()
-                .unwrap()
-                .clone();
+                .ok_or("missing canonical view")?;
+            // `Snapshot::from_bytes` above rejects an empty canonical view.
+            let head = canonical.last().ok_or("empty canonical view")?;
+            let height = previous["base_number"].as_u64().unwrap_or(0) + canonical.len() as u64 - 1;
+            follower.status["indexed_head_number"] = json!(height);
+            follower.status["indexed_head_hash"] = head.clone();
         }
         Ok(follower)
     }
@@ -331,12 +337,12 @@ impl Follower {
                 }
             }
             let parent = field(&current["woHeader"], "parentHash")?.to_owned();
-            chain.push(std::mem::take(&mut current));
             account_size(
                 &mut bytes_used,
-                std::slice::from_ref(chain.last().unwrap()),
+                std::slice::from_ref(&current),
                 &receipts[receipt_start..],
             )?;
+            chain.push(std::mem::take(&mut current));
             if n > start {
                 current = match known.get(&parent) {
                     Some(v) => v.clone(),
@@ -349,7 +355,9 @@ impl Follower {
         }
         chain.reverse();
         let anchor = if start > 0 {
-            json!({"number":start-1,"hash":field(&chain[0]["woHeader"],"parentHash")?})
+            // The loop above pushes one block per height in start..=height.
+            let first = chain.first().ok_or("empty capture")?;
+            json!({"number":start-1,"hash":field(&first["woHeader"],"parentHash")?})
         } else {
             Value::Null
         };
@@ -389,12 +397,12 @@ impl Follower {
                     .remove(field(&orphan, "hash")?)
                     .unwrap_or_default(),
             );
-            chain.push(orphan);
             account_size(
                 &mut bytes_used,
-                std::slice::from_ref(chain.last().unwrap()),
+                std::slice::from_ref(&orphan),
                 &receipts[receipt_start..],
             )?;
+            chain.push(orphan);
         }
         Ok(Some(
             json!({"schema":1,"identity":identity,"base_number":start,"anchor":anchor,"canonical":canonical,"blocks":chain,"receipts":receipts,"receipts_complete":true,"source":{"captured_unix":now(),"trust":"RPC follower; consensus remains the source Go node responsibility"}}),
@@ -402,30 +410,39 @@ impl Follower {
     }
 
     async fn commit(&mut self, next: Value, app: Option<Arc<App>>) -> Result<(), String> {
-        let reorg = self.previous.as_ref().is_some_and(|old| {
-            let first = old["base_number"].as_u64().unwrap_or(0);
-            let second = next["base_number"].as_u64().unwrap_or(0);
-            let old_map: BTreeMap<_, _> = old["canonical"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .map(|(n, h)| (first + n as u64, h))
-                .collect();
-            next["canonical"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .any(|(n, h)| {
+        // `capture` and `open` build both views with a nonempty canonical array.
+        let next_canonical = next["canonical"]
+            .as_array()
+            .ok_or("missing canonical view")?;
+        let next_head = next_canonical.last().ok_or("empty canonical view")?.clone();
+        let second = next["base_number"].as_u64().unwrap_or(0);
+        let reorg = match &self.previous {
+            None => false,
+            Some(old) => {
+                let old_canonical = old["canonical"]
+                    .as_array()
+                    .ok_or("missing canonical view")?;
+                let first = old["base_number"].as_u64().unwrap_or(0);
+                let old_map: BTreeMap<_, _> = old_canonical
+                    .iter()
+                    .enumerate()
+                    .map(|(n, h)| (first + n as u64, h))
+                    .collect();
+                next_canonical.iter().enumerate().any(|(n, h)| {
                     old_map
                         .get(&(second + n as u64))
                         .is_some_and(|previous| *previous != h)
-                })
-                || next["canonical"].as_array().unwrap().len() as u64 + second
-                    < old["canonical"].as_array().unwrap().len() as u64 + first
-        });
-        let path = PathBuf::from(self.config.snapshot.as_ref().unwrap());
+                }) || next_canonical.len() as u64 + second < old_canonical.len() as u64 + first
+            }
+        };
+        let indexed_head_number = second + next_canonical.len() as u64 - 1;
+        // `Follower::open` refuses a configuration without a snapshot path.
+        let path = PathBuf::from(
+            self.config
+                .snapshot
+                .as_ref()
+                .ok_or("follower requires snapshot")?,
+        );
         let payload = next.clone();
         let lock = self._lock.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -442,20 +459,13 @@ impl Follower {
         .map_err(|_| "checkpoint worker failed")??;
         self.identity =
             Some(serde_json::from_value(next["identity"].clone()).map_err(|e| e.to_string())?);
-        self.status["indexed_head_number"] = json!(
-            next["base_number"].as_u64().unwrap_or(0)
-                + next["canonical"].as_array().unwrap().len() as u64
-                - 1
-        );
-        self.status["indexed_head_hash"] = next["canonical"]
-            .as_array()
-            .unwrap()
-            .last()
-            .unwrap()
-            .clone();
-        self.status["commits"] = json!(self.status["commits"].as_u64().unwrap() + 1);
+        self.status["indexed_head_number"] = json!(indexed_head_number);
+        self.status["indexed_head_hash"] = next_head;
+        self.commits += 1;
+        self.status["commits"] = json!(self.commits);
         if reorg {
-            self.status["reorgs"] = json!(self.status["reorgs"].as_u64().unwrap() + 1);
+            self.reorgs += 1;
+            self.status["reorgs"] = json!(self.reorgs);
         }
         self.status["lag_blocks"] = json!(0);
         self.previous = Some(next);
@@ -476,23 +486,25 @@ impl Follower {
                     self.status["network_verified"] = json!(true);
                     self.status["last_success_unix"] = json!(now());
                     self.status["last_error"] = Value::Null;
+                    self.consecutive_errors = 0;
                     self.status["consecutive_errors"] = json!(0);
-                    self.status["successful_polls"] =
-                        json!(self.status["successful_polls"].as_u64().unwrap() + 1);
+                    self.successful_polls += 1;
+                    self.status["successful_polls"] = json!(self.successful_polls);
                 }
                 Err(error) => {
                     self.status["state"] = json!("degraded");
                     self.status["network_verified"] = json!(false);
                     self.status["last_error"] = json!(error);
                     self.status["lag_blocks"] = Value::Null;
-                    self.status["errors"] = json!(self.status["errors"].as_u64().unwrap() + 1);
-                    self.status["consecutive_errors"] =
-                        json!(self.status["consecutive_errors"].as_u64().unwrap() + 1);
+                    self.errors += 1;
+                    self.status["errors"] = json!(self.errors);
+                    self.consecutive_errors += 1;
+                    self.status["consecutive_errors"] = json!(self.consecutive_errors);
                 }
             }
             app.set_ingestion_status(self.status.clone());
             // Slow failed polling with a bounded exponential delay. No busy loop.
-            let multiplier = 1u64 << self.status["consecutive_errors"].as_u64().unwrap().min(5);
+            let multiplier = 1u64 << self.consecutive_errors.min(5);
             tokio::time::sleep(Duration::from_millis(
                 (self.config.poll_ms * multiplier).min(30_000),
             ))

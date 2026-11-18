@@ -18,7 +18,9 @@ transactions is not tested on mainnet yet.
 
 - 6 crates, 37K lines of Rust source, 18K lines of tests and examples. Go has
   about 120K lines of non-test code.
-- `cargo test --release --locked --workspace`: 281/281 tests pass in 55 suites.
+- `cargo test --release --locked --workspace`: 281/281 tests in 55 suites at the
+  start of the day; 328/328 in 62 suites after the day's merges (`d097a4b`,
+  23 min), plus 21/21 for `quai-network --features native-transport`.
 - `Verifier::validate_block` returns `Unsupported`
   (`crates/quai-consensus/src/verifier.rs`). The RPC serves a frozen snapshot.
 - Before the mainnet replay, all sync tests used private chain 1337. An older

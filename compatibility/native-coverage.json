@@ -94,7 +94,7 @@
     "qi_etx_mining": "uncovered; typed scenarios remain seeded"
   },
   "canonical_read_report": "../results/latest-fresh.json",
-  "canonical_read_guide": "../CANONICAL_READS.md",
+  "canonical_read_guide": "../docs/history/CANONICAL_READS.md",
   "active_standalone_profile": "standalone.json",
   "historical_profile_note": "The gateway/hybrid fields and counters in this inventory describe the isolated reference profile; the shipping build excludes Go-backed modes."
 }

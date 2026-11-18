@@ -1,4 +1,4 @@
-The active build is the [standalone Rust profile](standalone.json). Its Go-free frozen-view and protocol scope is separate from the historical gateway evidence below. Go-backed scripts now run from the isolated lab created by `scripts/build_reference.py`. See [the native client plan](../PLAN.md).
+The active build is the [standalone Rust profile](standalone.json). Its Go-free frozen-view and protocol scope is separate from the historical gateway evidence below. Go-backed scripts now run from the isolated lab created by `scripts/build_reference.py`. See [the native client plan](../docs/history/PLAN.md).
 
 For the entire client, use the [source coverage map](../PORTING_MAP.md),
 [machine map](go-quai-porting-map.json) and [network gates](../NETWORK_READINESS.md).
@@ -13,7 +13,7 @@ The inventory tracks 67 candidate methods from selected Go declarations, the gat
 
 Current gateway: **46 allowlist entries**, **31 methods with controlled-state proxy evidence** in the earlier suite. [Native read coverage](native-coverage.json) now records immutable hybrid reads and frozen block/receipt queries. See [controlled-state testing](CONTROLLED-STATE.md), [coverage](coverage.json) and [the report](../results/chain-conformance.json).
 
-The outpoint method spelling is fixed. Errors are compared strictly in the new harness, including message text and data. Both pinned SDK variants now have acceptance jobs. The [live follower](../LIVE_INGESTION.md) adds mined local blocks, a signed Quai transfer, automatic reorg ingestion and crash recovery. Filters/WebSockets, Pelagus UI, mined Qi/ETX coverage, full runtime inventory and sustained qualification remain open.
+The outpoint method spelling is fixed. Errors are compared strictly in the new harness, including message text and data. Both pinned SDK variants now have acceptance jobs. The [live follower](../docs/history/LIVE_INGESTION.md) adds mined local blocks, a signed Quai transfer, automatic reorg ingestion and crash recovery. Filters/WebSockets, Pelagus UI, mined Qi/ETX coverage, full runtime inventory and sustained qualification remain open.
 
 An allowlist entry is permission to forward a request. Controlled-state evidence exercises production API handlers with seeded StateDB/UTXO/EVM state; it does not establish full-node backend or consensus compatibility. Case lists in [methods.json](methods.json) point to evidence. Empty lists remain uncovered.
 
@@ -89,11 +89,11 @@ An allowlist entry is permission to forward a request. Controlled-state evidence
 
 Method casing, parameter and error expectations come from the pinned Go implementation. Static declarations do not prove exposure: module flags, transport and node context still apply. Account management, server-side signing, mining/admin/debug and broad txpool APIs are outside the first public profiles.
 
-The [latest milestone results](../MILESTONE_RESULTS.md) report real-node genesis tests, both SDK pins, native-read coverage and measured resource costs. The earlier per-method proxy evidence above is retained separately from native mode coverage.
+The [latest milestone results](../docs/history/MILESTONE_RESULTS.md) report real-node genesis tests, both SDK pins, native-read coverage and measured resource costs. The earlier per-method proxy evidence above is retained separately from native mode coverage.
 
-The [optional canonical read path](../CANONICAL_READS.md) adds positive native receipts and indexed logs with strict freshness barriers. Its new acceptance and timing baseline are recorded separately; coverage and ordering misses continue through Go.
+The [optional canonical read path](../docs/history/CANONICAL_READS.md) adds positive native receipts and indexed logs with strict freshness barriers. Its new acceptance and timing baseline are recorded separately; coverage and ordering misses continue through Go.
 
-The [2026-11-09 native foundation](../NATIVE_FOUNDATION_RESULTS.md) adds raw
+The [2026-11-09 native foundation](../docs/history/NATIVE_FOUNDATION_RESULTS.md) adds raw
 schemas, bounded body/receipt/trie commitments, gas/Qi-input/live-ETX helpers
 and application-wire framing. The live RPC surface remains eight frozen reads;
 these new libraries do not close full execution, consensus or sync gates.

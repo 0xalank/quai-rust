@@ -1,4 +1,4 @@
-> Historical sidecar roadmap, retained for reference. The active native-client plan is [PLAN.md](../PLAN.md).
+> Historical sidecar roadmap, retained for reference. The active native-client plan is [history/PLAN.md](history/PLAN.md).
 
 # Quai Rust build and compatibility plan
 
@@ -6,13 +6,13 @@ Build a useful RPC service first, then move selected reads into Rust while go-qu
 
 The first product target is a state-processing zone RPC endpoint. Prime and region contexts need explicit profiles because method availability and behavior differ. The target network and node configuration must be recorded before capturing chain fixtures.
 
-The optional [canonical receipt/log prototype](CANONICAL_READS.md) now adds strict freshness barriers and native indexed queries. Multi-block ordering, gaps and unsupported inputs preserve Go fallback; sustained operational gates remain open.
+The optional [canonical receipt/log prototype](history/CANONICAL_READS.md) now adds strict freshness barriers and native indexed queries. Multi-block ordering, gaps and unsupported inputs preserve Go fallback; sustained operational gates remain open.
 
 ## Latest implementation
 
 The local full-node launcher, pinned SDK acceptance jobs, typed block/receipt/log
 scenarios, and first materialized Rust read store are implemented. The
-[read guide](NATIVE_READS.md) records their scope and commands. Hybrid mode serves
+[read guide](history/NATIVE_READS.md) records their scope and commands. Hybrid mode serves
 known immutable block hashes natively; live receipt and latest-state requests
 continue through Go. Frozen exports support receipt selection and atomic branch
 replacement. Complete release gates below still require broader full-node
@@ -23,13 +23,13 @@ coverage and operational qualification.
 The controlled-state API harness, strict comparator, local full-node launcher,
 two pinned SDK jobs and first materialized read paths are implemented. The next
 increment adds a local mined-chain fixture and automatic bounded Rust ingestion
-with durable progress, rollback and crash recovery; see [live ingestion](LIVE_INGESTION.md).
+with durable progress, rollback and crash recovery; see [live ingestion](history/LIVE_INGESTION.md).
 The original benchmark and controlled API evidence remain separate. Full M0/M1,
 wallet/event, native execution and production qualification gates remain open.
 
 ## Current starting point
 
-The starter has an HTTP fixture service, a read-only forwarding gateway, 5 Rust unit tests, 280 fixture/integration checks, and a finite configuration tuner. Its 31 allowlist entries are forwarding permissions, not evidence of 31 compatible chain methods. The initial performance results in [RESULTS.md](RESULTS.md) are synthetic.
+The starter has an HTTP fixture service, a read-only forwarding gateway, 5 Rust unit tests, 280 fixture/integration checks, and a finite configuration tuner. Its 31 allowlist entries are forwarding permissions, not evidence of 31 compatible chain methods. The initial performance results in [history/RESULTS.md](history/RESULTS.md) are synthetic.
 
 The [compatibility inventory](compatibility/README.md) seeds 67 candidate method entries from the Rust gateway, selected Go service declarations and the local Quais.js request mapping. It is not the complete runtime RPC surface. [methods.json](compatibility/methods.json) records exact revisions, source locations, source hashes, current status and empty case lists that still need evidence.
 

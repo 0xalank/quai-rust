@@ -38,6 +38,128 @@
     "unclassified_files": 0
   },
   "native_evidence": {
+    "carried_over": {
+      "activation_valid_blocks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "activation_valid_work_rejections": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "auxiliary_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "bound_hierarchy_execution": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "candidate_placement_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "coincident_component_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "coincident_distinct_conditional_blocks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "coincident_valid_work_rejections": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "consensus_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "coordinator_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "eligibility_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "execution_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "foundation_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "frontier_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "genesis_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "hierarchy_header_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "history_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "lazy_accounts": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "lazy_etx": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "lazy_lockups": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "lazy_storage": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "persisted_transition_cases": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "persisted_transition_go_comparisons": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "polaris_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "private_canonical_peer_checked": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "state_database_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "stateful_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "vm_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "zone_execution_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      },
+      "zone_header_checks": {
+        "file": "before-prime-economics-native-validation.json",
+        "recorded_utc": "2026-11-16T07:00:03.556784+00:00"
+      }
+    },
     "rust_build_sha256": "7f42f8560bfc3c71be5d7f07f135eab4b19e9ca0541109713a13e37c5737940b",
     "rust_source_hashes": {
       "crates/quai-consensus/examples/bench-admission.rs": "313ca28dab4de80a9f67151f425d0eed0089e22bb4d1fabe2820aeb71eda27a0",

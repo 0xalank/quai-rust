@@ -154,6 +154,8 @@ The experimental genesis-only runtime qualifies
 fingerprint, exact-executable replay-evidence reuse, fresh process checks and unqualified
 transaction-activation boundary. These figures do not promote the public network gates.
 
+30 of these counts are carried over from older validation records (before-prime-economics-native-validation.json (2026-11-16T07:00:03.556784+00:00)); they are the last recorded values, not the latest run.
+
 Repeated benchmark operations are not additional feature coverage.
 
 See the [machine-readable map](compatibility/go-quai-porting-map.json) for

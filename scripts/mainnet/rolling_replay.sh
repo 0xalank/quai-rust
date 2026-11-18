@@ -21,7 +21,8 @@
 # Stops (exit status): ROLLING_TO reached or a STOP file in ROLLING_DIR (0;
 # a running replay stops at its next checkpoint, a running export at its next
 # check); the first replay failure, printed (1, or 2 for a setup error);
-# another run holds the lock (3); free disk below MIN_FREE_GB (4);
+# another run holds the lock, or another quai-node or peer-export uses the
+# export or the data directory (3); free disk below MIN_FREE_GB (4);
 # EXPORT_RETRIES failed exports in a row (5).
 #
 # Environment:
@@ -77,6 +78,18 @@ esac
 
 log() { echo "rolling_replay.sh: $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >&2; }
 is_number() { case "$1" in "" | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+# Another quai-node or peer-export process on the same directories, for
+# example the long replay that this pipeline continues. A prune or an
+# export would change the export under it.
+in_use() {
+	ps -A -o pid=,command= 2>/dev/null | grep -F -e "$DATADIR" -e "$EXPORT" |
+		grep -e quai-node -e peer-export | grep -v -e grep -e rolling_replay
+}
+busy=$(in_use)
+if [ -n "$busy" ]; then
+	log "the export or the data directory is in use; stop this first: $busy"
+	exit 3
+fi
 for v in "$AHEAD" "$POLL" "$RETRIES" "$JOBS" "$MIN_FREE_GB" ${TO:+"$TO"}; do
 	is_number "$v" || { log "not a number: $v"; exit 2; }
 done
@@ -234,6 +247,12 @@ while :; do
 	STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 	START_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 	if [ -e "$STOP" ]; then log "STOP file: stopping"; break; fi
+	busy=$(in_use)
+	if [ -n "$busy" ]; then
+		log "the export or the data directory is in use; stopping: $busy"
+		EXIT=3
+		break
+	fi
 	free=$(free_gb)
 	if [ "$free" -lt "$MIN_FREE_GB" ]; then
 		log "only $free GiB free (limit $MIN_FREE_GB): stopping"

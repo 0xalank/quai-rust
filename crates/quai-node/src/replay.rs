@@ -216,6 +216,8 @@ struct Checker {
     orders: HashMap<Hash, u8>,
     order_log: VecDeque<Hash>,
     now: u64,
+    /// The export carries the stored zone receipts.
+    receipts: bool,
 }
 struct Fail {
     context: Context,
@@ -249,7 +251,7 @@ fn h32(v: &[u8]) -> Hash {
 }
 
 impl Checker {
-    fn new(spec: ChainSpec, caches: Arc<SharedCaches>) -> Self {
+    fn new(spec: ChainSpec, caches: Arc<SharedCaches>, receipts: bool) -> Self {
         let window = Window::new();
         let profiles = std::array::from_fn(|c| spec.profile(c));
         let zone_profile = validation::Profile {
@@ -275,6 +277,7 @@ impl Checker {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
+            receipts,
             spec,
         }
     }
@@ -620,13 +623,16 @@ impl Checker {
                 return Err(fail(c, "number", (pn + 1).to_string(), n.to_string()));
             }
         }
-        // 3. body commitments
+        // 3. body commitments, and the stored receipts against the receipt root
         for c in CONTEXTS {
             if let Some(r) = &records[c.index()] {
                 Self::body(r, c)?;
             }
         }
         let zone = records[2].clone().unwrap();
+        if self.receipts {
+            stored_receipts(&zone, &h.zone().receipts)?;
+        }
         // 4. proof-of-work, computed by the parallel pass
         let done = done.ok_or_else(|| {
             fail(
@@ -818,6 +824,128 @@ impl Checker {
     }
 }
 
+fn fixed<const N: usize>(v: &[u8]) -> Option<[u8; N]> {
+    if v.len() > N {
+        return None;
+    }
+    let mut out = [0u8; N];
+    out[N - v.len()..].copy_from_slice(v);
+    Some(out)
+}
+/// Rebuild the consensus receipts from go-quai's storage form (QEX1
+/// "Receipts": type from the transaction with the same hash, bloom from the
+/// logs) and compare their root with the header receipt root.
+fn stored_receipts(zone: &Record, bytes: &[u8]) -> Result<(), Fail> {
+    use prost::Message;
+    use quai_primitives::receipt::{logs_bloom, receipts_root, Log, Receipt};
+    use quai_primitives::schema::{self, block::ProtoReceiptsForStorage};
+    use quai_primitives::transaction::Transaction;
+    let c = Context::Zone;
+    let bad = |what: &str, e: String| {
+        fail(
+            c,
+            format!("receipts: {what}"),
+            "go-quai storage receipts",
+            e,
+        )
+    };
+    let stored = if bytes.is_empty() {
+        ProtoReceiptsForStorage::default()
+    } else {
+        schema::preflight(".block.ProtoReceiptsForStorage", bytes).map_err(|e| bad("decode", e))?;
+        ProtoReceiptsForStorage::decode(bytes).map_err(|e| bad("decode", e.to_string()))?
+    };
+    let location = zone
+        .header()
+        .wire()
+        .location
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let origin: Option<[u8; 2]> = location.as_slice().try_into().ok();
+    let mut types = HashMap::new();
+    for tx in zone.object().transactions() {
+        let id = tx.id(origin).map_err(|e| bad("transaction hash", e))?;
+        types.insert(id, tx.type_id());
+    }
+    let mut receipts = Vec::with_capacity(stored.receipts.len());
+    for r in stored.receipts {
+        let tx_hash: Hash = r
+            .tx_hash
+            .as_ref()
+            .and_then(|h| fixed(&h.value))
+            .ok_or_else(|| bad("transaction hash", "missing or oversized".into()))?;
+        let Some(ty) = types.get(&tx_hash).copied() else {
+            return Err(fail(
+                c,
+                "receipts: transaction",
+                "a block transaction for each receipt",
+                format!("no transaction {}", hex(&tx_hash)),
+            ));
+        };
+        let (post_state, status) = match r.post_state_or_status.as_slice() {
+            [] => (vec![], 0),
+            [1] => (vec![], 1),
+            v if v.len() == 32 => (v.to_vec(), 0),
+            v => return Err(bad("status", format!("invalid receipt status {}", hex(v)))),
+        };
+        let mut logs = vec![];
+        for l in r.logs.unwrap_or_default().logs {
+            let address = l
+                .address
+                .as_ref()
+                .and_then(|a| fixed::<20>(&a.value))
+                .ok_or_else(|| bad("log address", "missing or oversized".into()))?;
+            let topics = l
+                .topics
+                .iter()
+                .map(|t| fixed::<32>(&t.value))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| bad("log topic", "oversized".into()))?;
+            logs.push(Log {
+                address,
+                topics,
+                data: l.data,
+            });
+        }
+        let outbound_etxs = r
+            .outbound_etxs
+            .unwrap_or_default()
+            .transactions
+            .iter()
+            .map(|t| Transaction::decode(&t.encode_to_vec()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad("outbound ETX", e))?;
+        receipts.push(Receipt {
+            transaction_type: ty,
+            post_state,
+            status,
+            cumulative_gas_used: r.cumulative_gas_used,
+            bloom: logs_bloom(&logs),
+            logs,
+            outbound_etxs,
+        });
+    }
+    let root = receipts_root(&receipts).map_err(|e| bad("root", e))?;
+    let committed = &zone
+        .object()
+        .header()
+        .wire()
+        .receipt_hash
+        .as_ref()
+        .unwrap()
+        .value;
+    if root.as_slice() != committed.as_slice() {
+        return Err(fail(
+            c,
+            "receipts: receipt root",
+            hex(committed),
+            hex(&root),
+        ));
+    }
+    Ok(())
+}
 /// The codec's own reason for a refused work object; `Record::decode` maps
 /// every codec error to one ancestry-domain message.
 fn decode_reason(bytes: &[u8], e: &Error) -> String {
@@ -886,6 +1014,7 @@ pub fn run_with(
         opts.jobs
     ));
     let last_zone = manifest.last_zone;
+    let receipts = manifest.receipts;
     let environment = manifest.environment.clone();
     let mut reader = ExportReader::new(&opts.export, manifest, opts.to);
     let seg_log = *log;
@@ -900,7 +1029,7 @@ pub fn run_with(
         None => Arc::new(SharedCaches::new(4).map_err(|e| describe(&e))?),
     };
     let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location.to_vec());
-    let mut checker = Checker::new(spec, caches);
+    let mut checker = Checker::new(spec, caches, receipts);
     let lookahead = (opts.jobs * 16).max(64);
     let mut ahead: VecDeque<Slot> = VecDeque::new();
     let mut reader_done = false;

@@ -2493,6 +2493,7 @@ name = "quai-node"
 version = "0.1.0"
 dependencies = [
  "crypto-bigint",
+ "prost",
  "quai-consensus",
  "quai-primitives",
  "serde",

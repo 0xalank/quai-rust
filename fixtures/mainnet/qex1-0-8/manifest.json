@@ -1,0 +1,22 @@
+{
+  "environment": "colosseum",
+  "exported_utc": "1970-01-01T00:00:00Z",
+  "format": "QEX1",
+  "genesis_hash": "0xac81c28f1a72591b87b5f16c9793cdc0e87c45c6d426d1a364c3b8f6386b5b8b",
+  "last_zone": 8,
+  "receipts": true,
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "segments": [
+    {
+      "file": "segments/0000000000-0000000008.qex",
+      "first_zone": 0,
+      "last_zone": 8,
+      "records": 17,
+      "sha256": "a12be47106eb0010dd04f06377e73e50f9d67fc4ac47be2b6303113f31dd351c"
+    }
+  ],
+  "slice": [
+    0,
+    0
+  ]
+}

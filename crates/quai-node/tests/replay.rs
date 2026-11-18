@@ -277,3 +277,57 @@ fn container_and_link_faults_are_reported_with_the_last_good_height() {
     assert!(e.contains("genesis"), "{e}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Real mainnet heights 0..=8 from the go-quai v0.57.0 exporter
+/// (fixtures/mainnet/qex1-0-8, cut with the qex-slice example).
+fn mainnet_slice() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/mainnet/qex1-0-8")
+}
+
+#[test]
+fn mainnet_slice_passes_with_the_colosseum_spec() {
+    let s = replay(&mainnet_slice(), None);
+    assert_eq!(s.failure, None, "{}", s.line());
+    assert_eq!(s.environment, "colosseum");
+    assert_eq!(s.highest_passed, Some(8));
+    assert_eq!(s.records, [3, 5, 9]);
+    assert_eq!(s.shares, 55);
+}
+
+#[test]
+fn mainnet_receipts_must_match_the_header_receipt_root() {
+    use prost::Message;
+    use quai_node::qex::{ExportReader, Manifest};
+    use quai_primitives::schema::block::ProtoReceiptsForStorage;
+    let src = mainnet_slice();
+    let manifest = Manifest::load(&src).unwrap();
+    let mut reader = ExportReader::new(&src, manifest.clone(), None);
+    let mut heights = vec![];
+    while let Some(h) = reader.next_height().unwrap() {
+        heights.push(h.records.into_iter().flatten().collect::<Vec<_>>());
+    }
+    // Change one stored receipt of the first block that has receipts.
+    let (at, zone) = heights
+        .iter_mut()
+        .enumerate()
+        .find_map(|(i, h)| {
+            h.iter_mut()
+                .find(|r| r.context == Context::Zone && !r.receipts.is_empty())
+                .map(|r| (i, r))
+        })
+        .unwrap();
+    let mut stored = ProtoReceiptsForStorage::decode(zone.receipts.as_slice()).unwrap();
+    stored.receipts[0].cumulative_gas_used += 1;
+    zone.receipts = stored.encode_to_vec();
+    let dir = scratch("receipts");
+    let mut w = ExportWriter::new(&dir, "colosseum", manifest.genesis_hash, true);
+    for h in &heights[..=at] {
+        w.push(h).unwrap();
+    }
+    w.finish().unwrap();
+    let s = replay(&dir, None);
+    let f = s.failure.unwrap();
+    assert_eq!(f.check, "receipts: receipt root");
+    assert_eq!(s.highest_passed, Some(at as u64 - 1));
+    std::fs::remove_dir_all(dir).unwrap();
+}

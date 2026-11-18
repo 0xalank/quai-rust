@@ -116,11 +116,11 @@ impl Summary {
                 quote(&f.actual),
             ),
             (End::ReachedTo, _) => format!(
-                "replay PASS: highest zone height with all checks passed: {passed} (stopped at --to; export ends at {}; {} {stats})",
+                "replay PASS: highest zone height with all checks passed: {passed} (stopped at --to; export ends at {}; environment {}; {stats})",
                 self.last_zone, self.environment
             ),
             _ => format!(
-                "replay PASS: highest zone height with all checks passed: {passed} (end of export; {} {stats})",
+                "replay PASS: highest zone height with all checks passed: {passed} (end of export; environment {}; {stats})",
                 self.environment
             ),
         }
@@ -301,7 +301,7 @@ impl Checker {
                         c,
                         "decode",
                         "a work object the Rust codec accepts",
-                        describe(e),
+                        decode_reason(&raw.block, e),
                     ))
                 }
             };
@@ -587,7 +587,7 @@ impl Checker {
                         c,
                         "decode",
                         "a work object the Rust codec accepts",
-                        describe(e),
+                        decode_reason(&raw.block, e),
                     ))
                 }
             };
@@ -818,6 +818,22 @@ impl Checker {
     }
 }
 
+/// The codec's own reason for a refused work object; `Record::decode` maps
+/// every codec error to one ancestry-domain message.
+fn decode_reason(bytes: &[u8], e: &Error) -> String {
+    let schedule = quai_consensus::verifier::PINNED_SCHEDULE;
+    let detail = match work::WorkObject::decode_auxiliary(bytes, schedule) {
+        Err(s) => Some(s),
+        Ok(o) => match o.auxiliary_work_header(schedule) {
+            Err(s) => Some(format!("work header: {s}")),
+            Ok(h) => h.block_hash().err().map(|s| format!("block hash: {s}")),
+        },
+    };
+    match detail {
+        Some(d) => format!("{} ({d})", describe(e)),
+        None => describe(e),
+    }
+}
 fn decode(height: Height, seq: u64) -> Slot {
     let records = std::array::from_fn(|c| {
         height.records[c]

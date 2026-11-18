@@ -199,6 +199,21 @@ fn container_and_link_faults_are_reported_with_the_last_good_height() {
     assert_eq!(s.highest_passed, Some(2));
     std::fs::remove_dir_all(dir).unwrap();
 
+    // A block the codec refuses: the failure carries the codec's reason.
+    let mut chain = base[..3].to_vec();
+    let zone = chain[2]
+        .iter_mut()
+        .find(|r| r.context == Context::Zone)
+        .unwrap();
+    zone.block.truncate(zone.block.len() - 7);
+    let dir = scratch("decode");
+    let s = replay(&write(&dir, &chain), None);
+    let f = s.failure.unwrap();
+    assert_eq!((f.check.as_str(), f.zone_height), ("decode", Some(2)));
+    assert!(f.actual.contains('('), "{}", f.actual);
+    assert_eq!(s.highest_passed, Some(1));
+    std::fs::remove_dir_all(dir).unwrap();
+
     // Branch 1 shares heights 1..=8 and forks at 9: its height 10 does not
     // extend branch 0's height 9.
     let mut chain = base[..10].to_vec();

@@ -2489,6 +2489,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "quai-node"
+version = "0.1.0"
+dependencies = [
+ "crypto-bigint",
+ "quai-consensus",
+ "quai-primitives",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "quai-primitives"
 version = "0.1.0"
 dependencies = [

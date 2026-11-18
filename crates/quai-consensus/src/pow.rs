@@ -300,6 +300,64 @@ impl LightCache {
         }
     }
 }
+/// Locally generated epoch caches shared by verifiers on several threads.
+/// Each epoch is generated once; the least recently used epoch is dropped
+/// when the store is full. Cache bytes never come from a peer or a file.
+pub struct SharedCaches {
+    capacity: usize,
+    slots: std::sync::Mutex<std::collections::VecDeque<(CacheKey, CacheSlot)>>,
+}
+type CacheKey = (Algorithm, u64);
+type CacheSlot = std::sync::Arc<std::sync::OnceLock<Result<std::sync::Arc<LightCache>, Error>>>;
+impl SharedCaches {
+    pub const MAX_EPOCHS: usize = 8;
+    pub fn new(capacity: usize) -> Result<Self, Error> {
+        if capacity == 0 || capacity > Self::MAX_EPOCHS {
+            return Err(Error::Invalid("shared epoch cache capacity"));
+        }
+        Ok(Self {
+            capacity,
+            slots: Default::default(),
+        })
+    }
+    /// Return the epoch cache for `height`, generating it at most once.
+    pub fn get(
+        &self,
+        algorithm: Algorithm,
+        height: u64,
+    ) -> Result<std::sync::Arc<LightCache>, Error> {
+        algorithm.sizes(height)?;
+        let key = (algorithm, height / algorithm.epoch_length());
+        let slot = {
+            let mut slots = self
+                .slots
+                .lock()
+                .map_err(|_| Error::Unavailable("shared epoch caches"))?;
+            if let Some(index) = slots.iter().position(|(k, _)| *k == key) {
+                let entry = slots.remove(index).unwrap();
+                let slot = entry.1.clone();
+                slots.push_back(entry);
+                slot
+            } else {
+                while slots.len() >= self.capacity {
+                    slots.pop_front();
+                }
+                let slot = CacheSlot::default();
+                slots.push_back((key, slot.clone()));
+                slot
+            }
+        };
+        slot.get_or_init(|| LightCache::new(algorithm, height).map(std::sync::Arc::new))
+            .clone()
+    }
+    /// Epochs currently held, oldest first.
+    pub fn epochs(&self) -> Vec<(Algorithm, u64)> {
+        self.slots
+            .lock()
+            .map(|s| s.iter().map(|(k, _)| *k).collect())
+            .unwrap_or_default()
+    }
+}
 const RAVEN: [u32; 15] = [
     0x72, 0x41, 0x56, 0x45, 0x4e, 0x43, 0x4f, 0x49, 0x4e, 0x4b, 0x41, 0x57, 0x50, 0x4f, 0x57,
 ];

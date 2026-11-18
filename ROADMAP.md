@@ -7,14 +7,15 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 27,406** (2026-11-18, `f841a74`, rerun from genesis in a
-fresh data directory). `quai-node replay --state` executes mainnet zone blocks
-0–27,406 from the colosseum genesis, and every root equals go-quai: EVM state,
-ETX set, UTXO, receipts, outbound ETXs, gas and state counters, account count;
-209,841 workshares pass. 27,406 is the end of the Go export, not a mismatch.
-User transactions start at zone 259,200, so execution of user transactions is
-not tested on mainnet yet; a long replay on the peer export to zone 686,009 is
-running to reach them.
+Current value: **zone 310,000** (checkpoint, 2026-11-18), and the run goes on.
+The long replay on the peer export executes mainnet zone blocks from the
+colosseum genesis, and every root equals go-quai: EVM state, ETX set, UTXO,
+receipts, outbound ETXs, gas and state counters, account count. It passed zone
+259,200, where user transactions start, so Rust executes real mainnet user
+transactions with equal roots. Binaries: `f841a74` for 0–180,000, `e1f4cfb`
+from checkpoint 180,000. A single-binary run from genesis is still to do.
+Earlier value: zone 27,406, rerun from genesis on the Go export (with receipts)
+by the coordinator.
 
 ## Status on 2026-11-17
 
@@ -266,3 +267,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1, 2.2 | `peer-export` (`2176432`): QEX1 from peers, identical to the Go export to zone 27,406; public export to zone 686,009. Long `--state` replay on it started (log: `~/quai-data/mainnet-v0.57.0/logs/replay-public.err`) |
 | 2026-11-18 | Phase 1.6 | One ChainSpec/ForkSchedule checked against Go; shared confirmation; `validate_block` validates real blocks and the replay calls it (`e1f4cfb`); agent's run: 343/343 workspace + 21/21, replay 0–27,406 PASS from genesis |
 | 2026-11-18 | Phase 1 | Long replay: the `f841a74` binary passed every check to checkpoint 180,000 with no failure; resumed there with `e1f4cfb` (log: `replay-public-e1f4cfb.err`) |
+| 2026-11-18 | Phase 1 | Long replay passed zone 259,200 (first user transactions); checkpoint 310,000, every root equal. Peer export extended to zone 1,250,000 (`peer-export-1250k`, 7.6 GB, 6 public peers, 0 faults) |

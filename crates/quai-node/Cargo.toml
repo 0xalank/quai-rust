@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 quai-primitives = { path = "../quai-primitives" }
 quai-consensus = { path = "../quai-consensus" }
+quai-execution = { path = "../quai-execution" }
 crypto-bigint = { version = "=0.5.5", default-features = false }
 prost = "=0.14.4"
 serde = { version = "=1.0.229", features = ["derive"] }

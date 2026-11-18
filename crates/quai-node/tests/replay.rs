@@ -109,11 +109,15 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 fn replay(dir: &Path, to: Option<u64>) -> Summary {
+    run(dir, to, false)
+}
+fn run(dir: &Path, to: Option<u64>, state: bool) -> Summary {
     let opts = Options {
         export: dir.to_path_buf(),
         to,
         jobs: 2,
         progress: Duration::from_secs(3600),
+        state,
     };
     replay::run_with(&opts, &Log::new(Level::Warn), Some(caches())).unwrap()
 }
@@ -272,6 +276,7 @@ fn container_and_link_faults_are_reported_with_the_last_good_height() {
         to: None,
         jobs: 1,
         progress: Duration::from_secs(3600),
+        state: false,
     };
     let e = replay::run_with(&opts, &Log::new(Level::Warn), Some(caches())).unwrap_err();
     assert!(e.contains("genesis"), "{e}");
@@ -330,4 +335,27 @@ fn mainnet_receipts_must_match_the_header_receipt_root() {
     assert_eq!(f.check, "receipts: receipt root");
     assert_eq!(s.highest_passed, Some(at as u64 - 1));
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn fixture_chain_state_roots_match_go() {
+    // Execution from genesis with the reviewed hierarchy profile: inbound
+    // ETXs confirmed by the prime blocks at heights 5, 10 and 15 arrive at
+    // heights 11 and 16.
+    let dir = scratch("state");
+    let s = run(&write(&dir, &heights()), None, true);
+    assert_eq!(s.failure, None, "{}", s.line());
+    assert_eq!(s.highest_passed, Some(16));
+    assert_eq!(s.state_blocks, Some(16));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn mainnet_slice_state_roots_match_go() {
+    // Block 1 credits the 12,612 genesis allocations (allocations.bin) and
+    // every block pays its coinbase and workshares through ETXs.
+    let s = run(&mainnet_slice(), None, true);
+    assert_eq!(s.failure, None, "{}", s.line());
+    assert_eq!(s.highest_passed, Some(8));
+    assert_eq!(s.state_blocks, Some(8));
 }

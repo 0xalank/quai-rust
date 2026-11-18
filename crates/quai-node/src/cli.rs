@@ -22,6 +22,8 @@ Replay options:
   --to <HEIGHT>         Stop after this zone height
   --jobs <N>            Proof-of-work threads (default: available cores minus one)
   --progress <SECONDS>  Seconds between progress lines (default: 10)
+  --state               Also execute zone blocks from genesis and compare the
+                        state, ETX, UTXO and receipt roots (state in memory)
   --no-report           Do not write <datadir>/replay/last.json
 
 Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error.
@@ -40,6 +42,7 @@ pub struct ReplayArgs {
     pub jobs: usize,
     pub progress: u64,
     pub report: bool,
+    pub state: bool,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -68,6 +71,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     let mut jobs = None;
     let mut progress = 10u64;
     let mut report = true;
+    let mut state = false;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -120,6 +124,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 }
             }
             "--no-report" => report = false,
+            "--state" => state = true,
             "-h" | "--help" => command = Some("help".into()),
             f if f.starts_with('-') => return Err(format!("unknown option {f}")),
             c => {
@@ -137,7 +142,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             .map(|h| PathBuf::from(h).join(".quai-node"))
             .ok_or("--datadir is required when HOME is not set")?,
     };
-    let replay_only = export.is_some() || to.is_some() || jobs.is_some() || !report;
+    let replay_only = export.is_some() || to.is_some() || jobs.is_some() || !report || state;
     let command = match command.as_deref() {
         None | Some("help") => Command::Help,
         Some("run") => Command::Run,
@@ -147,11 +152,12 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             jobs: jobs.unwrap_or_else(default_jobs),
             progress,
             report,
+            state,
         }),
         Some(c) => return Err(format!("unknown command {c:?}")),
     };
     if replay_only && !matches!(command, Command::Replay(_)) {
-        return Err("--export, --to, --jobs and --no-report belong to replay".into());
+        return Err("--export, --to, --jobs, --state and --no-report belong to replay".into());
     }
     Ok(Args {
         datadir,
@@ -185,6 +191,7 @@ pub fn main_with(args: &[String]) -> i32 {
                 to: r.to,
                 jobs: r.jobs,
                 progress: Duration::from_secs(r.progress),
+                state: r.state,
             };
             let summary = match replay::run(&opts, &log) {
                 Ok(s) => s,
@@ -253,7 +260,8 @@ mod tests {
                 to: Some(5),
                 jobs: 3,
                 progress: 10,
-                report: true
+                report: true,
+                state: false
             })
         );
         assert_eq!(parse(&args(&[])).unwrap().command, Command::Help);

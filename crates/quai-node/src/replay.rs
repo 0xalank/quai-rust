@@ -18,6 +18,7 @@ use crate::log::Log;
 use crate::pow::{Done, Job, Pool};
 use crate::qex::{self, Context, ExportError, ExportReader, Height, Manifest};
 use crate::spec::ChainSpec;
+use crate::state::{self, StateReplay};
 use crate::window::Window;
 use crypto_bigint::Encoding as _;
 use quai_consensus::{
@@ -30,7 +31,7 @@ use quai_consensus::{
     verifier::Verifier,
     zone_header, Error,
 };
-use quai_primitives::{encode_hex, work, Hash};
+use quai_primitives::{encode_hex, transaction::Transaction, work, Hash};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,6 +43,8 @@ pub struct Options {
     pub to: Option<u64>,
     pub jobs: usize,
     pub progress: Duration,
+    /// Also execute zone blocks from genesis and compare the state roots.
+    pub state: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
@@ -73,6 +76,8 @@ pub struct Summary {
     pub end: End,
     pub failure: Option<Failure>,
     pub timing: Timing,
+    /// Zone blocks executed with every state root equal, when `--state` is on.
+    pub state_blocks: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Timing {
@@ -94,8 +99,12 @@ impl Summary {
         let passed = self
             .highest_passed
             .map_or("none".to_string(), |h| h.to_string());
+        let state = match self.state_blocks {
+            Some(n) => format!(", {n} zone blocks executed with all state roots equal"),
+            None => String::new(),
+        };
         let stats = format!(
-            "{} heights, {} prime, {} region, {} zone records, {} workshares, {:.1} blocks/s, {:.1}s",
+            "{} heights, {} prime, {} region, {} zone records, {} workshares{state}, {:.1} blocks/s, {:.1}s",
             self.heights,
             self.records[0],
             self.records[1],
@@ -134,6 +143,7 @@ impl Summary {
             "heights_checked": self.heights,
             "records": {"prime": self.records[0], "region": self.records[1], "zone": self.records[2]},
             "workshares": self.shares,
+            "state_blocks_executed": self.state_blocks,
             "elapsed_seconds": self.elapsed.as_secs_f64(),
             "zone_blocks_per_second": self.rate(),
             "end": format!("{:?}", self.end),
@@ -218,6 +228,7 @@ struct Checker {
     now: u64,
     /// The export carries the stored zone receipts.
     receipts: bool,
+    state: Option<StateReplay>,
 }
 struct Fail {
     context: Context,
@@ -251,7 +262,12 @@ fn h32(v: &[u8]) -> Hash {
 }
 
 impl Checker {
-    fn new(spec: ChainSpec, caches: Arc<SharedCaches>, receipts: bool) -> Self {
+    fn new(
+        spec: ChainSpec,
+        caches: Arc<SharedCaches>,
+        receipts: bool,
+        state: Option<StateReplay>,
+    ) -> Self {
         let window = Window::new();
         let profiles = std::array::from_fn(|c| spec.profile(c));
         let zone_profile = validation::Profile {
@@ -278,6 +294,7 @@ impl Checker {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             receipts,
+            state,
             spec,
         }
     }
@@ -575,6 +592,86 @@ impl Checker {
             _ => fallback,
         }
     }
+    fn execute(
+        &mut self,
+        st: &mut StateReplay,
+        records: &[Option<Arc<Record>>; 3],
+        order: u8,
+        accumulated: &[Transaction],
+        cross: Vec<Transaction>,
+        zone: &Record,
+    ) -> Result<(), Fail> {
+        let z = Context::Zone;
+        let confirmed = st
+            .confirm(&self.histories, &self.orders, records, order, accumulated)
+            .map_err(|e| fail(z, "state: confirmation", "confirmed ETXs", describe(&e)))?;
+        let inbound = st
+            .confirmed_after(&zone.parent(2).unwrap_or([0; 32]))
+            .map_err(|e| {
+                fail(
+                    z,
+                    "state: inbound ETXs",
+                    "parent confirmation",
+                    describe(&e),
+                )
+            })?;
+        let executed = state::native_components(
+            &mut self.verifier,
+            &mut st.state,
+            &self.histories[2],
+            &st.past,
+            zone,
+            &st.profile,
+            &inbound,
+        );
+        let e = match executed {
+            Ok(x) => {
+                return st
+                    .commit(zone, order, cross, confirmed, x.created_keys)
+                    .map_err(|e| fail(z, "state: commit", "recorded history", describe(&e)));
+            }
+            Err(e) => e,
+        };
+        // Execute again without the commitment comparison to report values.
+        let location = self.spec.location;
+        let verifier = &mut self.verifier;
+        let computed = state::diagnose(
+            &st.state,
+            &self.histories[2],
+            &st.past,
+            zone,
+            &st.profile,
+            &inbound,
+            |h| verifier.precompute_inclusion_work(h, &location),
+        );
+        let b = zone.object().header().wire();
+        let field = |v: &Option<quai_primitives::schema::common::ProtoHash>| {
+            hex(&v.as_ref().unwrap().value)
+        };
+        let (expected, actual) = match &computed {
+            Ok(c) => match message(&e) {
+                "execution account root" => (field(&b.evm_root), hex(&c.evm_root)),
+                "execution ETX root" => (field(&b.etx_set_root), hex(&c.etx_root)),
+                "execution UTXO root" => (field(&b.utxo_root), hex(&c.utxo_root)),
+                "execution receipt root" => (field(&b.receipt_hash), hex(&c.receipt_root)),
+                "execution outbound root" => (field(&b.outbound_etx_hash), hex(&c.outbound_root)),
+                "execution gas counter" => {
+                    (b.gas_used.unwrap_or(0).to_string(), c.gas_used.to_string())
+                }
+                "execution state counter" => (
+                    b.state_used.unwrap_or(0).to_string(),
+                    c.state_used.to_string(),
+                ),
+                "execution account count" => (
+                    uint_hex(b.quai_state_size.as_deref().unwrap_or_default()),
+                    c.account_count.to_string(),
+                ),
+                _ => ("execution succeeds".to_string(), describe(&e)),
+            },
+            Err(_) => ("execution succeeds".to_string(), describe(&e)),
+        };
+        Err(fail(z, format!("state: {}", message(&e)), expected, actual))
+    }
     fn check(&mut self, slot: Slot, done: Option<Done>) -> Result<u8, Fail> {
         let h = &slot.height;
         // 1. decode, hash and record number
@@ -809,6 +906,12 @@ impl Checker {
                 ));
             }
         }
+        // 8. state: execute the zone block and compare the header roots
+        if let Some(mut st) = self.state.take() {
+            let result = self.execute(&mut st, &records, order, &accumulated, cross, &zone);
+            self.state = Some(st);
+            result?;
+        }
         // Commit to the window.
         for c in &CONTEXTS[order as usize..] {
             let r = records[c.index()].clone().unwrap();
@@ -1029,7 +1132,14 @@ pub fn run_with(
         None => Arc::new(SharedCaches::new(4).map_err(|e| describe(&e))?),
     };
     let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location.to_vec());
-    let mut checker = Checker::new(spec, caches, receipts);
+    let state = if opts.state {
+        let profile = state::profile_for(spec.environment, spec.chain_id, spec.genesis_hash())
+            .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
+        Some(StateReplay::new(profile, spec.genesis_hash()))
+    } else {
+        None
+    };
+    let mut checker = Checker::new(spec, caches, receipts, state);
     let lookahead = (opts.jobs * 16).max(64);
     let mut ahead: VecDeque<Slot> = VecDeque::new();
     let mut reader_done = false;
@@ -1046,6 +1156,7 @@ pub fn run_with(
         end: End::Complete,
         failure: None,
         timing: Timing::default(),
+        state_blocks: None,
     };
     let mut last_progress = Instant::now();
     let mut progress_heights = 0u64;
@@ -1152,6 +1263,7 @@ pub fn run_with(
         }
     }
     drop(pool);
+    summary.state_blocks = checker.state.as_ref().map(|s| s.executed);
     summary.elapsed = started.elapsed();
     Ok(summary)
 }

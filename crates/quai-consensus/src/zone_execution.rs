@@ -68,6 +68,11 @@ impl Profile {
     pub fn reviewed_admission() -> Result<Self, Error> {
         Self::from_private(&PrivateChain::reviewed_admission()?)
     }
+    /// The reviewed private hierarchy chain: empty allocations, as
+    /// `execute_prepared_components` requires for it.
+    pub fn reviewed_hierarchy() -> Result<Self, Error> {
+        Self::from_private(&PrivateChain::reviewed_hierarchy()?)
+    }
     pub(crate) fn from_private(p: &PrivateChain) -> Result<Self, Error> {
         Ok(Self {
             chain_id: Uint::from_u64(p.chain_id),
@@ -621,6 +626,74 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
     } else {
         project_with_allocations::<false, _>(state, history, past, block, profile, inbound, work)
     }
+}
+/// The values one block execution computed, for reporting which header
+/// commitment differs after `project` refused a block.
+#[derive(Clone)]
+pub struct Computed {
+    pub gas_used: u64,
+    pub state_used: u64,
+    pub evm_root: Hash,
+    pub etx_root: Hash,
+    pub utxo_root: Hash,
+    pub account_count: u64,
+    pub receipt_root: Hash,
+    pub outbound_root: Hash,
+    pub receipts: Vec<Receipt>,
+    pub outbound: Vec<Transaction>,
+}
+/// Execute a block on a copy of `state` without the final commitment
+/// comparison and return what it computed. Diagnostics only: the caller's
+/// state is unchanged, and the result admits nothing.
+pub fn diagnose<F: FnMut(&Header) -> Result<Hash, Error>>(
+    state: &State,
+    history: &History,
+    past: &impl historical::History,
+    block: &Record,
+    profile: &Profile,
+    inbound: &[Transaction],
+    work: F,
+) -> Result<Computed, Error> {
+    let mut staged = state.clone();
+    let executed = if profile.official_allocations {
+        inner::<true, _>(
+            &mut staged,
+            history,
+            past,
+            block,
+            profile,
+            inbound,
+            false,
+            work,
+        )?
+    } else {
+        inner::<false, _>(
+            &mut staged,
+            history,
+            past,
+            block,
+            profile,
+            inbound,
+            false,
+            work,
+        )?
+    };
+    let root = |r: Result<Hash, quai_execution::state_error::ReadError>, what| {
+        r.map_err(|e| state_error(e, Error::ResourceLimit(what)))
+    };
+    Ok(Computed {
+        gas_used: executed.gas_used,
+        state_used: executed.state_used,
+        evm_root: root(staged.world.root(), "account root")?,
+        etx_root: root(staged.world.etxs().root(), "ETX root")?,
+        utxo_root: staged.utxos.root(),
+        account_count: staged.world.account_count(),
+        receipt_root: receipts_root(&executed.receipts).map_err(|_| invalid("receipt encoding"))?,
+        outbound_root: quai_primitives::work::transactions_root(&executed.outbound)
+            .map_err(|_| invalid("outbound encoding"))?,
+        receipts: executed.receipts,
+        outbound: executed.outbound,
+    })
 }
 pub fn native_components(
     verifier: &mut Verifier,

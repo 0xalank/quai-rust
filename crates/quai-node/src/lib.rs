@@ -8,4 +8,5 @@ pub mod pow;
 pub mod qex;
 pub mod replay;
 pub mod spec;
+pub mod state;
 pub mod window;

@@ -38,10 +38,10 @@ The gateway now permits 46 explicit read/simulation methods. Thirty-one have con
 
 Headers and state are seeded locally. This harness does not mine or validate blocks, synchronize a chain, run a real transaction pool, or test the node's complete backend/index implementation. Switching the selected snapshot checks stale-response behavior; full reorg ingestion and index rollback remain open. No native Rust chain read is implemented by these changes.
 
-The next gates are a controlled full-node launcher and trace capture, pinned Quais.js/Pelagus acceptance flows, block/receipt/log coverage, and full fork/reorg scenarios. M0 and M1 in [PLAN.md](../PLAN.md) remain open until their complete gates pass. Production performance has not been remeasured by this compatibility change.
+The next gates are a controlled full-node launcher and trace capture, pinned Quais.js/Pelagus acceptance flows, block/receipt/log coverage, and full fork/reorg scenarios. M0 and M1 in [docs/history/PLAN.md](../docs/history/PLAN.md) remain open until their complete gates pass. Production performance has not been remeasured by this compatibility change.
 
 ## Later milestone
 
-The [native read and SDK milestone](../NATIVE_READS.md) adds a real isolated
+The [native read and SDK milestone](../docs/history/NATIVE_READS.md) adds a real isolated
 full-node launcher, pinned SDK jobs and materialized Rust block/receipt queries.
 This document retains the earlier controlled-state suite and its original scope.

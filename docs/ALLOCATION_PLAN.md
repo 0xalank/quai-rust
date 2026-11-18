@@ -1,7 +1,7 @@
 # Allocation and transaction performance work
 
 Audited 2026-11-08 against the unchanged native source and the
-[2026-11-07 pipeline benchmark](../TRANSACTION_PIPELINE_RESULTS.md).
+[2026-11-07 pipeline benchmark](history/TRANSACTION_PIPELINE_RESULTS.md).
 **69–76% lower tracked heap bytes is an improvement.** It means fewer bytes were
 requested from the tracked allocator per operation, not lower performance.
 

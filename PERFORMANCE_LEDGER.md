@@ -20,7 +20,7 @@ The account snapshot and unchanged-root queries reuse shared/cached data. The ch
 
 - [Raw samples, source/binary hashes and measurement contract](results/consensus-performance-20261111T153319572894Z/summary.json)
 - [Complete baseline source and fixtures](results/consensus-performance-20261111T153319572894Z/baseline-source.tar.gz)
-- [Correctness and source-build evidence](NATIVE_CONSENSUS_RESULTS.md)
+- [Correctness and source-build evidence](docs/history/NATIVE_CONSENSUS_RESULTS.md)
 
 The earlier pre-cache run showed a noisy 13% root-recomputation slowdown. Its [raw results and exact source](results/consensus-performance-20261111T151454965300Z/summary.json) remain available. The subsequent cache change passed the differential corpus and a separate fixed changed-account/root workload.
 
@@ -42,7 +42,7 @@ Baseline correctness logs are included in the source archive. [Candidate block/p
 
 The memo retains only successful inclusion-work checks, keyed by full normalized header bytes and node scope. It is bounded to 512 entries and 4 MiB of logical keys/entries per verifier; allocator/container overhead and transient encoding allocations are additional. Those are implementation limits, not measured retained memory or RSS. No new allocation/RSS savings were measured. Block proof target verification remains independent. Tests cover mutation/scope misses, rejected work, resource limits and refusal to treat a weak cached share as a valid block proof.
 
-The paired uncached/cached sources both pass the 486 payout projections and 16 linked native-work private blocks. That source increment passed 173 default tests, 40,511 component comparisons, 112 atomic forged-execution rejections and 16 complete local state-image restores. Broader historical/fork integration and full consensus/canonical durability/sync remain incomplete. See [current results](NATIVE_CONSENSUS_RESULTS.md) and [the remaining gates](NATIVE_CONSENSUS_PROGRESS.md).
+The paired uncached/cached sources both pass the 486 payout projections and 16 linked native-work private blocks. That source increment passed 173 default tests, 40,511 component comparisons, 112 atomic forged-execution rejections and 16 complete local state-image restores. Broader historical/fork integration and full consensus/canonical durability/sync remain incomplete. See [current results](docs/history/NATIVE_CONSENSUS_RESULTS.md) and [the remaining gates](docs/history/NATIVE_CONSENSUS_PROGRESS.md).
 
 ## 2026-11-11: private journal head switches
 
@@ -58,7 +58,7 @@ Five alternating paired timing rounds and three separate allocation rounds run s
 
 - [Raw measurements, fixed workload and source/binary hashes](results/journal-performance-20261111T213425497812Z/summary.json)
 - [Complete pre-optimization source and correctness logs](results/journal-performance-20261111T213425497812Z/baseline-source.tar.gz)
-- [Private branch recovery and correctness scope](NATIVE_DURABLE_RESULTS.md)
+- [Private branch recovery and correctness scope](docs/history/NATIVE_DURABLE_RESULTS.md)
 
 The change removes duplicate ancestry reads/checks and payload cloning for metadata lookup. Tests preserve corruption detection on subsequent calls and reject unrelated genesis/stale heads. The source increment also adds durable execution-only branch images/receipts/history, qualified on two actual-Go private branches; those functional additions are not a measured end-to-end speedup.
 
@@ -74,7 +74,7 @@ Five alternating sequential paired rounds use the identical harness, profile and
 
 - [Raw timing, workload/output contract and source/binary hashes](results/admission-performance-20261112T155728377287Z/summary.json)
 - [Exact uncached baseline source and correctness logs](results/admission-performance-20261112T155728377287Z/baseline-source.tar.gz)
-- [Native header/execution correctness and scope](NATIVE_ADMISSION_RESULTS.md)
+- [Native header/execution correctness and scope](docs/history/NATIVE_ADMISSION_RESULTS.md)
 
 The full-proof memo has a 512-entry/4 MiB logical limit per verifier and is separate from the weaker inclusion-work memo. Failures and inclusion-only results never populate it. Memory overhead is additional; no new allocation/RSS saving was measured. Timings exclude execution, durable commits, RPC and network sync. Shared-host noise is retained in the raw samples. These figures do not qualify mainnet or complete canonical synchronization.
 
@@ -92,7 +92,7 @@ Five alternating sequential timing pairs and three separate allocation pairs run
 
 - [Raw samples, measurement contract and source/binary hashes](results/confirmation-performance-20261112T191430267556Z/summary.json)
 - [Complete pre-cache source and passing baseline test](results/confirmation-performance-20261112T191430267556Z/baseline-source.tar.gz)
-- [Three-context/rollup/execution correctness and remaining gates](NATIVE_CONFIRMATION_RESULTS.md)
+- [Three-context/rollup/execution correctness and remaining gates](docs/history/NATIVE_CONFIRMATION_RESULTS.md)
 
 The functional increment qualifies two early private branches, 24 distinct blocks, 38 context bundles and 430 comparisons against actual Go methods. General nonlocal/mixed/fork/workshare/expansion and sealed full admission, canonical publication and sync remain unfinished. The current source also passes 184 tests and 41,514 combined component comparisons; those overlapping comparisons are not a completion percentage.
 
@@ -112,7 +112,7 @@ Allocation metrics count gross Rust requests, including full new reallocations; 
 
 - [Raw measurements and source/binary hashes](results/uncles-performance-20261112T200634720729Z/summary.json)
 - [Complete pre-optimization source and passing baseline test](results/uncles-performance-20261112T200634720729Z/baseline-source.tar.gz)
-- [Uncle/entropy/reward compatibility and remaining limits](NATIVE_UNCLES_RESULTS.md)
+- [Uncle/entropy/reward compatibility and remaining limits](docs/history/NATIVE_UNCLES_RESULTS.md)
 
 The functional increment adds 505 comparisons on 24 blocks/38 context bundles, including a Go-valid weak-share capability boundary. The current source passes 185 tests and 42,019 combined component comparisons. General admission, weak historical shares and canonical publication/sync remain unfinished.
 
@@ -130,7 +130,7 @@ This is arithmetic-kernel evidence, not Go-versus-Rust, full block/proof/storage
 
 - [Raw samples, source/binary hashes and workload](results/weakshares-performance-20261112T203851030678Z/summary.json)
 - [Complete 512-bit baseline and passing source-bound validation](results/weakshares-performance-20261112T203851030678Z/baseline-source.tar.gz)
-- [Weak-share, native score and branch compatibility](NATIVE_WEAKSHARES_RESULTS.md)
+- [Weak-share, native score and branch compatibility](docs/history/NATIVE_WEAKSHARES_RESULTS.md)
 
 The functional increment adds 760 native and 5,877 arithmetic checks. It qualifies 10 weak shares, 13 full-target uncles, 30 derived incoming coinbases and 15 local native scores across 24 blocks/38 context bundles. The current source passes 187 tests and 48,656 combined component comparisons. Broader histories and full consensus/canonical synchronization remain unfinished.
 
@@ -143,7 +143,7 @@ The source-bound functional run passes 488 Go comparisons over 25 events/24 bloc
 **No new paired speedup or RSS measurement was performed.** The peer report's single-run wall time includes imports and restart checks and is functional qualification latency. Structural complexity improvements are not promoted to measured node throughput. Earlier gains below retain their original contracts and cannot be multiplied.
 
 - [Native canonical and peer evidence](results/canonical-20261113T035507464093Z/summary.json)
-- [Implementation, limits and open gates](NATIVE_CANONICAL_RESULTS.md)
+- [Implementation, limits and open gates](docs/history/NATIVE_CANONICAL_RESULTS.md)
 - [Current complete build and overlapping component checks](results/canonical-work-20261113T035743722472Z/summary.json)
 
 ## 2026-11-13 UTC: independent private Rust nodes and local known-head acquisition
@@ -157,7 +157,7 @@ The source-bound primary run imports 24 native blocks with 38 requests/61,603 re
 No paired client speedup, allocation or RSS experiment was performed. Earlier arithmetic/VM/state/journal gains below remain historical measurements with their own workloads and cannot be multiplied. Full global consensus, automatic production sync and production storage remain open.
 
 - [Independent process evidence](results/private-processes-20261113T050448168865Z/summary.json)
-- [Runtime, limits and optional bundle](NATIVE_PROCESS_RESULTS.md)
+- [Runtime, limits and optional bundle](docs/history/NATIVE_PROCESS_RESULTS.md)
 - [Complete source-bound work summary](results/process-work-20261113T051026074109Z/summary.json)
 
 ## 2026-11-13: incremental account roots and shared snapshot commitments
@@ -184,7 +184,7 @@ A [rejected first run](results/incremental-state-performance-20261113T0648259997
 - [Final raw samples, source/binary hashes and exact measurement contract](results/incremental-state-performance-20261113T071555851404Z/summary.json)
 - [Complete controlled baseline source and fixtures](results/incremental-state-performance-20261113T071555851404Z/baseline-source.tar.gz)
 - [Frozen benchmark driver](results/incremental-state-performance-20261113T071555851404Z/benchmark-driver.py)
-- [State/database correctness and remaining integration](NATIVE_STATE_DB_RESULTS.md)
+- [State/database correctness and remaining integration](docs/history/NATIVE_STATE_DB_RESULTS.md)
 
 The separate state database test inserts 95,792 unique trie nodes / 6,998,875 encoded bytes for 70,000 keys, then 341 unique nodes / 100,141 encoded bytes for 100 changes. These are inserted logical records, not physical I/O, disk-write reduction, allocations or RSS. Shared trie nodes and encoded caches retain additional data. No new allocation/RSS result is claimed. Canonical execution still uses bounded images/history; the new backend is not yet integrated into the actual canonical state provider.
 
@@ -207,7 +207,7 @@ The **2.46% increase in allocation requests** is retained as a regression. Gross
 - [Raw samples, exact configuration/workload and source/binary hashes](results/state-storage-performance-20261113T082724557472Z/summary.json)
 - [Frozen common source and protocol fixtures](results/state-storage-performance-20261113T082724557472Z/source-and-fixtures.tar.gz)
 - [Executed frozen driver](results/state-storage-performance-20261113T082724557472Z/benchmark-driver.py)
-- [Native canonical storage qualification and remaining scope](NATIVE_CANONICAL_DB_RESULTS.md)
+- [Native canonical storage qualification and remaining scope](docs/history/NATIVE_CANONICAL_DB_RESULTS.md)
 
 The functional increment passes 214 default/Go-denied tests, the unchanged 488 native canonical Go comparisons over 24 blocks, and 133 separate-process assertions. Persisted signed Quai/Qi/incoming components add a separate 1,371-case / 18,312-comparison replay of existing Go expectations; these comparisons overlap the original component corpora and are not a completion percentage. Full global consensus, unbounded lazy state/history, production indexes/pruning and public canonical sync remain unfinished.
 
@@ -238,7 +238,7 @@ Gross requested bytes include full requested reallocations. They are not retaine
 
 - [Branch raw samples and source/binary/driver manifests](results/indexed-history-performance-20261113T103734716256Z/summary.json)
 - [Canonical reopen raw samples and source/binary/driver manifests](results/canonical-reopen-performance-20261113T103840834366Z/summary.json)
-- [Storage contract, qualification and remaining scope](NATIVE_INDEXED_CATALOG_RESULTS.md)
+- [Storage contract, qualification and remaining scope](docs/history/NATIVE_INDEXED_CATALOG_RESULTS.md)
 
 ## 2026-11-13: native Qi membership on demand
 
@@ -266,7 +266,7 @@ Negative time/byte/request changes mean less measured work. Every result is reta
 
 - [Sparse storage raw samples and source/binary/driver manifests](results/sparse-qi-performance-20261113T112646972474Z/summary.json)
 - [Short native workload raw samples and both frozen source builds](results/indexed-history-performance-20261113T112713294344Z/summary.json)
-- [Compatibility, error behavior and remaining scope](NATIVE_LAZY_QI_RESULTS.md)
+- [Compatibility, error behavior and remaining scope](docs/history/NATIVE_LAZY_QI_RESULTS.md)
 
 The default and reduced Go-denied builds each pass 227 release tests over 188 Rust sources / 22 source assets. Separate Rust processes retain 165 assertions; RPC/SDK checks remain 70/16. The generic 5,000-UTXO storage test and synthetic 50,000-UTXO measurement do not enlarge the 24-block native canonical corpus.
 
@@ -298,7 +298,7 @@ The short branch timer includes native execution with warm proof work, fresh par
 
 Every change is retained, including regressions. Timings are sequential on a shared host with load averages retained. Allocation measurements run separately, include reallocations, exclude frees and are not retained heap or RSS. Configured execution cache capacity remains 64 MiB. The earlier sparse-Qi 50,000-UTXO configuration measurement is historical; it was not rerun and is not a fresh measurement of this source. These ratios do not establish Go performance, full-node TPS, cold-disk or public sync speed, and must not be multiplied with earlier ratios.
 
-The default and reduced Go-denied builds each pass 232 release tests over 188 Rust sources / 22 assets. Frozen persisted execution retains 18,312 Go comparisons over 1,371 cases, native canonical qualification retains 488 checks / 24 distinct blocks, and separate Rust processes retain 165 assertions. These are bounded compatibility checks rather than a whole-client coverage percentage. Full consensus/public sync remain unfinished; account/storage/code and ETX/lockup materialization remain open. [Correctness contract and the next account provider gate](NATIVE_PINNED_STATE_RESULTS.md).
+The default and reduced Go-denied builds each pass 232 release tests over 188 Rust sources / 22 assets. Frozen persisted execution retains 18,312 Go comparisons over 1,371 cases, native canonical qualification retains 488 checks / 24 distinct blocks, and separate Rust processes retain 165 assertions. These are bounded compatibility checks rather than a whole-client coverage percentage. Full consensus/public sync remain unfinished; account/storage/code and ETX/lockup materialization remain open. [Correctness contract and the next account provider gate](docs/history/NATIVE_PINNED_STATE_RESULTS.md).
 
 ## 2026-11-13: native account and contract-storage reads on demand
 
@@ -340,7 +340,7 @@ The short native branch includes execution with warm proof work, fresh parent re
 
 Every measured change is retained, including regressions. Timing runs sequentially on a shared host and retains load averages. Allocation measurements run separately, count gross requested bytes including reallocations, exclude frees and do not measure retained heap or RSS. Configured execution database cache capacity remains 64 MiB. Do not multiply these ratios by earlier kernel/recovery ratios. No Go speed, whole-client TPS, cold-disk or public-network claim follows.
 
-The qualified source passes 241 default and reduced Go-denied release tests over 192 Rust sources / 22 assets, with zero Go/protoc attempts. Frozen persisted transitions retain 18,312 Go comparisons over 1,371 cases / 2,706 roundtrips. Native canonical qualification remains 488 checks / 24 distinct early-profile blocks; separate Rust processes retain 165 assertions. Additional real old/new Rust executables preserve every byte hash in the old datadir when the new format refuses it and confirm the old binary still reopens. The 65,537-account and 4,097-slot storage tests are synthetic local versions, not additional network blocks. [Implementation, errors, private disk boundary and remaining scope](NATIVE_LAZY_WORLD_RESULTS.md).
+The qualified source passes 241 default and reduced Go-denied release tests over 192 Rust sources / 22 assets, with zero Go/protoc attempts. Frozen persisted transitions retain 18,312 Go comparisons over 1,371 cases / 2,706 roundtrips. Native canonical qualification remains 488 checks / 24 distinct early-profile blocks; separate Rust processes retain 165 assertions. Additional real old/new Rust executables preserve every byte hash in the old datadir when the new format refuses it and confirm the old binary still reopens. The 65,537-account and 4,097-slot storage tests are synthetic local versions, not additional network blocks. [Implementation, errors, private disk boundary and remaining scope](docs/history/NATIVE_LAZY_WORLD_RESULTS.md).
 
 ## 2026-11-13: native ETX, economic metadata and raw-lockup reads on demand
 
@@ -382,45 +382,45 @@ The short native branch includes execution with warm proof work, fresh parent re
 
 Every measured change is retained, including regressions. Timing runs sequentially on a shared host and retains load averages. Allocation measurements run separately, count gross requested bytes including reallocations, exclude frees and do not measure retained heap or RSS. Configured execution database cache capacity remains 64 MiB. Do not multiply these ratios by earlier kernel/recovery ratios. No Go speed, whole-client TPS, cold-disk or public-network claim follows.
 
-The qualified source passes 247 default and reduced Go-denied release tests over 196 Rust sources / 22 assets, with zero Go/protoc attempts. Frozen persisted transitions retain 18,312 Go comparisons over 1,371 cases / 2,706 roundtrips. Native canonical qualification remains 488 checks / 24 distinct early-profile blocks; separate Rust processes retain 165 assertions. Actual previous/current Rust binaries add 9 unchanged-format reopen/append assertions across five already-frozen blocks. Older format-4 datadirs retain the existing 11 preservation/refusal checks. The 16,385-entry queue test uses synthetic local state; it adds no network blocks. An initial workspace run aborted in the unchanged generic state-db test; the failed log remains retained and is not counted as qualification. [Implementation, typed failures, unchanged private disk boundary and remaining scope](NATIVE_LAZY_AUX_RESULTS.md).
+The qualified source passes 247 default and reduced Go-denied release tests over 196 Rust sources / 22 assets, with zero Go/protoc attempts. Frozen persisted transitions retain 18,312 Go comparisons over 1,371 cases / 2,706 roundtrips. Native canonical qualification remains 488 checks / 24 distinct early-profile blocks; separate Rust processes retain 165 assertions. Actual previous/current Rust binaries add 9 unchanged-format reopen/append assertions across five already-frozen blocks. Older format-4 datadirs retain the existing 11 preservation/refusal checks. The 16,385-entry queue test uses synthetic local state; it adds no network blocks. An initial workspace run aborted in the unchanged generic state-db test; the failed log remains retained and is not counted as qualification. [Implementation, typed failures, unchanged private disk boundary and remaining scope](docs/history/NATIVE_LAZY_AUX_RESULTS.md).
 
 ## 2026-11-13: activated local consensus composition and a bound execution handoff
 
 The private canonical execution path now consumes a prepared hierarchy result bound to the exact block and reviewed chain/location/genesis, taking inbounds directly from that result. This removes one inbound-list clone from the handoff. No new timing or allocation improvement is claimed for this source. The first qualified draft retained the 3339890-byte official allocation table in the private runner. Exact allocation-policy binding and compile-time policy specialization reduce its file size from 11284720 to 7916240 bytes (-29.85%), versus 7915920 bytes in the preceding installed source. [Immutable binaries, manifests and exact file-size evidence](results/activation-layout-20261113T151719369084Z/summary.json). This is a file-size result, with no runtime/RSS implication. Earlier numbers retain their original source hashes, artifacts and workloads; they are not current-source performance qualification.
 
-New conditional coverage adds four sealed mixed Qi/Quai/standard-ETX blocks at heights 259,201-259,204 and 33 valid-work mutations checked against pinned official Go. Both memory and lazy persisted modes pass 772 checks, with 66 rejected attempts, nine state roundtrips and eight writer reopens. The synthetic height-259200 checkpoint and supplied historical slices are unadmitted inputs. The existing private canonical corpus stays at 24 distinct genesis-linked early blocks; full consensus/public sync and production efficiency remain unqualified. [Implementation and exact limits](NATIVE_ACTIVATION_RESULTS.md).
+New conditional coverage adds four sealed mixed Qi/Quai/standard-ETX blocks at heights 259,201-259,204 and 33 valid-work mutations checked against pinned official Go. Both memory and lazy persisted modes pass 772 checks, with 66 rejected attempts, nine state roundtrips and eight writer reopens. The synthetic height-259200 checkpoint and supplied historical slices are unadmitted inputs. The existing private canonical corpus stays at 24 distinct genesis-linked early blocks; full consensus/public sync and production efficiency remain unqualified. [Implementation and exact limits](docs/history/NATIVE_ACTIVATION_RESULTS.md).
 
 ## 2026-11-15: activated coincident hierarchy with lazy local recovery
 
-Native zone, region and prime preparation now composes with exact-bound activated Qi/Quai/ETX execution. Two branches with 24 distinct conditional blocks pass 4068 checks, including 492 rejected attempts across memory/lazy modes, 66 state roundtrips and sixteen writer reopens. Hierarchy outputs and execution state persist together; pinned reads exclude competing-fork history. The supplied height-259200 checkpoint grants no canonical authority, and the early canonical runtime is unchanged. [Scope and source-bound results](NATIVE_COINCIDENT_RESULTS.md).
+Native zone, region and prime preparation now composes with exact-bound activated Qi/Quai/ETX execution. Two branches with 24 distinct conditional blocks pass 4068 checks, including 492 rejected attempts across memory/lazy modes, 66 state roundtrips and sixteen writer reopens. Hierarchy outputs and execution state persist together; pinned reads exclude competing-fork history. The supplied height-259200 checkpoint grants no canonical authority, and the early canonical runtime is unchanged. [Scope and source-bound results](docs/history/NATIVE_COINCIDENT_RESULTS.md).
 
 No new latency, throughput, allocation or RSS improvement was measured. Historical performance numbers retain their original source/workload qualification. Current private-node file size is 7916240 bytes (0 bytes versus the installed baseline). [Immutable artifact comparison](results/coincident-work-20261116T001208621057Z/binary-layout.json).
 
 ## 2026-11-15: genesis-only runtime and bounded forward acquisition
 
-The experimental v2 profile imports 8192 native blocks from the declared empty genesis, with 122930 replay/reopen checks and nine writer reopens. Independent Rust processes acquire the same history in 64 windows, beyond the older 4095-unknown-block operation bound. Forward windows cap raw bundles at 128 and response payload at 32 MiB; native admission remains per block. Discovery releases its pinned catalog view before import. The default v1 profile and frozen RPC are unchanged. [Source-bound results and limits](NATIVE_GENESIS_SYNC_RESULTS.md).
+The experimental v2 profile imports 8192 native blocks from the declared empty genesis, with 122930 replay/reopen checks and nine writer reopens. Independent Rust processes acquire the same history in 64 windows, beyond the older 4095-unknown-block operation bound. Forward windows cap raw bundles at 128 and response payload at 32 MiB; native admission remains per block. Discovery releases its pinned catalog view before import. The default v1 profile and frozen RPC are unchanged. [Source-bound results and limits](docs/history/NATIVE_GENESIS_SYNC_RESULTS.md).
 
 On the shared 96-block subworkload, the uninstalled forward prototype used 248 application requests; the current implementation uses 152 (38.7097% fewer) by requesting numbered blocks directly. Both immutable binaries use the same correctness driver and frozen Go corpus. The baseline is not the preceding installed backward-sync path. These are logical request counts, not latency, throughput, allocation or RSS results. No new runtime timing or heap gain is claimed. Existing speed/allocation figures keep their original source hashes and workloads.
 
 ## 2026-11-16: local full-header proof and epoch-cache reuse
 
-The fixed 16-block first canonical branch produces identical heads and state roots in both modes. Native admission has 24 full-header proof-cache misses with raw inputs and 8 with sealed local proof hints; 16 exact proofs are reused. The 66.7% reduction applies to admission-stage cache misses. It is not an end-to-end speedup, kernel-operation count, heap or RSS result. The epoch cache is shared as one immutable local allocation and retained across acquisition windows. No new timing or allocation gain is claimed while the offline Go oracle shares the host. [Correctness, raw counter evidence and scope](NATIVE_PROOF_REUSE_RESULTS.md).
+The fixed 16-block first canonical branch produces identical heads and state roots in both modes. Native admission has 24 full-header proof-cache misses with raw inputs and 8 with sealed local proof hints; 16 exact proofs are reused. The 66.7% reduction applies to admission-stage cache misses. It is not an end-to-end speedup, kernel-operation count, heap or RSS result. The epoch cache is shared as one immutable local allocation and retained across acquisition windows. No new timing or allocation gain is claimed while the offline Go oracle shares the host. [Correctness, raw counter evidence and scope](docs/history/NATIVE_PROOF_REUSE_RESULTS.md).
 
 ## 2026-11-16: full proof reuse for inclusion and rewards
 
-The fixed 8192-block source and independent receiver each report 8189 exact full proofs reused for weaker inclusion/reward work. Each reuse replaces another native work computation; changed headers and weaker-only results cannot enter that path. This is a logical operation count, not an end-to-end speedup, heap or RSS measurement. The actual live 1024-block streaming pilot also passes 54 temporary EOF waits and final gzip/source/raw hashes, then a separate receiver reuses its locally executed datadir across a restart (62 assertions). No runtime timing gain is claimed while the offline Go oracle and full native follower share the host. [Source-bound evidence and scope](NATIVE_WORK_REUSE_RESULTS.md).
+The fixed 8192-block source and independent receiver each report 8189 exact full proofs reused for weaker inclusion/reward work. Each reuse replaces another native work computation; changed headers and weaker-only results cannot enter that path. This is a logical operation count, not an end-to-end speedup, heap or RSS measurement. The actual live 1024-block streaming pilot also passes 54 temporary EOF waits and final gzip/source/raw hashes, then a separate receiver reuses its locally executed datadir across a restart (62 assertions). No runtime timing gain is claimed while the offline Go oracle and full native follower share the host. [Source-bound evidence and scope](docs/history/NATIVE_WORK_REUSE_RESULTS.md).
 
 ## 2026-11-16: composed ETX-family coverage
 
-All seven defined incoming kinds now pass 4068 conditional comparisons with signed Quai/Qi, persistence and hierarchy checks. This expands correctness coverage; it does not measure a timing, heap or RSS improvement. Existing proof-reuse counts are unchanged. [Evidence and limits](NATIVE_ETX_FAMILY_RESULTS.md).
+All seven defined incoming kinds now pass 4068 conditional comparisons with signed Quai/Qi, persistence and hierarchy checks. This expands correctness coverage; it does not measure a timing, heap or RSS improvement. Existing proof-reuse counts are unchanged. [Evidence and limits](docs/history/NATIVE_ETX_FAMILY_RESULTS.md).
 
 ## 2026-11-16: native prime controller arithmetic
 
-Five prime controller families pass 3200 Go comparisons; miner-difficulty validation shares the bounded 512-bit implementation. This expands correctness coverage; it does not measure a timing, heap or RSS improvement. Existing proof-reuse counts are unchanged. [Evidence and limits](NATIVE_CONTROLLER_RESULTS.md).
+Five prime controller families pass 3200 Go comparisons; miner-difficulty validation shares the bounded 512-bit implementation. This expands correctness coverage; it does not measure a timing, heap or RSS improvement. Existing proof-reuse counts are unchanged. [Evidence and limits](docs/history/NATIVE_CONTROLLER_RESULTS.md).
 
 ## 2026-11-16: branch-bound native token-choice window
 
-The 4000-entry native window passes 4216 Go updates. Each update copies at most 64 logical rows and writes one changed row plus metadata; rate feedback reuses the incrementally maintained sum. These bounds exclude handles, trie nodes and database bookkeeping. This expands correctness coverage; it does not measure a timing, heap or RSS improvement. Existing proof-reuse counts are unchanged. [Evidence and limits](NATIVE_CHOICE_WINDOW_RESULTS.md).
+The 4000-entry native window passes 4216 Go updates. Each update copies at most 64 logical rows and writes one changed row plus metadata; rate feedback reuses the incrementally maintained sum. These bounds exclude handles, trie nodes and database bookkeeping. This expands correctness coverage; it does not measure a timing, heap or RSS improvement. Existing proof-reuse counts are unchanged. [Evidence and limits](docs/history/NATIVE_CHOICE_WINDOW_RESULTS.md).
 
 ## 2026-11-16: shared decoded-history cache measurement
 
@@ -432,7 +432,7 @@ The current installed source keeps thin LTO and one codegen unit. It changes 16-
 
 Diagnostic profile timings observed while isolating the allocator failure were 5.60 s (LTO off, one codegen unit), 5.58 s (thin LTO, 16 codegen units), 5.96 s (fat LTO, one codegen unit), and 6.80/6.89 s for two fixed thin-LTO one-unit stress runs. The workloads were diagnostic runs on a shared host, not a preregistered benchmark, so no performance ranking or percentage gain is claimed. ASan masked the host allocator failure and is not counted as qualification. No tracked allocation, retained heap or RSS result was collected.
 
-Linked prime-forward qualification covers **256 histories / 1,024 forward steps / 23,040 ETX encodings / 10,240 reference refunds**, plus 32 persisted updates, 16 writer reopens and eight atomic aborts. This expands correctness coverage only. The full 30-gate qualification also repeats the 8,192-block genesis replay and independent receiver, with 8,192 header proofs reused. [Prime-forward results](NATIVE_PRIME_FORWARD_RESULTS.md) and [storage-stability results](NATIVE_STORAGE_STABILITY_RESULTS.md) retain hashes and scope.
+Linked prime-forward qualification covers **256 histories / 1,024 forward steps / 23,040 ETX encodings / 10,240 reference refunds**, plus 32 persisted updates, 16 writer reopens and eight atomic aborts. This expands correctness coverage only. The full 30-gate qualification also repeats the 8,192-block genesis replay and independent receiver, with 8,192 header proofs reused. [Prime-forward results](docs/history/NATIVE_PRIME_FORWARD_RESULTS.md) and [storage-stability results](docs/history/NATIVE_STORAGE_STABILITY_RESULTS.md) retain hashes and scope.
 
 ## Next measurements
 

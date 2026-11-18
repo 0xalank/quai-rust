@@ -2189,13 +2189,13 @@
   "latest_native_evidence": "native-coverage.json",
   "live_ingestion_evidence": {
     "report": "../results/latest-live.json",
-    "guide": "../LIVE_INGESTION.md",
+    "guide": "../docs/history/LIVE_INGESTION.md",
     "read_routing": "Native immutable block hashes; live number/receipt/state reads remain forwarded to Go.",
     "scope": "Mined local Blake3 and funded Quai transfer; Qi/ETX fault cases are seeded. Not full consensus compatibility."
   },
   "canonical_read_evidence": {
     "report": "../results/latest-fresh.json",
-    "guide": "../CANONICAL_READS.md",
+    "guide": "../docs/history/CANONICAL_READS.md",
     "default_enabled": false,
     "read_freshness": "Two uncached Go identity/head barriers around local lookup; original request forwarded on coverage or freshness miss."
   },

@@ -46,7 +46,7 @@ The source must enroll the receiver's peer ID before serving it. Sync requires a
 
 One import/acquisition worker is allowed. During import, `status` reports a nonblocking durable-admission counter; the execution-head CAS may still be completing, so this counter is not a selected height. Cancellation and shutdown preserve complete block publications; a valid prefix remains durable. Peer keys persist with checksums and owner-only permissions. Control lines, files, acquisition and transport have explicit limits. `--now SECONDS` supports a frozen lab clock. This console is a local control interface, separate from JSON-RPC.
 
-The default standalone RPC bundle is separate. Source qualification and remaining gates are documented in the project file NATIVE_PROCESS_RESULTS.md. The included profile is immutable source documentation, not a replaceable runtime network configuration.
+The default standalone RPC bundle is separate. Source qualification and remaining gates are documented in the project file docs/history/NATIVE_PROCESS_RESULTS.md. The included profile is immutable source documentation, not a replaceable runtime network configuration.
 ''')
 with(bundle/'README.md').open('a')as f:f.write('''
 An experimental genesis-only mode is available with `--profile private-execution-v2`. Use a separate fresh datadir. Its embedded immutable contract does not accept checkpoints or state imports. The declared qualification covers 8192 native pre-transaction blocks from genesis, writer recovery and separate-process forward acquisition. Genesis-to-transaction-activation, later forks and general public consensus remain unqualified. The default `private-hierarchy-v1` contract is unchanged.

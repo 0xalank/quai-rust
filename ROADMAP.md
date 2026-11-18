@@ -101,8 +101,14 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        Scale limits: `past.redb` grows about 2.5 KB per height (about 16 GB
        over the 1-year window); compaction copies the whole live state in one
        transaction and needs chunking at mainnet scale.
-       Next: a peer block source (`peer-export`) so that replay is not limited
-       by the Go node's sync speed.
+       Peer block source done (`2176432`):
+       `crates/quai-network/examples/peer-export.rs` writes QEX1 (without
+       receipts) from go-quai peers, read-only. Its zone 0–27,406 records are
+       identical to the Go export, receipts aside. Speed: about 1,760 zone
+       heights/s from the local node and about 595/s from public peers, against
+       3.7/s for the Go node's own sync. A public export to zone 686,009
+       (4.1 GB, 1,192,401 records, 6.79M transactions) is in
+       `~/quai-data/mainnet-v0.57.0/peer-export-public` and passes `verify`.
 4. [ ] Fix the first mismatch, then run again. Milestones are the fork heights
        in go-quai `params/protocol_params.go`: KawPow 1,171,500, Singularity
        1,530,500, ShaEquivalentDifficulty 1,755,000, ConversionStability
@@ -236,3 +242,5 @@ Mining, block templates and Stratum come last.
 | 2026-11-17 | Phase 1.5 | Gas is the only EVM and tx-path bound, as in Go (`130b106`); +19 Go oracle vectors; 246/246 release tests in execution, primitives, consensus |
 | 2026-11-17 | Phase 1 | Regression on merged main: mainnet replay 0–11,682 with `--state` still passes, every root equal |
 | 2026-11-17 | Phase 3.3, 4.1 | libsecp256k1 sender recovery, decoder fuzz tests, 112 fewer unwraps (`5df7277`) |
+| 2026-11-18 | Phase 1.3, 2.1 | Replay runs long: lazy disk state, checkpoints, `--resume`, `replay_loop.sh` (`4828e14`); agent's loop pass: all roots equal to zone 27,406 |
+| 2026-11-18 | Phase 1, 2.2 | `peer-export` (`2176432`): QEX1 from peers, identical to the Go export to zone 27,406; public export to zone 686,009. Long `--state` replay on it started (log: `~/quai-data/mainnet-v0.57.0/logs/replay-public.err`) |

@@ -119,6 +119,15 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        1,872,600, SelfDestructRefund 1,919,500, ConversionLockChange 2,237,000,
        SecurityHardening 2,317,000, Polaris 2,444,574 (prime terminus),
        MaxCodeSize 3,490,000.
+       Known gap before SecurityHardening (found in step 3.3, not fixed: it
+       changes results for inputs that run today): from prime 2,317,000 go-quai
+       charges memory gas for opETX and sizes its memory by the larger of the
+       data and access-list ranges (`memoryETXFixed`, `pureMemoryGascost`,
+       core/vm/interpreter.go:77-82). Rust still adds both ends and charges
+       nothing (`evm/mod.rs` `needed_memory`, `step`), so such an opETX gets
+       other gas and memory than Go, and a large range allocates memory
+       without gas. Fix it with Go vectors before the replay reaches that
+       height and before Phase 2.3.
 5. [x] Remove the EVM limits that Go does not have, so that only gas limits
        execution (`130b106`). Removed: steps per frame, EVM memory, logs per
        transaction, call input, access-list size, the 1,000,000-entry undo
@@ -226,6 +235,23 @@ Gate: Quais.js and Pelagus work against the Rust node.
        38 bytes. Go does the same: its writers add the delegate only when it
        is not zero, and `ReadCoinbaseLockup` reads it only from a 58-byte
        record. Test: `lockup::tests::record_layout_matches_go`.
+       `quai-execution` and `quai-rpc` (`0c7e159`, `add3bd3`, `7fdf0bd`):
+       non-test `.unwrap()` 127 to 0, `.expect()` 9 to 6, panic macros 5 to
+       2 (two `assert!` in a const initializer, checked at build time), index
+       expressions 452 to 374; counted by `scripts/count_panics.py`
+       (`4357880`). No removed call was reachable from input: each had a
+       local invariant and now cannot fail by construction or stops with a
+       capability or unavailable error, never a consensus result. The 6
+       `expect()` state their invariant (serde_json into a `Vec`, BLAKE2b key
+       length, 32-byte halves of a 64-byte buffer). Found and fixed
+       (`6d4d695`): a call chain as deep as the gas allows (about 700 frames at
+       50,000,000 gas) overflowed a 2 MiB thread stack and aborted the
+       process, where go-quai grows goroutine stacks. A transaction now runs
+       again on a 128 MiB stack when it passes 64 frames (16 in debug
+       builds). Go oracle vector `deep-calls` in
+       `fixtures/protocol/settlement.json`; it aborts unmodified `a69aa7a`.
+       Left: the proto-field unwraps in `quai-primitives` (Header API) and the
+       crates outside this pass.
 
 ## Phase 4: speed
 
@@ -281,3 +307,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1 | Long replay PASS to zone 686,009, the end of `peer-export-public`, every root equal: 506,009 heights from checkpoint 180,000 in 10,347 s (48.9 blocks/s; 67% of the time waits for proof-of-work), 5,193,990 workshares. Continued on `peer-export-1250k` from checkpoint 700,000 (log: `replay-public-1250k.err`) |
 | 2026-11-18 | Phase 3.3 | `Lockup::decode` matches Go; test `record_layout_matches_go` (`7206f8c`). Clippy `approx_constant`: Go's `ln2 = 0.6931` kept on purpose (`e3747da`) |
 | 2026-11-18 | Phase 2.2 | Public P2P mode (`ab2a7ab`, merge `24b994a`): relay client, DCUtR, AutoNAT; `/quai/kad/1.0.0` in both profiles; Go GossipSub parameters and message ID; go-quai validators before accept or relay; genesis check per slot, Go scores and bans, a working rate limit, per-IP limit; publish off by default. Live 5 min: 44 peers, 2 relay reservations, reached through a relay circuit, 859/859 gossip accepted, 0 rejected. Coordinator rerun on merged main: 344/344 workspace in 65 suites, 43/43 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 3.3 | `quai-execution`, `quai-rpc`: non-test unwrap 127 to 0, expect 9 to 6, counted by `scripts/count_panics.py` (`4357880`, `0c7e159`, `add3bd3`, `7fdf0bd`); none was reachable from input. Deep call chains (about 700 frames at 50,000,000 gas) overflowed a 2 MiB stack and aborted the process; they now run again on a 128 MiB stack (`6d4d695`); Go vector `deep-calls` aborts `a69aa7a`. 347/347 workspace tests in 66 suites; replay 0–27,406 with `--state` from genesis PASS (1,398 s) |

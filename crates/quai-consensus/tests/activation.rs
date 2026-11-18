@@ -106,10 +106,16 @@ fn supplied_activation_checkpoint_cannot_acquire_canonical_authority() {
     assert!(chain.import(b, v["now"].as_u64().unwrap()).is_err());
     assert_eq!(chain.view().unwrap().block(), head);
     assert_eq!(chain.view().unwrap().height(), 0);
-    assert!(matches!(
-        Verifier::default().validate_block(first.bytes(), quai_primitives::work::Context::Zone),
-        Err(Error::Unsupported(_))
-    ));
+    // Zone 259,201 does not extend the bare genesis.
+    let refused = quai_consensus::block::validate_on_genesis(
+        &mut Verifier::default(),
+        quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+        [None, None, Some(std::sync::Arc::new(first.clone()))],
+        1_800_000_000,
+    )
+    .err()
+    .unwrap();
+    assert_eq!(refused.check, "parent hash");
     drop(chain);
     std::fs::remove_dir_all(p).unwrap();
 }

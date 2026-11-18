@@ -78,7 +78,7 @@ pub fn check_zone_header_projection(
     metrics: &ParentEntropyProjection,
 ) -> Result<ZoneHeaderReport, Error> {
     header.verify_binding()?;
-    if now > i64::MAX as u64 - 15 {
+    if now > i64::MAX as u64 - quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
         return Err(Error::Unsupported("header clock domain"));
     }
     validation::check_header_ancestry(history, header, profile, now, uncle)?;
@@ -196,7 +196,7 @@ pub fn verify_zone_header_components(
     uncle: bool,
 ) -> Result<ZoneHeaderReport, Error> {
     profile.validate()?;
-    if now > i64::MAX as u64 - 15 {
+    if now > i64::MAX as u64 - quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
         return Err(Error::Unsupported("header clock domain"));
     }
     validation::check_header_ancestry(history, header, profile, now, uncle)?;

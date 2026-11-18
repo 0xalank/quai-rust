@@ -125,9 +125,14 @@ fn missing_history_clock_and_zone_profiles_fail_before_parent_work() {
         genesis: Default::default(),
     };
     assert!(invalid.validate().is_err());
-    assert!(verifier
-        .validate_block(b.bytes(), quai_primitives::work::Context::Prime)
-        .is_err());
+    // Without its ancestry a block fails validation.
+    assert!(quai_consensus::block::validate_on_genesis(
+        &mut verifier,
+        quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+        [None, None, Some(std::sync::Arc::new(b.clone()))],
+        1_800_000_000,
+    )
+    .is_err());
 }
 #[test]
 fn prime_and_region_do_not_inherit_zone_header_rules() {

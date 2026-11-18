@@ -3,11 +3,12 @@
 //! (`zone_execution::native_components`) and compare the header roots: EVM
 //! state, ETX set, UTXO set, receipts, outbound ETXs, gas and state counters.
 //!
-//! The inbound ETXs of a block are the ETXs its parent confirmed. The
-//! confirmation is the shared `quai_consensus::confirmation::confirm` (go-quai
-//! core/slice.go CollectNewlyConfirmedEtxs) over the chain spec's location;
-//! this module only supplies what it reads: the orders of recent blocks and
-//! the region rollups and confirmations recorded here.
+//! Execution is `Verifier::validate_block` with a parent state: the inbound
+//! ETXs of a block are the ETXs its parent confirmed, and the shared
+//! `quai_consensus::confirmation::confirm` (go-quai core/slice.go
+//! CollectNewlyConfirmedEtxs) derives what the block confirms. This module
+//! supplies what that reads: the orders of recent blocks and the region
+//! rollups and confirmations recorded here.
 //!
 //! The state is the lazy World, UTXO, ETX and lockup state of
 //! `state_store::restore_sparse` over the replay's state database
@@ -18,9 +19,10 @@
 use crate::checkpoint::StateSection;
 use crate::store::{self, PastDb, StateStore};
 use quai_consensus::{
+    block::ParentState,
     chain::Chain,
-    confirmation::{self, Known},
-    history::{History, Record},
+    confirmation::Known,
+    history::Record,
     zone_execution::{self, Profile, State},
     Error,
 };
@@ -50,11 +52,17 @@ pub struct StateReplay {
     /// Zone height of the last committed version.
     pub committed_height: u64,
 }
-/// The orders of recent blocks and this replay's recorded rollups and
-/// confirmations, as the shared confirmation derivation reads them.
-struct KnownView<'a> {
-    orders: &'a HashMap<Hash, u8>,
-    state: &'a StateReplay,
+/// The orders of recent blocks and, with `--state`, this replay's recorded
+/// region rollups and confirmations: what `Verifier::validate_block` reads
+/// through `confirmation::Known`.
+pub struct KnownView<'a> {
+    pub orders: &'a HashMap<Hash, u8>,
+    pub maps: Option<Maps<'a>>,
+}
+/// The recorded region rollups and confirmations of a state replay.
+pub struct Maps<'a> {
+    region_rollups: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
+    confirmed: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
 }
 impl Known for KnownView<'_> {
     fn order(&self, id: &Hash) -> Result<u8, Error> {
@@ -64,10 +72,16 @@ impl Known for KnownView<'_> {
             .ok_or(Error::Unavailable("confirmed ancestry order"))
     }
     fn region_rollup(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
-        self.state.region(id)
+        self.maps
+            .as_ref()
+            .and_then(|m| m.region_rollups.get(id).cloned())
+            .ok_or(Error::Unavailable("committed region rollup"))
     }
     fn confirmed(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
-        self.state.confirmed_after(id)
+        self.maps
+            .as_ref()
+            .and_then(|m| m.confirmed.get(id).cloned())
+            .ok_or(Error::Unavailable("confirmed parent ETXs"))
     }
 }
 impl StateReplay {
@@ -178,43 +192,19 @@ impl StateReplay {
                 .collect(),
         }
     }
-    fn region(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
-        self.region_rollups
-            .get(id)
-            .cloned()
-            .ok_or(Error::Unavailable("committed region rollup"))
-    }
-    pub fn confirmed_after(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
-        self.confirmed
-            .get(id)
-            .cloned()
-            .ok_or(Error::Unavailable("confirmed parent ETXs"))
-    }
-    /// The ETXs this block confirms for its zone children (the shared
-    /// `confirmation::confirm` at the chain spec's location).
-    pub fn confirm(
-        &self,
-        histories: &[History; 3],
-        orders: &HashMap<Hash, u8>,
-        records: &[Option<Arc<Record>>; 3],
-        order: u8,
-        accumulated: &[Transaction],
-        location: [u8; 2],
-    ) -> Result<Vec<Transaction>, Error> {
-        confirmation::confirm(
-            histories,
-            &KnownView {
-                orders,
-                state: self,
+    /// The recorded maps and the execution parent state, borrowed together
+    /// for one `Verifier::validate_block` call.
+    pub fn split(&mut self) -> (Maps<'_>, ParentState<'_, PastDb>) {
+        (
+            Maps {
+                region_rollups: &self.region_rollups,
+                confirmed: &self.confirmed,
             },
-            [
-                records[0].as_deref(),
-                records[1].as_deref(),
-                records[2].as_deref(),
-            ],
-            order,
-            accumulated,
-            location,
+            ParentState {
+                state: &mut self.state,
+                past: &self.past,
+                profile: &self.profile,
+            },
         )
     }
     /// Record a block that executed and passed every check.

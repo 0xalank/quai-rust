@@ -331,8 +331,7 @@ pub enum Allocations {
 /// the fork schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainSpec {
-    /// The go-quai environment name (params.ColosseumName, ...) or the name of
-    /// a private profile.
+    /// The go-quai environment name (params.ColosseumName, params.LocalName).
     pub environment: String,
     /// ChainConfig.ChainID.
     pub chain_id: u64,
@@ -433,13 +432,14 @@ impl ChainSpec {
             forks: FORKS,
         }
     }
-    /// A private test chain (chain 1337) with the header policy of the Go
-    /// oracle harnesses (reference/confirmation/harness.go PowConfig:
-    /// DurationLimit 5, MinDifficulty 2, GasCeil = block gas limit) and no
-    /// allocations. The fork schedule is the go-quai one.
-    pub fn private(name: &str, genesis: Genesis, gas_ceiling: u64) -> Self {
+    /// A private test chain: params.LocalName with chain ID 1337
+    /// (ProgpowLocalChainConfig), the header policy of the Go oracle harnesses
+    /// (reference/confirmation/harness.go PowConfig: DurationLimit 5,
+    /// MinDifficulty 2, GasCeil = block gas limit) and no allocations. The
+    /// fork schedule is the go-quai one.
+    pub fn private(genesis: Genesis, gas_ceiling: u64) -> Self {
         let mut spec = Self::colosseum();
-        spec.environment = name.into();
+        spec.environment = "local".into();
         spec.chain_id = 1337;
         spec.genesis = genesis;
         spec.header.minimum_difficulty = 2;

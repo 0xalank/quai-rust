@@ -268,11 +268,15 @@ fn bootstrap_and_zero_number_placement_require_explicit_trust() {
         placement::verify_placement(&mut Verifier::default(), &root, &profile),
         Err(Error::Unsupported(_))
     ));
+    // A genesis record is not a block that extends a genesis.
     let b = Record::decode(root.bytes()).unwrap();
-    assert!(matches!(
-        Verifier::default().validate_block(b.bytes(), quai_primitives::work::Context::Prime),
-        Err(Error::Unsupported(_))
-    ));
+    assert!(quai_consensus::block::validate_on_genesis(
+        &mut Verifier::default(),
+        quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+        [None, None, Some(std::sync::Arc::new(b))],
+        1_800_000_000,
+    )
+    .is_err());
 }
 
 #[test]

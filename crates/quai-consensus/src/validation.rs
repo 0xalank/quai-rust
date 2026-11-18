@@ -210,13 +210,16 @@ pub fn check_header_ancestry(
     let parent = history.get(&header.parents[2])?;
     let w = header.header.wire();
     let b = header.object.header().wire();
-    if b.extra.as_deref().unwrap_or_default().len() > 32 {
+    if b.extra.as_deref().unwrap_or_default().len() > quai_primitives::spec::MAXIMUM_EXTRA_DATA_SIZE
+    {
         return Err(Error::Invalid("extra data size"));
     }
     if w.header_hash.as_ref().unwrap().value.as_slice() != header.object.header().hash() {
         return Err(Error::Invalid("body header commitment"));
     }
-    if !uncle && w.time.unwrap() > now.saturating_add(15) {
+    if !uncle
+        && w.time.unwrap() > now.saturating_add(quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME)
+    {
         return Err(Error::Invalid("future block"));
     }
     if w.time.unwrap() < parent.header.wire().time.unwrap() {

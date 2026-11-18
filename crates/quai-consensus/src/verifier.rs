@@ -492,12 +492,25 @@ impl Verifier {
             ],
         })
     }
-    /// Full consensus is deliberately unavailable until all stages are implemented.
-    /// No collection of passing kernel or commitment checks promotes a block here.
-    pub fn validate_block(&mut self, _bytes: &[u8], _context: Context) -> Result<(), Error> {
-        Err(Error::Unsupported(
-            "full consensus and state replay remain incomplete",
-        ))
+    /// Validate a block against an explicit parent context: the chain spec,
+    /// the history windows and append snapshots of each context, the heads it
+    /// must extend and the orders and confirmations of earlier blocks. Runs
+    /// every state-free rule (`block::check`) and, with a parent state, the
+    /// execution with every state root (`block::execute`): the pipeline
+    /// `quai-node replay` runs. Stops that are not Go rules remain where a Go
+    /// stage is not ported (prime controllers after ControllerKickInBlock).
+    pub fn validate_block<P: quai_execution::historical::History>(
+        &mut self,
+        parent: &crate::block::Parent<'_>,
+        records: [Option<Arc<crate::history::Record>>; 3],
+        state: Option<&mut crate::block::ParentState<'_, P>>,
+    ) -> Result<crate::block::Validated, crate::block::Failure> {
+        let checked = crate::block::check(self, parent, records)?;
+        let executed = match state {
+            Some(state) => Some(crate::block::execute(self, parent, state, &checked)?),
+            None => None,
+        };
+        Ok(crate::block::Validated { checked, executed })
     }
 }
 #[derive(Clone, Debug)]

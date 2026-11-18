@@ -62,14 +62,98 @@ fn invalid_heights_are_rejected_before_cache_allocation() {
     assert!(Algorithm::Progpow.sizes(1_301_100).is_ok());
     assert!(Algorithm::Kawpow.sizes(14_000_000).is_ok());
 }
+/// `Verifier::validate_block` against an explicit parent context runs the
+/// replay pipeline: on the Go fixture chain (canonical.json branch 0, chain
+/// 1337) every height validates, executes on its parent state, and confirms
+/// and rolls up exactly the ETXs Go recorded; a block without its parent fails.
 #[test]
-fn incomplete_block_admission_never_returns_a_validated_result() {
+fn validate_block_runs_the_replay_pipeline_on_the_go_fixture_chain() {
+    use quai_consensus::{
+        block::{self, Ancestry, NoPast, ParentState},
+        chain::Chain,
+        history::Record,
+        zone_execution::State,
+    };
+    use quai_primitives::{decode_hex, encode_hex, transaction::Transaction};
+    use std::sync::Arc;
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../../../fixtures/protocol/canonical.json")).unwrap();
+    let now = corpus["now"].as_u64().unwrap();
+    let chain = Chain::private_hierarchy().unwrap();
+    assert_eq!(
+        encode_hex(&chain.genesis_hash()),
+        corpus["branches"][0]["genesis_hash"].as_str().unwrap()
+    );
+    let profile = chain.execution_profile().unwrap();
+    let mut ancestry = Ancestry::new(chain.clone()).unwrap();
+    let mut state = State::default();
     let mut verifier = Verifier::default();
-    for data in [vec![], vec![0], vec![255; 1024]] {
-        assert!(matches!(
-            verifier.validate_block(&data, quai_primitives::work::Context::Zone),
-            Err(Error::Unsupported(_))
-        ));
+    let txs = |v: &[Transaction]| -> serde_json::Value {
+        v.iter().map(|t| encode_hex(&t.encode())).collect()
+    };
+    let rows = corpus["branches"][0]["vectors"].as_array().unwrap();
+    let records = |row: &serde_json::Value| {
+        let mut out: [Option<Arc<Record>>; 3] = [None, None, None];
+        for c in row["contexts"].as_array().unwrap() {
+            let raw = decode_hex(c["work_object"].as_str().unwrap()).unwrap();
+            out[c["context"].as_u64().unwrap() as usize] =
+                Some(Arc::new(Record::decode(&raw).unwrap()));
+        }
+        out
+    };
+    // A block that skips its parent fails its parent link.
+    let skipped = verifier
+        .validate_block::<NoPast>(&ancestry.parent(now), records(&rows[1]), None)
+        .err()
+        .unwrap();
+    assert_eq!(skipped.check, "parent hash");
+    for (i, row) in rows.iter().enumerate() {
+        let mut parent_state = ParentState {
+            state: &mut state,
+            past: &NoPast,
+            profile: &profile,
+        };
+        let validated = verifier
+            .validate_block(&ancestry.parent(now), records(row), Some(&mut parent_state))
+            .unwrap_or_else(|f| panic!("height {}: {f}", i + 1));
+        assert_eq!(
+            validated.checked.order as u64,
+            row["order"].as_u64().unwrap()
+        );
+        assert_eq!(
+            txs(&validated.checked.cross),
+            row["cross_rollup"],
+            "height {}",
+            i + 1
+        );
+        let executed = validated.executed.as_ref().unwrap();
+        assert_eq!(
+            txs(&executed.confirmed),
+            row["confirmed"],
+            "height {}",
+            i + 1
+        );
+        assert_eq!(
+            encode_hex(&state.world.root().unwrap()),
+            row["evm_root"].as_str().unwrap(),
+            "height {}",
+            i + 1
+        );
+        ancestry.commit(validated).unwrap();
+    }
+    assert_eq!(ancestry.heads()[2].1, rows.len() as u64);
+    // Go-rejected variants of height 7 fail against the same parent context.
+    let mut ancestry = Ancestry::new(chain).unwrap();
+    for row in &rows[..6] {
+        let v = verifier
+            .validate_block::<NoPast>(&ancestry.parent(now), records(row), None)
+            .unwrap();
+        ancestry.commit(v).unwrap();
+    }
+    for bad in corpus["branches"][0]["negatives"].as_array().unwrap() {
+        if bad["at_height"] == 7 {
+            assert!(block::check(&mut verifier, &ancestry.parent(now), records(bad)).is_err());
+        }
     }
 }
 

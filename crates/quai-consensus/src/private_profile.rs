@@ -111,11 +111,8 @@ impl PrivateChain {
     /// GasCeil = the profile block gas limit), no allocations and the go-quai
     /// fork schedule (`fork_manifest` must equal it).
     pub fn spec(&self) -> quai_primitives::spec::ChainSpec {
-        let mut spec = quai_primitives::spec::ChainSpec::private(
-            &self.name,
-            self.genesis_fields.clone(),
-            self.gas_limit,
-        );
+        let mut spec =
+            quai_primitives::spec::ChainSpec::private(self.genesis_fields.clone(), self.gas_limit);
         spec.chain_id = self.chain_id;
         spec.location = self.location;
         spec

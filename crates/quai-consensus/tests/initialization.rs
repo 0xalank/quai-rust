@@ -250,8 +250,12 @@ fn trusted_candidates_still_cannot_use_full_block_admission() {
     let r = initialization::build_genesis(&spec()).unwrap();
     let mut s = CandidateState::new(profile(&r, 0)).unwrap();
     s.seed_trusted(r.clone()).unwrap();
-    assert!(matches!(
-        Verifier::default().validate_block(r.bytes(), quai_primitives::work::Context::Prime),
-        Err(Error::Unsupported(_))
-    ));
+    // A trusted genesis candidate is not a block that extends a genesis.
+    assert!(quai_consensus::block::validate_on_genesis(
+        &mut Verifier::default(),
+        quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+        [None, None, Some(std::sync::Arc::new(r.clone()))],
+        1_800_000_000,
+    )
+    .is_err());
 }

@@ -181,6 +181,7 @@ mod tests {
         ] {
             let spec = p.spec();
             assert_eq!(spec.chain_id, 1337);
+            assert_eq!(spec.environment, "local");
             assert_eq!(spec.forks, quai_primitives::spec::FORKS);
             assert_eq!(spec.allocations, Allocations::None);
             // The spec rebuilds the profile's genesis.

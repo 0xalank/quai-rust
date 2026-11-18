@@ -7,6 +7,7 @@ pub mod checkpoint;
 pub mod cli;
 pub mod log;
 pub mod pow;
+pub mod processor;
 pub mod qex;
 pub mod replay;
 pub mod rpc_call;

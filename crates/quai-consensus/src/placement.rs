@@ -16,6 +16,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+/// Manifest bound of the private branch delta codec (`confirmation::delta`)
+/// and of the candidate-index budget tests. Consensus has no manifest cap.
 pub const MAX_MANIFEST: usize = 4096;
 pub const MAX_AUX_RECORDS: usize = 4096;
 pub const MAX_AUX_BYTES: usize = 32 << 20;
@@ -81,9 +83,6 @@ pub struct Snapshot {
 impl Snapshot {
     fn bytes(&self) -> Result<usize, Error> {
         let n = self.manifest.as_ref().map_or(0, Vec::len);
-        if n > MAX_MANIFEST {
-            return Err(Error::ResourceLimit("candidate manifest"));
-        }
         Ok(n * 32
             + self.interlinks.as_ref().map_or(0, |_| 128)
             + self.termini.as_ref().map_or(0, |_| 1024)
@@ -231,10 +230,9 @@ pub fn route(context: usize, order: u8) -> Result<Route, Error> {
     })
 }
 /// Commitments for lists of fixed 32-byte hashes (RLP string prefix 0xa0).
+/// go-quai has no manifest length limit: a region manifest grows with every
+/// zone block until the next region block.
 pub fn hash_list_root(values: &[Hash]) -> Result<Hash, Error> {
-    if values.len() > MAX_MANIFEST {
-        return Err(Error::ResourceLimit("candidate hash list"));
-    }
     let encoded = values
         .iter()
         .map(|h| {
@@ -297,9 +295,6 @@ pub fn next_manifest(
         return Ok(vec![id]);
     }
     let parent = parent.ok_or(Error::Unavailable("parent local manifest"))?;
-    if parent.len() >= MAX_MANIFEST {
-        return Err(Error::ResourceLimit("candidate manifest growth"));
-    }
     let mut next = parent.to_vec();
     next.push(id);
     Ok(next)

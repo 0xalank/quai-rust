@@ -1,4 +1,6 @@
-//! Raw lockup records with pinned point reads and a bounded mutation overlay.
+//! Raw lockup records with pinned point reads and a mutation overlay. A lazy
+//! overlay over a state database has no change cap (go-quai's lockup records
+//! are unbounded state); the in-memory image keeps its 1,000,000-entry bound.
 use crate::{
     lockup::{Key, Lockup},
     state_error::ReadError,
@@ -75,16 +77,9 @@ impl LockupState {
         }
     }
     pub fn set(&mut self, key: Key, value: Option<Lockup>) -> Result<(), ReadError> {
-        let limit = if self.base.is_some() {
-            65_536
-        } else {
-            1_000_000
-        };
-        if self.values.len() + self.deleted.len() >= limit
-            && !self.values.contains_key(&key)
-            && !self.deleted.contains(&key)
+        if self.base.is_none() && self.values.len() >= 1_000_000 && !self.values.contains_key(&key)
         {
-            return Err("lockup working bound".into());
+            return Err("lockup image bound".into());
         }
         self.get(&key)?;
         self.root_cache = Default::default();

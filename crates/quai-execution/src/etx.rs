@@ -10,8 +10,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock},
 };
+/// Bounds of the in-memory ETX image (`base == None`: the snapshot image and
+/// the private test chains). A lazy overlay over a state database has no
+/// change, payload or buffer cap: go-quai's ETX set is unbounded, and the
+/// overlay is written to the database at every commit.
 pub const MAX_PENDING_ETXS: usize = 16_384;
-const MAX_CHANGES: usize = 65_536;
+const MAX_IMAGE_PAYLOAD: usize = 32 << 20;
+const MAX_IMAGE_BUFFERS: usize = 64 << 20;
 pub(crate) fn index_key(newest: bool) -> Vec<u8> {
     let mut key = vec![0; 4];
     key.extend([255; 28]);
@@ -260,16 +265,17 @@ impl EtxState {
             .checked_sub(removed)
             .and_then(|n| n.checked_add(value.len()))
             .ok_or("ETX byte overflow")?;
-        if bytes > 32 << 20 {
-            return Err("ETX state payload exceeds 32 MiB prototype scope".into());
+        let image = self.base.is_none();
+        if image && bytes > MAX_IMAGE_PAYLOAD {
+            return Err("ETX image payload exceeds 32 MiB".into());
         }
         let buffers = self
             .buffer_bytes
             .checked_sub(removed)
             .and_then(|n| n.checked_add(value.len()))
             .ok_or("ETX buffer bytes")?;
-        if buffers > 64 << 20 {
-            return Err("ETX buffer working bound".into());
+        if image && buffers > MAX_IMAGE_BUFFERS {
+            return Err("ETX image buffer bound".into());
         }
         self.root_cache = Default::default();
         if value.is_empty() && self.base.is_none() {
@@ -282,21 +288,14 @@ impl EtxState {
         Ok(())
     }
     pub fn push(&mut self, inbound: &[Transaction]) -> Result<(), ReadError> {
-        let capacity = if self.base.is_some() {
-            self.slots.len() + self.deleted.len()
-        } else {
-            self.len()
-        };
-        let limit = if self.base.is_some() {
-            MAX_CHANGES
-        } else {
-            MAX_PENDING_ETXS
-        };
-        if capacity
-            .checked_add(inbound.len())
-            .is_none_or(|n| n > limit)
+        let image = self.base.is_none();
+        if image
+            && self
+                .len()
+                .checked_add(inbound.len())
+                .is_none_or(|n| n > MAX_PENDING_ETXS)
         {
-            return Err("ETX queue capacity exceeded".into());
+            return Err("ETX image queue capacity exceeded".into());
         }
         let next = self
             .newest
@@ -316,8 +315,8 @@ impl EtxState {
             bytes = bytes
                 .checked_add(envelope.len())
                 .ok_or("ETX byte overflow")?;
-            if bytes > 32 << 20 {
-                return Err("ETX state payload exceeds 32 MiB prototype scope".into());
+            if image && bytes > MAX_IMAGE_PAYLOAD {
+                return Err("ETX image payload exceeds 32 MiB".into());
             }
             let weight = tx
                 .encode()
@@ -326,8 +325,8 @@ impl EtxState {
                 .and_then(|n| n.checked_add(envelope.len()))
                 .ok_or("ETX buffer bytes")?;
             buffers = buffers.checked_add(weight).ok_or("ETX buffer bytes")?;
-            if buffers > 64 << 20 {
-                return Err("ETX buffer working bound".into());
+            if image && buffers > MAX_IMAGE_BUFFERS {
+                return Err("ETX image buffer bound".into());
             }
             entries.push(Arc::new(Entry {
                 transaction: Arc::new(tx.clone()),
@@ -372,12 +371,6 @@ impl EtxState {
     pub fn pop(&mut self) -> Result<Option<Transaction>, ReadError> {
         if self.oldest == self.newest {
             return Ok(None);
-        }
-        if self.base.is_some()
-            && self.slots.len() + self.deleted.len() >= MAX_CHANGES
-            && !self.slots.contains_key(&self.oldest)
-        {
-            return Err("ETX queue working bound".into());
         }
         let entry = self
             .entry(self.oldest)?

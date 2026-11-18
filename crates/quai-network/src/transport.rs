@@ -199,6 +199,14 @@ pub struct WireStream {
     failed: bool,
 }
 impl WireStream {
+    /// Shared framing for other transport profiles; the permit bounds streams.
+    pub(crate) fn new(inner: libp2p::swarm::Stream, permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            inner,
+            _permit: permit,
+            failed: false,
+        }
+    }
     pub async fn read(&mut self) -> io::Result<Vec<u8>> {
         if self.failed {
             return Err(io::Error::other("Quai stream failed; reconnect"));

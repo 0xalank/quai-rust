@@ -80,13 +80,13 @@ impl Header {
         wire.primary_coinbase = fixed(wire.primary_coinbase, 20)?;
         wire.number = Some(magnitude(wire.number)?);
         wire.difficulty = Some(magnitude(wire.difficulty)?);
-        wire.prime_terminus_number = Some(magnitude(wire.prime_terminus_number)?);
-        let prime = wire.prime_terminus_number.as_ref().unwrap();
-        if prime.len() > 8 {
+        let prime_bytes = magnitude(wire.prime_terminus_number.take())?;
+        if prime_bytes.len() > 8 {
             return Err("prime height exceeds supported u64 domain".into());
         }
         let mut padded = [0u8; 8];
-        padded[8 - prime.len()..].copy_from_slice(prime);
+        padded[8 - prime_bytes.len()..].copy_from_slice(&prime_bytes);
+        wire.prime_terminus_number = Some(prime_bytes);
         let prime = u64::from_be_bytes(padded);
         if wire.nonce.is_none() || wire.time.is_none() {
             return Err("required nonce/time missing".into());

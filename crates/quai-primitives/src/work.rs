@@ -34,8 +34,17 @@ fn hash(value: &mut Option<c::ProtoHash>) -> Result<(), String> {
             .value,
     )
 }
-fn read_hash(value: &Option<c::ProtoHash>) -> Hash {
-    value.as_ref().unwrap().value.as_slice().try_into().unwrap()
+fn read_hash(value: &Option<c::ProtoHash>) -> Result<Hash, String> {
+    value
+        .as_ref()
+        .ok_or("body-header hash missing")?
+        .value
+        .as_slice()
+        .try_into()
+        .map_err(|_| "body-header hash width".into())
+}
+fn missing<T>(value: Option<T>) -> Result<T, String> {
+    value.ok_or_else(|| "decoded work object lost a required field".into())
 }
 #[derive(Clone)]
 pub struct BodyHeader {
@@ -96,21 +105,19 @@ impl BodyHeader {
             for value in group {
                 let mut some = Some(std::mem::take(value));
                 magnitude(&mut some)?;
-                *value = some.unwrap();
+                *value = some.unwrap_or_default();
             }
         }
-        for value in [
-            &mut wire.efficiency_score,
-            &mut wire.threshold_count,
-            &mut wire.expansion_number,
-        ] {
-            if value.is_none() {
-                return Err("required body-header score/expansion missing".into());
-            }
-        }
-        wire.efficiency_score = Some(wire.efficiency_score.unwrap() as u16 as u64);
-        wire.threshold_count = Some(wire.threshold_count.unwrap() as u16 as u64);
-        wire.expansion_number = Some(wire.expansion_number.unwrap() as u8 as u64);
+        let (Some(efficiency), Some(threshold), Some(expansion)) = (
+            wire.efficiency_score,
+            wire.threshold_count,
+            wire.expansion_number,
+        ) else {
+            return Err("required body-header score/expansion missing".into());
+        };
+        wire.efficiency_score = Some(efficiency as u16 as u64);
+        wire.threshold_count = Some(threshold as u16 as u64);
+        wire.expansion_number = Some(expansion as u8 as u64);
         for value in [
             &mut wire.gas_limit,
             &mut wire.gas_used,
@@ -271,16 +278,10 @@ impl WorkObject {
         self.wire.encode_to_vec()
     }
     pub fn auxiliary_work_header(&self, schedule: Schedule) -> Result<crate::Header, String> {
-        Header::decode_auxiliary(
-            &self.wire.wo_header.as_ref().unwrap().encode_to_vec(),
-            schedule,
-        )
+        Header::decode_auxiliary(&missing(self.wire.wo_header.as_ref())?.encode_to_vec(), schedule)
     }
     pub fn work_header(&self, schedule: Schedule) -> Result<crate::Header, String> {
-        crate::Header::decode(
-            &self.wire.wo_header.as_ref().unwrap().encode_to_vec(),
-            schedule,
-        )
+        crate::Header::decode(&missing(self.wire.wo_header.as_ref())?.encode_to_vec(), schedule)
     }
     pub fn header(&self) -> &BodyHeader {
         &self.header
@@ -312,13 +313,7 @@ impl WorkObject {
         transactions_root(&self.outbound)
     }
     pub fn uncle_headers(&self, schedule: Schedule) -> Result<Vec<Header>, String> {
-        self.wire
-            .wo_body
-            .as_ref()
-            .unwrap()
-            .uncles
-            .as_ref()
-            .unwrap()
+        missing(missing(self.wire.wo_body.as_ref())?.uncles.as_ref())?
             .wo_headers
             .iter()
             .map(|h| Header::decode_auxiliary(&h.encode_to_vec(), schedule))
@@ -333,61 +328,41 @@ impl WorkObject {
         }
     }
     pub fn manifest_root(&self) -> Result<Hash, String> {
-        hash_list(
-            &self
-                .wire
-                .wo_body
-                .as_ref()
-                .unwrap()
-                .manifest
-                .as_ref()
-                .unwrap()
-                .manifest,
-        )
+        hash_list(&missing(missing(self.wire.wo_body.as_ref())?.manifest.as_ref())?.manifest)
     }
     pub fn interlink_root(&self) -> Result<Hash, String> {
-        hash_list(
-            &self
-                .wire
-                .wo_body
-                .as_ref()
-                .unwrap()
-                .interlink_hashes
-                .as_ref()
-                .unwrap()
-                .hashes,
-        )
+        hash_list(&missing(missing(self.wire.wo_body.as_ref())?.interlink_hashes.as_ref())?.hashes)
     }
     /// Body/header commitments only. Does not establish valid signatures, active
     /// destinations, ancestry, proof of work, execution/state roots or fork choice.
     pub fn verify_commitments(&self, context: Context) -> Result<(), String> {
         let header = &self.header.wire;
-        let body = self.wire.wo_body.as_ref().unwrap();
-        let outer = self.wire.wo_header.as_ref().unwrap();
-        if outer.header_hash.as_ref().unwrap().value != self.header.hash() {
+        let body = missing(self.wire.wo_body.as_ref())?;
+        let outer = missing(self.wire.wo_header.as_ref())?;
+        if missing(outer.header_hash.as_ref())?.value != self.header.hash() {
             return Err("body-header commitment mismatch".into());
         }
         match context {
             Context::Zone => {
-                if !body.manifest.as_ref().unwrap().manifest.is_empty()
-                    || !body.interlink_hashes.as_ref().unwrap().hashes.is_empty()
+                if !missing(body.manifest.as_ref())?.manifest.is_empty()
+                    || !missing(body.interlink_hashes.as_ref())?.hashes.is_empty()
                 {
                     return Err("zone manifest/interlink must be empty".into());
                 }
-                if self.transaction_root()? != read_hash(&header.tx_hash) {
+                if self.transaction_root()? != read_hash(&header.tx_hash)? {
                     return Err("transaction root mismatch".into());
                 }
-                if self.outbound_root()? != read_hash(&header.outbound_etx_hash) {
+                if self.outbound_root()? != read_hash(&header.outbound_etx_hash)? {
                     return Err("outbound ETX root mismatch".into());
                 }
-                if self.uncle_root() != read_hash(&header.uncle_hash) {
+                if self.uncle_root() != read_hash(&header.uncle_hash)? {
                     return Err("uncle root mismatch".into());
                 }
             }
             Context::Prime | Context::Region => {
                 if !self.transactions.is_empty()
                     || !self.outbound.is_empty()
-                    || !body.uncles.as_ref().unwrap().wo_headers.is_empty()
+                    || !missing(body.uncles.as_ref())?.wo_headers.is_empty()
                 {
                     return Err("non-zone body has transactions/ETXs/uncles".into());
                 }
@@ -399,7 +374,7 @@ impl WorkObject {
                     return Err("subordinate manifest commitment mismatch".into());
                 }
                 if context == Context::Prime
-                    && self.interlink_root()? != read_hash(&header.interlink_root_hash)
+                    && self.interlink_root()? != read_hash(&header.interlink_root_hash)?
                 {
                     return Err("interlink commitment mismatch".into());
                 }

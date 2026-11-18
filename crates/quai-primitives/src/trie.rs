@@ -10,7 +10,8 @@ fn prefix(length: usize, short: u8, long: u8) -> Vec<u8> {
         return vec![short + length as u8];
     }
     let bytes = length.to_be_bytes();
-    let bytes = &bytes[bytes.iter().position(|b| *b != 0).unwrap()..];
+    // Length is at least 56 here, so a nonzero byte exists.
+    let bytes = &bytes[bytes.iter().position(|b| *b != 0).unwrap_or(0)..];
     let mut out = vec![long + bytes.len() as u8];
     out.extend_from_slice(bytes);
     out

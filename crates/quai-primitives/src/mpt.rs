@@ -246,7 +246,11 @@ fn child(r: Rlp<'_>, depth: usize) -> Result<Link, Error> {
     }
     match r.body.len() {
         0 => Ok(Link::Empty),
-        32 => Ok(Link::Hash(r.body.try_into().unwrap())),
+        32 => Ok(Link::Hash(
+            r.body
+                .try_into()
+                .map_err(|_| Error::Invalid("child hash width"))?,
+        )),
         _ => Err(Error::Invalid("child hash width")),
     }
 }
@@ -270,8 +274,9 @@ fn decode(raw: &[u8], depth: usize) -> Result<Link, Error> {
     }
     let data = match parts.len() {
         2 => {
-            let second = parts.pop().unwrap();
-            let first = parts.pop().unwrap();
+            let (Some(second), Some(first)) = (parts.pop(), parts.pop()) else {
+                return Err(Error::Invalid("node arity"));
+            };
             if first.list {
                 return Err(Error::Invalid("path is a list"));
             }
@@ -300,7 +305,9 @@ fn decode(raw: &[u8], depth: usize) -> Result<Link, Error> {
             if depth >= 64 {
                 return Err(Error::Invalid("secure branch depth"));
             }
-            let terminal = parts.pop().unwrap();
+            let Some(terminal) = parts.pop() else {
+                return Err(Error::Invalid("node arity"));
+            };
             if terminal.list || !terminal.body.is_empty() {
                 return Err(Error::Invalid("secure branch terminal"));
             }
@@ -321,7 +328,7 @@ fn decode(raw: &[u8], depth: usize) -> Result<Link, Error> {
         _ => return Err(Error::Invalid("node arity")),
     };
     let encoded = OnceLock::new();
-    encoded.set(raw.to_vec()).unwrap();
+    let _ = encoded.set(raw.to_vec());
     Ok(Link::Node(Arc::new(Node {
         data,
         encoded,

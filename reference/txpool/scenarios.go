@@ -711,7 +711,7 @@ func qiLru() obj {
 // stay when a jump or a reorg includes them, and return on a reorg.
 func qiHead() obj {
 	e := newEnv("qi-head")
-	ps := []types.OutPoint{point("h1", 0), point("h2", 0), point("h3", 0), point("h4", 0)}
+	ps := []types.OutPoint{point("h1", 0), point("h2", 0), point("h3", 0), point("h4", 0), point("h5", 0)}
 	us := []utxo{}
 	for _, p := range ps {
 		us = append(us, utxo{p, entry(k1, 2, 0)})
@@ -720,6 +720,8 @@ func qiHead() obj {
 		return signQi([]key{k1}, []types.OutPoint{ps[i]}, []out{qo(to, 1)}, nil, nil)
 	}
 	q0, q1, q2, q3 := q(0, k3), q(1, k3), q(2, k3), q(3, k3)
+	// Never sent to this pool: a reorg validates them again.
+	qx, qy := q(4, k4), q(2, k4)
 	root := e.commit("s0", nil)
 	rate := new(big.Int).Mul(params.ExchangeRate, u(7))
 	h0 := spec(1000, 50000)
@@ -734,7 +736,7 @@ func qiHead() obj {
 		return h
 	}
 	b0 := e.block("b0", makeBlock(at(1000, 0), common.Hash{0x01}, ph, root, nil), "s0", 4)
-	a1 := e.block("a1", makeBlock(at(1001, 0), b0, ph, root, types.Transactions{q0}), "s0", 4)
+	a1 := e.block("a1", makeBlock(at(1001, 0), b0, ph, root, types.Transactions{q0, qx, qy}), "s0", 4)
 	a2 := e.block("a2", makeBlock(at(1002, 0), a1, ph, root, types.Transactions{q1}), "s0", 4)
 	e.block("a3", makeBlock(at(1003, 0), a2, ph, root, nil), "s0", 4)
 	x1 := e.block("x1", makeBlock(at(1001, 1), b0, ph, root, types.Transactions{q2, q3}), "s0", 4)
@@ -743,14 +745,14 @@ func qiHead() obj {
 	e.utxos("all", us)
 	e.utxos("spent-0", us[1:])
 	e.utxos("spent-01", us[2:])
-	e.utxos("spent-23", us[:2])
+	e.utxos("spent-23", []utxo{us[0], us[1], us[4]})
 	e.start("b0", "all", core.DefaultTxPoolConfig)
 	e.send(encode(q0), "")
 	e.send(encode(q1), "")
 	e.send(encode(q2), "")
 	e.head("a1", "spent-0", "child includes q0: removed")
 	e.head("a3", "spent-01", "jump over a2 (includes q1): q1 stays")
-	e.head("x3", "spent-23", "reorg: q0 and q1 return (cached fees), x1's q2 and q3 stay as they were")
+	e.head("x3", "spent-23", "reorg: q0 returns (cached fee), qx is validated and returns, qy's input is spent, x1's q2 and q3 stay as they were")
 	e.rpc("txpool_status")
 	e.stop()
 	return e.out()

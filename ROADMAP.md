@@ -58,6 +58,13 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        `scripts/mainnet/go_node.sh start|stop|status`. Data:
        `~/quai-data/mainnet-v0.57.0`. UPnP port mapping and telemetry are off.
        A disk guard stops the node below 25 GiB free.
+       Limit found on 2026-11-17: mainnet zone head is about 11.2M blocks; the
+       node syncs about 3.7 zone blocks/s and stores about 30 KB per zone block.
+       A full sync needs about 35 days and 336 GB. On this disk the guard stops
+       it near 900,000 blocks, before KawPow. Plan: use the Go node as the
+       oracle for the early range, and feed replay beyond it from peers through
+       `quai_network::public` (Phase 2.2 groundwork), or move the node to a
+       larger volume.
 2. [x] Go exporter: for each block, the prime, region and zone work objects
        (protobuf) plus receipts, in order from genesis. The header fields carry
        the expected state, UTXO, ETX and receipt roots.
@@ -93,6 +100,15 @@ divergence from Go.
 1. [ ] `quai-node` crate: config file, data directory, logs, metrics, and the
        `replay` command from Phase 1.
 2. [ ] Public P2P: bootnodes, Kademlia discovery, GossipSub topics, peer scoring.
+       Groundwork (`9a25090`): read-only `quai_network::public` and the
+       `mainnet-probe` example work with go-quai v0.57.0 (local) and the v0.57.1
+       boot peers: Noise/Yamux, identify, `/quai/kad/1.0.0`, all `/quai/1.0.0`
+       request types, zone block and workshare gossip. Still needed: a relay
+       client, DCUtR and AutoNAT (many peers have only `/p2p-circuit`
+       addresses); the private profile's Kademlia ID is `/quai`, Go uses
+       `/quai/kad/1.0.0`; Go's GossipSub message-ID function; GossipSub
+       validation equal to Go before relay; request scoring and bans; per-IP
+       limits; answers only from validated state.
 3. [ ] Follow the live head. Send gossiped blocks and workshares through the
        same validation path.
 4. [ ] Run next to a Go node and compare heads and roots.
@@ -127,6 +143,14 @@ Mining, block templates and Stratum come last.
 - Do not start new performance tuning before the Phase 1 gate, except the
   Phase 4 items above.
 
+## Findings in go-quai v0.57.0
+
+- `p2p/protocol/handler.go:49-92` `ProcRequestRate`: the per-peer request
+  rate limit never triggers. `tracker` is a copy of the map value and is never
+  written back; the average on line 67 misses the division by 100 for its first
+  term; `minPeriod` is computed but not used. Other bounds remain: 100 queued
+  messages and 16 MiB per stream, 256 MiB in total.
+
 ## Execution log
 
 | Date | Step | Result |
@@ -136,3 +160,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-17 | Phase 1.1 | Node guard also stops the node on an iPhone hotspot (`daec049`) |
 | 2026-11-17 | Phase 0.4 | Reports moved to `docs/history/`; porting map counts fixed (`3d73836`) |
 | 2026-11-17 | Phase 1.2 | QEX1 exporter (`59a928c`); live-clone export of zone 0–11,682: 20,408 records, 75.9 MB; every self-check and `-verify` pass |
+| 2026-11-17 | Phase 2.2 groundwork | Rust libp2p talks to go-quai mainnet peers, read-only (`9a25090`): `/quai/1.0.0` requests 57/57 local and 153/153 public, hashes equal to Go RPC; gossip decoded |

@@ -127,7 +127,14 @@ pub enum Fault {
     InvalidCode,
     CodeStoreOutOfGas,
     AddressGrind,
+    /// go-quai `common.ErrExternalAddress`: a Quai address of another zone
+    /// where an address of this zone is needed. A CALL, CALLCODE,
+    /// DELEGATECALL or STATICCALL whose callee fails with it fails too
+    /// (core/vm/instructions.go:722, 762, 794, 826).
     ExternalAddress,
+    /// go-quai `common.MakeErrQiAddress` and `MakeErrQuaiAddress`: an address
+    /// of the wrong ledger. Unlike `ExternalAddress` it stops at the caller.
+    QiAddress,
     MaxCodeSize,
     Precompile,
     Lockup,
@@ -152,6 +159,8 @@ impl Fault {
             Self::CodeStoreOutOfGas => "code_store_out_of_gas",
             Self::AddressGrind => "address_grind",
             Self::ExternalAddress => "external_address",
+            // Go's oracles name ad-hoc errors "vm_error", as for the lockup.
+            Self::QiAddress => "vm_error",
             Self::MaxCodeSize => "max_code_size",
             Self::Lockup => "vm_error",
             Self::Precompile => "precompile",
@@ -633,9 +642,11 @@ impl Machine<'_> {
             0xff => {
                 let a = address(self.back(0)?);
                 if !calls::local(&a, self.ctx.location) {
-                    // Go's dynamic gas function fails here: "out of gas".
-                    self.note(message::FaultDetail::OutOfGas);
-                    return Err(Fault::ExternalAddress.into());
+                    // Go's dynamic gas function fails here, and the
+                    // interpreter turns that into "out of gas"
+                    // (core/vm/operations_acl.go:231-234,
+                    // core/vm/interpreter.go:233-236).
+                    return Err(Fault::OutOfGas.into());
                 }
                 if !self.state.address_listed(&a) {
                     dynamic = self.cost(2600);
@@ -791,9 +802,12 @@ impl Machine<'_> {
             0x30 => self.push(from_bytes(&self.ctx.address)),
             0x31 | 0x3b | 0x3c | 0x3f => {
                 let a = address(self.pop()?);
+                // opBalance, opExtCodeCopy and opExtCodeHash return the error
+                // of `InternalAndQuaiAddress` (core/vm/instructions.go:266,
+                // 402, 450); opExtCodeSize has no scope check.
                 if op != 0x3b && !calls::local(&a, self.ctx.location) {
                     self.note(message::FaultDetail::Scope(a));
-                    return Err(Fault::ExternalAddress.into());
+                    return Err(calls::scope_fault(&a).into());
                 }
                 if !self.state.address_listed(&a) {
                     return Err(Fault::InvalidAccessList.into());
@@ -1102,6 +1116,14 @@ impl Machine<'_> {
                     child_gas,
                     self.depth + 1,
                 )?;
+                // go-quai opCall, opCallCode, opDelegateCall and opStaticCall
+                // return the callee's error when it is common.ErrExternalAddress
+                // (core/vm/instructions.go:722, 762, 794, 826): this frame
+                // fails too, and so does every caller up to a CREATE or the
+                // transaction.
+                if result.error == Some(Fault::ExternalAddress) {
+                    return Err(Fault::ExternalAddress.into());
+                }
                 self.push(boolean(result.error.is_none() && !result.reverted));
                 if result.error.is_none() {
                     let (o, n) = Self::range(ret_off, ret_len)?;

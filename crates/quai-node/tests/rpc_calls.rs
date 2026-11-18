@@ -228,15 +228,6 @@ impl ChainView for VectorView {
     }
 }
 
-/// Another zone's form of precompile 1. go-quai's `EVM.precompile`
-/// (core/vm/evm.go) replaces the first byte of any address with the zone's
-/// prefix before it looks for a precompile, so a top-level call to it runs
-/// the zone's ecrecover. Rust's consensus code (`evm::precompile::translate`)
-/// accepts only the zone prefix or 0x00 there and sends an ETX instead. This
-/// is a consensus difference, which the RPC work leaves alone: the answers
-/// for it must keep differing until the consensus code changes.
-const OTHER_ZONE_PRECOMPILE: &str = "0x1000000000000000000000000000000000000001";
-
 #[test]
 fn rpc_calls_equal_go_quai() {
     let doc = corpus();
@@ -246,7 +237,6 @@ fn rpc_calls_equal_go_quai() {
     );
     let mut per: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut failures = vec![];
-    let mut known = 0;
     for s in doc["scenarios"].as_array().unwrap() {
         let view = VectorView::new(s);
         for v in s["vectors"].as_array().unwrap() {
@@ -255,11 +245,6 @@ fn rpc_calls_equal_go_quai() {
                 Ok(result) => json!({ "result": result }),
                 Err(e) => json!({ "error": e.to_value() }),
             };
-            if v["params"][0]["to"] == OTHER_ZONE_PRECOMPILE {
-                assert_ne!(got, v["go"], "{} {method} {}", s["id"], v["params"]);
-                known += 1;
-                continue;
-            }
             let row = per.entry(method.to_string()).or_default();
             row.0 += 1;
             if got == v["go"] {
@@ -275,8 +260,6 @@ fn rpc_calls_equal_go_quai() {
     for (m, (n, ok)) in &per {
         eprintln!("{m}: {ok}/{n}");
     }
-    eprintln!("documented differences (other zone's precompile): {known}");
-    assert_eq!(known, 12);
     assert!(
         failures.is_empty(),
         "{} answers differ:\n{}",

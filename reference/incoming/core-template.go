@@ -12,6 +12,7 @@ import (
 	"github.com/dominant-strategies/go-quai/core/state"
 	"github.com/dominant-strategies/go-quai/core/types"
 	"github.com/dominant-strategies/go-quai/core/vm"
+	"github.com/dominant-strategies/go-quai/crypto"
 	"github.com/dominant-strategies/go-quai/crypto/multiset"
 	"github.com/dominant-strategies/go-quai/params"
 	"google.golang.org/protobuf/proto"
@@ -24,7 +25,7 @@ type nativeIncomingCase struct {
 	Location                                common.Location
 	Number, Parent, Prime, Gas, Pool, Value uint64
 	Type                                    uint64
-	Qi, Remote, Listed, Queued              bool
+	Qi, Remote, Listed, Queued, Create      bool
 	Data, Code                              []byte
 	Repeat                                  int
 }
@@ -106,7 +107,19 @@ func niOne(c nativeIncomingCase) map[string]interface{} {
 	if c.Listed {
 		access = append(access, types.AccessTuple{Address: target, StorageKeys: []common.Hash{{}}})
 	}
-	tx := types.NewTx(&types.ExternalTx{Gas: c.Gas, To: &target, Value: niU(c.Value), Data: data, AccessList: access, Sender: sender, EtxType: c.Type, OriginatingTxHash: common.Hash{31: 99}, ETXIndex: 7})
+	to := target
+	if c.Create {
+		// An ETX to the zone's zero address creates a contract from the zero
+		// address (nonce 1); the access list must name the new address.
+		to = common.ZeroAddress(nodeLocation)
+		created := crypto.CreateAddress(to, 1, data, nodeLocation)
+		if _, e := created.InternalAndQuaiAddress(); e != nil {
+			created, _, e = vm.GrindContract(to, 1, 1<<40, 30+6*int64((len(data)+31)/32), crypto.Keccak256Hash(data), niU(c.Number), nodeLocation)
+			niMust(e)
+		}
+		access = types.AccessList{{Address: created, StorageKeys: []common.Hash{}}}
+	}
+	tx := types.NewTx(&types.ExternalTx{Gas: c.Gas, To: &to, Value: niU(c.Value), Data: data, AccessList: access, Sender: sender, EtxType: c.Type, OriginatingTxHash: common.Hash{31: 99}, ETXIndex: 7})
 	pb, e := tx.ProtoEncode()
 	niMust(e)
 	wire, e := proto.Marshal(pb)
@@ -317,5 +330,30 @@ func NativeIncomingVectors() []interface{} {
 	}
 	c := nativeIncomingCase{ID: fmt.Sprintf("incoming-%x-contract-coinbase-lock-2-zone-9000000", []byte(loc)), Location: loc, Number: 9000000, Parent: 8999999, Prime: 2444574, Gas: 200000, Pool: 30000000, Value: 100006, Type: 1, Qi: true, Queued: true, Listed: true, Data: append(append([]byte{2}, niAddress(loc, 2, false).Bytes()...), make([]byte, 32)...)}
 	rows = append(rows, niOne(c))
+	// ETX creations whose init code reaches a precompile that the access
+	// list does not name: TransitionDb's PrepareAccessList adds the
+	// precompiles to the ETX message too (core/state_transition.go:380).
+	for _, loc := range []common.Location{{0, 0}, {2, 3}, {15, 15}} {
+		precompile := func(first, n byte) []byte {
+			b := make([]byte, 20)
+			b[0] = first
+			b[19] = n
+			return b
+		}
+		for _, v := range []struct {
+			name string
+			code []byte
+		}{
+			// STATICCALL(GAS, prefix..02, 0, 32, 0, 32); SSTORE(0, success)
+			{"static-local", append(append([]byte{0x60, 0x20, 0x60, 0, 0x60, 0x20, 0x60, 0, 0x73}, precompile(loc.BytePrefix(), 2)...), 0x5a, 0xfa, 0x60, 0, 0x55, 0)},
+			// The same call to the zero-prefix form 0x00..04.
+			{"static-zero", append(append([]byte{0x60, 0x20, 0x60, 0, 0x60, 0x20, 0x60, 0, 0x73}, precompile(0, 4)...), 0x5a, 0xfa, 0x60, 0, 0x55, 0)},
+			// BALANCE(prefix..03); SSTORE(0, balance)
+			{"balance-local", append(append([]byte{0x73}, precompile(loc.BytePrefix(), 3)...), 0x31, 0x60, 0, 0x55, 0)},
+		} {
+			c := nativeIncomingCase{ID: fmt.Sprintf("incoming-%x-create-%s", []byte(loc), v.name), Location: loc, Number: 4000000, Parent: 3999999, Prime: 2444574, Gas: 200000, Pool: 30000000, Value: 100006, Type: 0, Queued: true, Create: true, Data: v.code}
+			rows = append(rows, niOne(c))
+		}
+	}
 	return rows
 }

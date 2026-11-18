@@ -1,0 +1,39 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "60c9682c92b2c56704e48601614d12df7e64d09b88a92008f5c446ad11e19b26",
+  "driver_sha256": "efef74f52c7f5ba76442ef7abf2147cfe6a371fe087fb96946009a95493108d2",
+  "oracle_sources": {
+    "reference/precompiles/main.go": "cb2e2d48409feda4027f7744bf9f3a5355b7723239508f6bc795a228cdef122d",
+    "reference/settlement/core-export.go": "463368116d0ab4da0e16750ec19bfde053785c28ce145356ffd53de576d951ae"
+  },
+  "instrumentation": "Observe ApplyMessage result without changing its call or any branch in actual applyTransaction",
+  "go_sources": {
+    "core/state_processor.go": "8fb9ddda835ab5c7d323ecfd9aef218e43a1f3d60c7c445a9ffc13b08571d7b4",
+    "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",
+    "core/evm.go": "157aada56069cfd339ae5044959cf2fec43607a028a71784f8bccc9516ebbdc0",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "core/state/statedb.go": "84bece787e5207237c612a7d2659a3692e4c6a1686f7e89343642444b5427f3e",
+    "core/state/access_list.go": "81f92871845093c75f6b465aa6f4e7a7fcee430913e0f88e890aa600c6348e72",
+    "core/state/state_object.go": "27a03b98f4653612788c5374e33fc1f574fa2ef5a0220faf5f41fe3a20ebdb89",
+    "core/vm/evm.go": "77629a1e77b36ae14ba6c66e7146bdba45b1e96603fd28984f38cd03bf886e54",
+    "core/vm/contracts.go": "4854f9498dda1d7c8368874b82383fc7e6cd138e78520f8e268c2310519fd1ea",
+    "core/vm/instructions.go": "a1079bec5ba3e1896de866ffa25e695f0852ae9f78f1d703a62e6a736a4e0b09",
+    "core/vm/interpreter.go": "ac397b3fbd53e6bed58a35a67cb3190b63ca311651c64e0e783c253327b36e8e",
+    "core/vm/gas_table.go": "d29aadd866a4fd60299ff5aabe09ec41419904230e49fbd9d0ef85ac5bcf8c52",
+    "core/vm/operations_acl.go": "3e7ca23b011b7faebf7e5ec3c034517d717fe47e758269e02486263904df862a",
+    "core/vm/errors.go": "d0c95f8ce62ace0c35f382784b532af256a308607d889c176761a6d8a72173c9",
+    "core/types/receipt.go": "6a0dbc7fc21a960e44b92b0365a72b2c7fc27a1162c8303e0e91f10294ee1c3e",
+    "core/types/transaction.go": "a629fe1c32e8e4e73091540fed92c8aa0c20e070332a565708e0a5c91890f169",
+    "crypto/crypto.go": "9198d5adf3aafaf5f0ec930f2def0db7a198a09e8fe3c6cffdc431e69a2baf86",
+    "crypto/bn256/bn256_fast.go": "b8d00d8652093f20c53b133f354934203d994ab0a8ccbb6289d75cc17d46fc16",
+    "crypto/blake2b/blake2b.go": "af0e0af60276fff0a41f955d0b3db6445220860ca3eccc0c6319868d48dcacac",
+    "common/address.go": "5b1a3ab95391b2e6d50ef7bfcc3eba3f9eb2419ac125ee67e6d75c24c886965e",
+    "common/types.go": "7bc526e37b42e1a33adb096d652f0eed153eea4239e73f9cff3b7a207a854912",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "Signed Quai transactions through the actual applyTransaction on committed private state (precompile addresses of every zone form, the access list of a creation, address-scope errors in nested frames, lockup-contract calls), and precompile inputs through vm.RunPrecompiledContract. No block admission or public network."
+}

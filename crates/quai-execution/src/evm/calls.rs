@@ -19,6 +19,15 @@ pub enum Kind {
 pub fn local(a: &Address, location: [u8; 2]) -> bool {
     a[0] == (location[0] << 4 | location[1]) && a[1] & 128 == 0
 }
+/// The error of go-quai `Address.InternalAndQuaiAddress` for an address that
+/// is not `local` (common/address.go:60-75): it checks the ledger first.
+pub(crate) fn scope_fault(a: &Address) -> Fault {
+    if a[1] > 127 {
+        Fault::QiAddress
+    } else {
+        Fault::ExternalAddress
+    }
+}
 /// Go `StateDB.Empty` for an account that exists.
 pub(crate) fn empty_account(v: &Account) -> bool {
     v.nonce == 0 && v.code.is_empty() && v.balance == Word::ZERO && v.storage_size == Word::ZERO
@@ -54,11 +63,29 @@ pub(crate) fn invoke(
     if depth > 1024 {
         return Ok(result(s, gas, Some(Fault::Depth)));
     }
+    // go-quai `EVM.Call` and `EVM.CallCode` check the value against the
+    // caller's balance first: before the lockup branch, the precompile lookup
+    // and the address scope (core/vm/evm.go:260-262, 366-368). The failure
+    // keeps the gas for the caller.
+    if matches!(kind, Kind::Call | Kind::CallCode)
+        && s.world()
+            .account(&parent.address)?
+            .map(|a| a.balance)
+            .unwrap_or(Word::ZERO)
+            < value
+    {
+        return Ok(result(s, gas, Some(Fault::InsufficientBalance)));
+    }
+    if kind == Kind::Call && target == crate::lockup::contract(parent.location) {
+        return super::lockup::invoke(s, parent, input, gas);
+    }
     let precompile = super::precompile::translate(target, parent.location);
     let target = precompile.map(|(_, a)| a).unwrap_or(target);
     if !local(&target, parent.location) {
+        // EVM.CallCode, DelegateCall and StaticCall (core/vm/evm.go:377,
+        // 420, 464): no gas left.
         if kind != Kind::Call {
-            return Ok(result(s, 0, Some(Fault::ExternalAddress)));
+            return Ok(result(s, 0, Some(scope_fault(&target))));
         }
         let point = s.snapshot()?;
         let outcome = super::etx::transfer(s, parent, target, value, gas, input)?;
@@ -74,18 +101,6 @@ pub(crate) fn invoke(
                 Ok(result(s, 0, Some(error)))
             }
         };
-    }
-    if kind == Kind::Call && target == crate::lockup::contract(parent.location) {
-        return super::lockup::invoke(s, parent, input, gas);
-    }
-    if matches!(kind, Kind::Call | Kind::CallCode)
-        && s.world()
-            .account(&parent.address)?
-            .map(|a| a.balance)
-            .unwrap_or(Word::ZERO)
-            < value
-    {
-        return Ok(result(s, gas, Some(Fault::InsufficientBalance)));
     }
     let checkpoint = s.snapshot()?;
     let mut state_gas = 0;
@@ -214,13 +229,11 @@ fn call_with_env(
     state.transaction_hash = environment.transaction_hash;
     state.eligible_slices = environment.eligible_slices;
     state.access_list = access.to_vec();
-    for id in 1..=9 {
-        let mut a = [0; 20];
-        a[19] = id;
-        state.addresses.insert(a);
-        a[0] = context.location[0] << 4 | context.location[1];
-        state.addresses.insert(a);
-    }
+    // go-quai `StateDB.PrepareAccessList`: sender, recipient, precompiles and
+    // the transaction's list.
+    state
+        .addresses
+        .extend(super::precompile::active(context.location));
     state.addresses.insert(context.caller);
     state.addresses.insert(context.address);
     for a in access {
@@ -370,7 +383,7 @@ pub(crate) fn create(
         return Ok((result(s, gas, Some(Fault::InsufficientBalance)), None));
     }
     if !local(&address, parent.location) {
-        return Ok((result(s, 0, Some(Fault::ExternalAddress)), None));
+        return Ok((result(s, 0, Some(scope_fault(&address))), None));
     }
     if !s.address_listed(&address) {
         return Ok((result(s, 0, Some(Fault::InvalidAccessList)), None));
@@ -465,6 +478,14 @@ fn creation_with_env(
     state.transaction_hash = environment.transaction_hash;
     state.eligible_slices = environment.eligible_slices;
     state.access_list = access.to_vec();
+    // go-quai `StateDB.PrepareAccessList` adds the precompiles to a creation
+    // too (core/state_transition.go:380, core/state/statedb.go:1302); only
+    // the new contract's address must be in the transaction's list
+    // (`EVM.create`, core/vm/evm.go:533). An ETX creation sends from the
+    // zone's zero address to itself, so the sender is also the recipient.
+    state
+        .addresses
+        .extend(super::precompile::active(context.location));
     state.addresses.insert(context.caller);
     for a in access {
         state.addresses.insert(a.address);

@@ -7,11 +7,32 @@ use num_bigint::BigUint;
 use quai_primitives::transaction::{keccak, Address};
 use sha2::{Digest, Sha256};
 use substrate_bn::{AffineG1, AffineG2, Fq, Fq2, Fr, Group, Gt, G1, G2};
+/// go-quai `vm.ActivePrecompiles` (core/vm/contracts.go:58-81): `0x…01` to
+/// `0x…09` with the zone prefix and with 0x00 as the first byte.
+/// `StateDB.PrepareAccessList` (core/state/statedb.go:1295) puts them in the
+/// access list of every message: calls, creations and ETXs
+/// (core/state_transition.go:380).
+pub fn active(location: [u8; 2]) -> Vec<Address> {
+    let mut out = vec![];
+    for id in 1..=9u8 {
+        let mut a = [0; 20];
+        a[19] = id;
+        out.push(a);
+        a[0] = location[0] << 4 | location[1];
+        out.push(a);
+    }
+    out
+}
+/// go-quai `EVM.precompile` (core/vm/evm.go:55-68). An address that is not
+/// one of the zone's precompiles gets the zone prefix as its first byte and
+/// is looked up again, so `XX 00…00 0N` (N 1 to 9) is precompile N of this
+/// zone for every first byte XX, also another zone's prefix. `EVM.Call`,
+/// `CallCode`, `DelegateCall` and `StaticCall` then run it at the zone's form
+/// of the address. The checks before the lookup see the address as written:
+/// the access list, and the address scope of CALL's gas function
+/// (core/vm/gas_table.go:197), which fails for another zone first.
 pub fn translate(a: Address, loc: [u8; 2]) -> Option<(u8, Address)> {
-    if a[1..19].iter().any(|b| *b != 0)
-        || !(1..=9).contains(&a[19])
-        || a[0] != 0 && a[0] != (loc[0] << 4 | loc[1])
-    {
+    if a[1..19].iter().any(|b| *b != 0) || !(1..=9).contains(&a[19]) {
         return None;
     }
     let mut local = a;

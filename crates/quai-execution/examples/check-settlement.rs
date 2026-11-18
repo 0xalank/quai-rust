@@ -5,7 +5,10 @@ use quai_execution::{
     evm::{calls::Environment, word::bytes},
     settlement::{self, BlockContext},
 };
-use quai_primitives::{decode_hex, encode_hex, transaction::Transaction};
+use quai_primitives::{
+    decode_hex, encode_hex,
+    transaction::{keccak, Transaction},
+};
 use serde_json::{json, Value};
 pub fn verify(corpus: &Value) -> Value {
     verify_observed(corpus, None)
@@ -42,6 +45,11 @@ pub fn verify_observed(
             environment: Environment {
                 delete_empty: row["finalize_empty"].as_bool().unwrap_or(false),
                 prime_number: row["context"]["prime_number"].as_u64(),
+                // Rows whose transaction may create an ETX name the eligible
+                // slices that Go's CheckIfEtxEligible used.
+                eligible_slices: row["eligible_slices"]
+                    .as_str()
+                    .map(|h| decode_hex(h).unwrap().try_into().unwrap()),
                 ..Default::default()
             },
             gas_remaining: row["initial_gas_pool"].as_u64().unwrap(),
@@ -84,6 +92,14 @@ pub fn verify_observed(
                     cmp(
                         "receipt_rlp",
                         json!(encode_hex(&out.receipt.typed_rlp().unwrap())),
+                    );
+                }
+                // A receipt carries a 10,240-byte bloom; large corpora keep
+                // the Keccak-256 of its RLP.
+                if row["receipt_rlp_keccak"].is_string() {
+                    cmp(
+                        "receipt_rlp_keccak",
+                        json!(encode_hex(&keccak(&out.receipt.typed_rlp().unwrap()))),
                     );
                 }
                 cmp("logs",json!(out.receipt.logs.iter().map(|l|json!({"address":encode_hex(&l.address),"topics":l.topics.iter().map(|h|encode_hex(h)).collect::<Vec<_>>(),"data":encode_hex(&l.data)})).collect::<Vec<_>>()));

@@ -86,8 +86,13 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
     match input.len() {
         20 => {
             let owner: Address = field(input, 0)?;
-            if !calls::local(&c.address, c.location) || !calls::local(&owner, c.location) {
+            // ClaimQiDeposit: `quaiOwner.InternalAndQuaiAddress()`
+            // (core/vm/contracts.go:897).
+            if !calls::local(&c.address, c.location) || owner[1] & 128 != 0 {
                 return Err(Fault::Lockup.into());
+            }
+            if !local_any(&owner, c.location) {
+                return Err(Fault::ExternalAddress.into());
             }
             let k = lockup::deposit_key(c.address, owner);
             let balance = s.storage(&address, k)?;
@@ -112,10 +117,15 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
                 return Err(Fault::OutOfGas.into());
             }
             *gas -= limit;
-            if !local_any(&to, c.location)
-                || to[1] & 128 == 0
-                || !calls::local(&c.address, c.location)
-            {
+            // UnwrapQi: `beneficiaryQi.InternalAndQiAddress()` checks the
+            // ledger, then the zone (core/vm/contracts.go:800).
+            if to[1] & 128 == 0 {
+                return Err(Fault::Lockup.into());
+            }
+            if !local_any(&to, c.location) {
+                return Err(Fault::ExternalAddress.into());
+            }
+            if !calls::local(&c.address, c.location) {
                 return Err(Fault::Lockup.into());
             }
             let key = lockup::owner_key(c.address);
@@ -146,10 +156,16 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
                 lock,
                 epoch,
             };
-            if input.len() == 25
-                && (!calls::local(&c.address, c.location) || !local_any(&beneficiary, c.location))
-            {
-                return Err(Fault::Lockup.into());
+            // GetLockupData: `beneficiaryMiner.InternalAddress()` returns
+            // common.ErrExternalAddress for another zone, of either ledger
+            // (core/vm/contracts.go:552).
+            if input.len() == 25 {
+                if !calls::local(&c.address, c.location) {
+                    return Err(Fault::Lockup.into());
+                }
+                if !local_any(&beneficiary, c.location) {
+                    return Err(Fault::ExternalAddress.into());
+                }
             }
             let value = s.world().lockup(&key)?.unwrap_or_default();
             if input.len() != 53 {
@@ -161,9 +177,16 @@ fn run(s: &mut Journal, c: &Context, input: &[u8], gas: &mut u64) -> Result<Vec<
                 return Err(Fault::OutOfGas.into());
             }
             *gas -= limit;
-            if !calls::local(&c.address, c.location)
-                || !local_any(&beneficiary, c.location)
-                || epoch >= (height / 50000 + 1) as u32
+            // ClaimCoinbaseLockup: the owner, then
+            // `beneficiaryMiner.InternalAddress()`, then the other checks
+            // (core/vm/contracts.go:660-685).
+            if !calls::local(&c.address, c.location) {
+                return Err(Fault::Lockup.into());
+            }
+            if !local_any(&beneficiary, c.location) {
+                return Err(Fault::ExternalAddress.into());
+            }
+            if epoch >= (height / 50000 + 1) as u32
                 || (beneficiary[1] & 128) != (to[1] & 128)
                 || value.unlock_height == 0
                 || value.unlock_height > height as u32

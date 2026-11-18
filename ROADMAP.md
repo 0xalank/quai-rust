@@ -177,19 +177,44 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        | SecurityHardening | CreateETX intrinsic check (vm/evm.go:752) | etx.rs:94 | none: one zone has no eligible ETX destination | equal by reading |
        | Polaris p 2,444,574 | PoW identity dedupe (hcv:254), suicide transaction (state_transition.go:468), founder forfeiture (gen_allocs.go:27) | validation.rs:500; settlement.rs:255; historical.rs:68 | polaris, settlement, historical (both) | equal |
        | Polaris | Qi output address must be 20 bytes; before it longer ones pass (sp:1999) | qi_settlement.rs:156 stops `Unsupported` | none | gap: needs a variable-length UTXO address (Go keeps all bytes in the UTXO and its hash, crops ETX recipients to the last 20, gas to the first 20) |
-       Found by the RPC call work (branch `rpc-calls`, Go probes; consensus
-       code, not changed there):
-       - A creation transaction does not get the precompiles in its
-         access list (`calls::creation_with_env`); go-quai's
+       Found by the RPC call work (branch `rpc-calls`, Go probes), fixed
+       on branch `exec-findings` with a new Go oracle
+       (`reference/precompiles`, `scripts/gen_precompile_vectors.py`,
+       `fixtures/protocol/precompiles.json`: 915 signed transactions
+       through the actual `applyTransaction`, 668 precompile runs through
+       `vm.RunPrecompiledContract`; `tests/precompiles.rs`):
+       - Fixed (`db104b7`): a creation, also an ETX creation, did not get
+         the precompiles in its access list; go-quai's
          `PrepareAccessList` adds them to every message. Init code that
-         calls a precompile that the access list does not name fails in
-         Rust with "invalid access list" and uses all its gas; Go deploys
-         the contract (probe: 101,073 gas; `results/rpc-calls/probes/`).
-       - `evm::precompile::translate` maps only the zone prefix or 0x00 to
-         a precompile; go-quai maps any first byte (findings below). A
-         transaction to another zone's `0x…0N` (N 1 to 9) runs this zone's
-         precompile in Go and sends an ETX in Rust (12 vectors in
-         `fixtures/protocol/rpc-calls.json`).
+         touched a precompile failed with "invalid access list" and used
+         all its gas. 98 vectors (86 failed before) and 9 new incoming ETX
+         rows (all failed before). Every other message path shares the
+         two journal constructors.
+       - Fixed (`d513c90`): `evm::precompile::translate` mapped only the
+         zone prefix or 0x00 to a precompile; go-quai's `EVM.precompile`
+         maps any first byte. A transaction to another zone's `0x…0N`
+         (N 1 to 9) sent an ETX, and a listed CALLCODE, DELEGATECALL or
+         STATICCALL target of that form failed. 531 vectors (179 failed
+         before). The 12 documented RPC answers now equal Go.
+       - Fixed (`31e4a98`, found on the way): `EVM.Call` and
+         `EVM.CallCode` check the value against the balance before the
+         lockup branch and the address scope; Rust ran the lockup
+         function or the scope check first. 18 vectors (4 failed before).
+       - Fixed (`8a83279`, found on the way): a frame that fails with
+         `common.ErrExternalAddress` (BALANCE, EXTCODECOPY or EXTCODEHASH
+         of another zone's address, CALLCODE, DELEGATECALL or STATICCALL
+         to it, the address checks of the lockup functions) makes every
+         CALL-family caller fail too, up to the transaction or a CREATE;
+         Rust let the caller go on. Errors of the Qi ledger stop at the
+         caller (`Fault::QiAddress`); SELFDESTRUCT to another zone is out
+         of gas. 268 vectors (57 failed before).
+       - Not a difference (`4f9e5f7`): the bn256 G2 subgroup (found by
+         reading). go-quai's bn256 (github.com/dominant-strategies/bn256)
+         checks the subgroup in `twistPoint.IsOnCurve`, as substrate-bn
+         does: 86 pairing runs, 4 twist points outside the subgroup. Only
+         the RPC error text differed; it is fixed.
+       - Not a difference (`5455800`): the other precompiles on 582
+         malformed and edge inputs (padding, truncation, gas, failure).
 5. [x] Remove the EVM limits that Go does not have, so that only gas limits
        execution (`130b106`). Removed: steps per frame, EVM memory, logs per
        transaction, call input, access-list size, the 1,000,000-entry undo
@@ -385,15 +410,17 @@ Gate: Quais.js and Pelagus work against the Rust node.
        (`scripts/gen_rpc_call_vectors.py`: production quaiapi handlers and
        JSON-RPC server; `fixtures/protocol/rpc-calls.json`,
        `crates/quai-node/tests/rpc_calls.rs`): 392/404 equal, 12
-       documented. Live, checkpoint 27,406
+       documented; 404/404 after step 1.4 (another zone's precompile, on
+       `exec-findings`), when `tests/rpc_calls.rs` drops its check that
+       the 12 still differ (`results/exec-findings/quai-node-rpc-calls.patch`).
+       Live, checkpoint 27,406
        (`fixtures/native-rpc/calls-0-27406.json`: transfers, new
        accounts, the nine precompiles, access lists, gas edges): 111/111
        equal; the base fee of all 27,406 real blocks equals the next
        header's (`examples/check-base-fee.rs`).
        Remaining differences: lockup-contract errors ("lockup error" where
        Go names the reason); the pointers that Go prints in "failed to
-       apply transaction" (Rust prints 0xc000000000); a call to another
-       zone's form of a precompile (step 1.4 note).
+       apply transaction" (Rust prints 0xc000000000).
        Left: filters (`newFilter`, `getFilterChanges` and the others) and
        WebSocket subscriptions need the live head (Phase 2.3);
        `sendRawTransaction` and the pending nonce need step 2. Not served:
@@ -464,6 +491,15 @@ Mining, block templates and Stratum come last.
   precompile, Go puts the zone prefix in its first byte and looks again. A
   call to another zone's `0x…0N` (N 1 to 9, the other bytes zero) therefore
   runs this zone's precompile N and sends no ETX.
+- `core/vm/instructions.go:722, 762, 794, 826`: opCall, opCallCode,
+  opDelegateCall and opStaticCall end their own frame when the callee
+  fails with `common.ErrExternalAddress`, so that error climbs to the
+  transaction or a CREATE. `InternalAndQuaiAddress` checks the ledger
+  first, so a Qi address gives another error, which does not climb.
+- `core/vm/evm.go:260-272`: `EVM.Call` checks the value before the lockup
+  branch, so a CALL with value to the lockup contract fails when the
+  caller cannot pay it, although the lockup contract never takes the
+  value.
 - `p2p/protocol/handler.go:49-92` `ProcRequestRate`: the per-peer request
   rate limit never triggers. `tracker` is a copy of the map value and is never
   written back; the average on line 67 misses the division by 100 for its first
@@ -507,3 +543,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1 | Two runs with the merged binary `c466449` (sha256 `db24ef65…`): `scripts/mainnet/rolling_replay.sh` continues from checkpoint 1,250,000 toward the head (`replay-public`, log `logs/rolling.log`); a single-binary replay from genesis on a clone of `peer-export-1250k` (`replay-genesis-c466449`) checks today's execution changes on zone 0–1,250,000 |
 | 2026-11-18 | Phase 3.1 | Calls in go-quai's debug mode (`9e6f953`, `a1c55f3`, `4d918e1`, `b6a8e10`, `8d9bba4`, and the commit of this row): no access-list checks, Go's access-list tracer and error texts; `quai_estimateGas` builds the access list of contract calls; new `quai_createAccessList` and `quai_gasPrice`. Go oracle (production quaiapi handlers): 392/404 equal, 12 documented (another zone's precompile). Live, checkpoint 27,406: call fixture 111/111, existing fixture 617/625 with 8 documented (as before), 300 random heights 1,320/1,320; `calc_base_fee` of 27,406 real blocks equal to the next header's base fee. Replay 0-27,406 with `--state` from genesis PASS (4,722 s). 367/367 tests in 69 suites (`cargo test --release --locked --workspace` 366/366, 56 min; the new offline gas-price test 1/1 in a release rerun of its suite), fmt clean, clippy without errors. Found two consensus differences (step 1.4 note). Merge `355c004`; coordinator rerun on merged main: 367/367 workspace in 69 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 2.1, 2.3 | Node shell (`5011fca`, `e642a08`, `39e4862`, `43e035d`): one chain processor with a block source trait; block store with RPC view (zone 0-8 fixture 253/253 from the store; Go export 0-27,406 with `--state --store` PASS, its store's RPC 617/625 equal + 8 documented, 1,320/1,320 live sample); `quai-node run` from public peers (stateless from checkpoint 720,000: 6.7-8.4 blocks/s, 0 failures, stop and resume, following the peers' head); config file, metrics, signals; go-quai head choice (fixture 24/24) and reorgs with state rollback (fixture branches); live gossip observer (31 min: 433 blocks, 4,032 workshares, 47 reorgs of depth 1-3, 3-deep agreement with peers 28/28). Go export replay 0-27,406 with `--state` PASS from genesis (4,123 s) and resumed from checkpoint 20,000 (1,141 s). 417/417 workspace tests in 70 suites, 45/45 `quai-network --features native-transport`, fmt clean, clippy without errors |
+| 2026-11-18 | Phase 1.4 | Execution findings of the RPC call work (`db104b7`, `d513c90`, `31e4a98`, `8a83279`, `4f9e5f7`, `5455800`): a creation (also an ETX creation) gets the precompiles in its access list; another zone's `0x…0N` is the zone's precompile; CALL and CALLCODE check the value before the lockup branch and the address scope; `ErrExternalAddress` climbs CALL-family frames as in Go; bn256 G2 subgroup and the other precompiles: no difference (RPC text of a G2 point outside the subgroup fixed). New Go oracle `reference/precompiles`: 915 transactions through `applyTransaction` (failed on the parent commits: 86/98, 179/531, 4/18, 57/268) and 668 precompile runs; incoming oracle +9 ETX creations (9/9 failed before). 375/375 tests in 70 suites (44.6 min), with the 12-line `quai-node/tests/rpc_calls.rs` change from `results/exec-findings/quai-node-rpc-calls.patch` applied for the run (rpc-calls 404/404); fmt clean; clippy (quai-execution) without errors. Replay 0-27,406 with `--state` from genesis in a fresh datadir PASS (2,770 s, binary `5455800`) |

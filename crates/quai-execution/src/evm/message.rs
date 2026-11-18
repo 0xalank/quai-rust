@@ -55,8 +55,6 @@ pub enum FaultDetail {
     InvalidOpcode(u8),
     /// `Address.InternalAndQuaiAddress` refused this address.
     Scope(Address),
-    /// A dynamic gas function failed, which Go reports as `ErrOutOfGas`.
-    OutOfGas,
 }
 
 /// A call message (`TransactionArgs.ToMessage`): gas price zero and the
@@ -102,15 +100,7 @@ pub enum Applied {
 /// The precompiles of `location` (`vm.ActivePrecompiles`): `0x…01` to
 /// `0x…09`, with and without the location prefix.
 pub fn precompiles(location: [u8; 2]) -> Vec<Address> {
-    let mut out = vec![];
-    for id in 1..=9u8 {
-        let mut a = [0; 20];
-        a[19] = id;
-        out.push(a);
-        a[0] = location[0] << 4 | location[1];
-        out.push(a);
-    }
-    out
+    super::precompile::active(location)
 }
 
 /// EIP-55 hex, as `common.Address.Hex` and `%v` print an address.
@@ -410,9 +400,10 @@ fn fault_text(fault: Fault, detail: Option<&FaultDetail>, top: &Top) -> String {
         (Fault::InvalidOpcode, Some(FaultDetail::InvalidOpcode(op))) => {
             format!("invalid opcode: {}", opcodes::name(*op))
         }
-        (Fault::ExternalAddress, Some(FaultDetail::OutOfGas)) => "out of gas".into(),
-        (Fault::ExternalAddress, Some(FaultDetail::Scope(a))) => scope_error(a, top.block.location)
-            .unwrap_or_else(|| "Address belongs to other zone".into()),
+        (Fault::ExternalAddress | Fault::QiAddress, Some(FaultDetail::Scope(a))) => {
+            scope_error(a, top.block.location)
+                .unwrap_or_else(|| "Address belongs to other zone".into())
+        }
         (Fault::Etx, _) => create_etx_error(top),
         (Fault::AddressGrind, _) => grind_error(top),
         (Fault::Precompile, _) => top
@@ -444,6 +435,7 @@ pub fn plain(f: Fault) -> &'static str {
         Fault::CodeStoreOutOfGas => "contract creation code storage out of gas",
         Fault::AddressGrind => "contract address grinding failed",
         Fault::ExternalAddress => "Address belongs to other zone",
+        Fault::QiAddress => "expected Quai address, but found Qi address",
         Fault::MaxCodeSize => "max code size exceeded",
         Fault::Precompile => "precompile failed",
         Fault::Lockup => "lockup error",
@@ -565,8 +557,11 @@ fn g1_error(b: &[u8]) -> Option<String> {
         .err()
         .map(|_| "bn256: malformed point".into())
 }
-/// `G2.Unmarshal` of 128 bytes. Go checks only that the point is on the
-/// curve; a point outside the subgroup passes there.
+/// `G2.Unmarshal` of 128 bytes (github.com/dominant-strategies/bn256
+/// bn256.go:265-308). Its `twistPoint.IsOnCurve` (twist.go:47-63) checks the
+/// twist equation and then that the point times the group order is the
+/// point at infinity, so a twist point outside the order-r subgroup is a
+/// "malformed point" too, as in substrate-bn.
 fn g2_error(b: &[u8]) -> Option<String> {
     let mut c = vec![];
     for i in 0..4 {
@@ -580,14 +575,13 @@ fn g2_error(b: &[u8]) -> Option<String> {
     }
     let x = substrate_bn::Fq2::new(c[1], c[0]);
     let y = substrate_bn::Fq2::new(c[3], c[2]);
-    match substrate_bn::AffineG2::new(x, y) {
-        Err(substrate_bn::GroupError::NotOnCurve) => Some("bn256: malformed point".into()),
-        _ => None,
-    }
+    substrate_bn::AffineG2::new(x, y)
+        .err()
+        .map(|_| "bn256: malformed point".into())
 }
 /// The error of a precompile run (core/vm/contracts.go) on `input`, for a
 /// top-level call that failed in Rust. None where Go would not fail.
-fn precompile_error(id: u8, input: &[u8]) -> Option<String> {
+pub fn precompile_error(id: u8, input: &[u8]) -> Option<String> {
     let padded = |n: usize| {
         let mut b = input.to_vec();
         b.resize(b.len().max(n), 0);

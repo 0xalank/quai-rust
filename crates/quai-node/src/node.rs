@@ -188,7 +188,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                 }
             }
             None => {
-                crate::bootstrap::run(
+                let bootstrap = crate::bootstrap::run(
                     runtime.handle(),
                     node.clone(),
                     chain.clone(),
@@ -203,7 +203,18 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                     },
                     &stop,
                     log,
-                )?;
+                );
+                if let Err(e) = bootstrap {
+                    // A signal during the bootstrap: nothing was written.
+                    if stop.load(Ordering::Relaxed) {
+                        log.warn("bootstrap stopped by a signal before its checkpoint");
+                        return Ok(match signal.load(Ordering::Relaxed) {
+                            0 => 130,
+                            code => code,
+                        });
+                    }
+                    return Err(e);
+                }
             }
         }
     }

@@ -710,6 +710,8 @@ struct Sched {
     zone_next: u64,
     /// Zone heights below this can be fetched (best peer head less margin, +1).
     zone_end: u64,
+    /// The last zone height the source delivers: no batch starts above it.
+    to: Option<u64>,
     write_pos: u64,
     error: Option<String>,
 }
@@ -724,8 +726,11 @@ impl Sched {
         self.pending.insert((st.need, job));
     }
     fn fill(&mut self) {
+        // A batch is ten blocks, so the one that holds `to` may end above
+        // it: it is fetched when the peers have its last block.
         while self.zone_next + BATCH <= self.zone_end
             && self.zone_next < self.write_pos + WINDOW * BATCH
+            && self.to.is_none_or(|to| self.zone_next <= to)
         {
             let job = Job {
                 ctx: ZONE,
@@ -866,6 +871,8 @@ pub struct Status {
 
 struct Shared {
     sources: Mutex<Vec<Arc<Source>>>,
+    /// Peers whose head is being probed before they become sources.
+    probing: Mutex<HashSet<PeerId>>,
     sched: Mutex<Sched>,
     notify: Notify,
     stop: Arc<AtomicBool>,
@@ -874,7 +881,6 @@ struct Shared {
     margin: u64,
     max_peers: usize,
     inflight: usize,
-    to: Option<u64>,
 }
 impl Shared {
     fn alive(&self) -> Vec<Arc<Source>> {
@@ -896,10 +902,7 @@ impl Shared {
         self.status
             .peers
             .store(self.alive().len(), Ordering::Relaxed);
-        let mut end = best.saturating_sub(self.margin) + 1;
-        if let Some(to) = self.to {
-            end = end.min(to + 1);
-        }
+        let end = best.saturating_sub(self.margin) + 1;
         let mut s = lock(&self.sched);
         if end > s.zone_end {
             s.zone_end = end;
@@ -910,14 +913,22 @@ impl Shared {
     }
     /// Probe a connected peer and start its workers.
     async fn add(self: &Arc<Self>, node: Arc<PublicNode>, peer: PeerId) -> Result<(), String> {
-        if lock(&self.sources).iter().any(|s| s.peer == peer) {
+        // One probe per peer at a time: a peer that connects while it is
+        // being added must not become two sources.
+        if lock(&self.sources).iter().any(|s| s.peer == peer) || !lock(&self.probing).insert(peer)
+        {
             return Err("already a source".into());
         }
-        let mut conn = Conn::new(node.clone(), peer)?;
-        let head = tokio::time::timeout(Duration::from_secs(120), conn.head(self.genesis, 0))
-            .await
-            .map_err(|_| "head probe timed out".to_string())?
-            .map_err(|e| e.to_string())?;
+        let probed = async {
+            let mut conn = Conn::new(node.clone(), peer)?;
+            tokio::time::timeout(Duration::from_secs(120), conn.head(self.genesis, 0))
+                .await
+                .map_err(|_| "head probe timed out".to_string())?
+                .map_err(|e| e.to_string())
+        }
+        .await;
+        lock(&self.probing).remove(&peer);
+        let head = probed?;
         let src = {
             let mut sources = lock(&self.sources);
             if sources
@@ -1132,6 +1143,7 @@ impl PeerSource {
         let start_dom = if o.start == 0 { [0, 0] } else { next_dom };
         let shared = Arc::new(Shared {
             sources: Mutex::new(vec![]),
+            probing: Mutex::new(HashSet::new()),
             sched: Mutex::new(Sched {
                 pending: BTreeSet::new(),
                 state: HashMap::new(),
@@ -1140,6 +1152,7 @@ impl PeerSource {
                 dom_next: [start_dom[0] / BATCH * BATCH, start_dom[1] / BATCH * BATCH],
                 zone_next: o.start / BATCH * BATCH,
                 zone_end: 0,
+                to: o.to,
                 write_pos: o.start,
                 error: None,
             }),
@@ -1150,7 +1163,6 @@ impl PeerSource {
             margin: o.margin,
             max_peers: o.max_peers.max(1),
             inflight: o.inflight.clamp(1, 4),
-            to: o.to,
         });
         runtime.spawn(connect(node.clone(), shared.clone(), o.clone(), log));
         runtime.spawn(assemble(shared, o, tx, log));
@@ -1478,6 +1490,30 @@ async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: cr
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The batch that holds `to` is fetched even when `to` does not end a
+    /// ten-block batch (a source stopped at `to` waited for it forever).
+    #[test]
+    fn the_batch_that_holds_to_is_fetched() {
+        let mut s = Sched {
+            pending: BTreeSet::new(),
+            state: HashMap::new(),
+            zone: BTreeMap::new(),
+            dom: [BTreeMap::new(), BTreeMap::new()],
+            dom_next: [0, 0],
+            zone_next: 0,
+            zone_end: 100,
+            to: Some(37),
+            write_pos: 0,
+            error: None,
+        };
+        s.fill();
+        let starts: Vec<u64> = s.pending.iter().map(|(_, j)| j.start).collect();
+        assert_eq!(starts, vec![0, 10, 20, 30]);
+        // Without `to`, every batch below the fetch limit.
+        s.to = None;
+        s.fill();
+        assert_eq!(s.pending.len(), 10);
+    }
     #[test]
     fn reply_frames_and_numbers() {
         assert_eq!(number_bytes(0), Vec::<u8>::new());

@@ -177,6 +177,19 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        | SecurityHardening | CreateETX intrinsic check (vm/evm.go:752) | etx.rs:94 | none: one zone has no eligible ETX destination | equal by reading |
        | Polaris p 2,444,574 | PoW identity dedupe (hcv:254), suicide transaction (state_transition.go:468), founder forfeiture (gen_allocs.go:27) | validation.rs:500; settlement.rs:255; historical.rs:68 | polaris, settlement, historical (both) | equal |
        | Polaris | Qi output address must be 20 bytes; before it longer ones pass (sp:1999) | qi_settlement.rs:156 stops `Unsupported` | none | gap: needs a variable-length UTXO address (Go keeps all bytes in the UTXO and its hash, crops ETX recipients to the last 20, gas to the first 20) |
+       Found by the RPC call work (branch `rpc-calls`, Go probes; consensus
+       code, not changed there):
+       - A creation transaction does not get the precompiles in its
+         access list (`calls::creation_with_env`); go-quai's
+         `PrepareAccessList` adds them to every message. Init code that
+         calls a precompile that the access list does not name fails in
+         Rust with "invalid access list" and uses all its gas; Go deploys
+         the contract (probe: 101,073 gas; `results/rpc-calls/probes/`).
+       - `evm::precompile::translate` maps only the zone prefix or 0x00 to
+         a precompile; go-quai maps any first byte (findings below). A
+         transaction to another zone's `0x…0N` (N 1 to 9) runs this zone's
+         precompile in Go and sends an ETX in Rust (12 vectors in
+         `fixtures/protocol/rpc-calls.json`).
 5. [x] Remove the EVM limits that Go does not have, so that only gas limits
        execution (`130b106`). Removed: steps per frame, EVM memory, logs per
        transaction, call input, access-list size, the 1,000,000-entry undo
@@ -295,17 +308,36 @@ Gate: Quais.js and Pelagus work against the Rust node.
        Go export and checkpoint 27,406: 617/625 fixture answers equal to Go,
        8 documented differences, 0 failed; 1,000 random heights 4,770/4,770
        equal (`scripts/compare_native_rpc.py`).
-       Left: filters (`newFilter`, `getFilterChanges` and the others),
-       WebSocket subscriptions and `quai_gasPrice` need the live head
-       (Phase 2.3); `sendRawTransaction` and the pending nonce need step 2.
-       go-quai runs calls with access-list checks off (`vm.Config{Debug:
-       true}`); `quai_execution` has no such mode, so a call that touches an
-       unlisted account or slot pays cold gas or fails with "invalid access
-       list" in Rust, and `quai_estimateGas` refuses contract calls without
-       an access list (it needs an access-list tracer). Not served: Qi and
-       conversion estimates, `quai_getLockedBalance`, `quai_getProof`, the
-       `eth_` namespace. A peer export has no receipts: receipts are `null`
-       and logs an error.
+       Calls done (`9e6f953`, `a1c55f3`, `4d918e1`, `b6a8e10`, `8d9bba4`):
+       go-quai runs `quai_call`, `quai_estimateGas` and
+       `quai_createAccessList` with `vm.Config{Debug: true}`, which turns
+       access-list checks off.
+       `quai_execution::evm::message` runs a message that way, with Go's
+       access-list tracer and Go's error texts (stack and opcode operands,
+       address scope, CreateETX, grinding, precompiles); consensus
+       execution never enables it. `quai_estimateGas` first builds the
+       access list of a contract call, as Go does. New methods (32 now):
+       `quai_createAccessList`, and `quai_gasPrice`
+       (`CalcBaseFee(head) * 120 / 100`; `ChainView::calc_base_fee` has a
+       default over consensus code). Go oracle
+       (`scripts/gen_rpc_call_vectors.py`: production quaiapi handlers and
+       JSON-RPC server; `fixtures/protocol/rpc-calls.json`,
+       `crates/quai-node/tests/rpc_calls.rs`): 392/404 equal, 12
+       documented. Live, checkpoint 27,406
+       (`fixtures/native-rpc/calls-0-27406.json`: transfers, new
+       accounts, the nine precompiles, access lists, gas edges): 111/111
+       equal; the base fee of all 27,406 real blocks equals the next
+       header's (`examples/check-base-fee.rs`).
+       Remaining differences: lockup-contract errors ("lockup error" where
+       Go names the reason); the pointers that Go prints in "failed to
+       apply transaction" (Rust prints 0xc000000000); a call to another
+       zone's form of a precompile (step 1.4 note).
+       Left: filters (`newFilter`, `getFilterChanges` and the others) and
+       WebSocket subscriptions need the live head (Phase 2.3);
+       `sendRawTransaction` and the pending nonce need step 2. Not served:
+       Qi and conversion estimates, `quai_getLockedBalance`,
+       `quai_getProof`, the `eth_` namespace. A peer export has no
+       receipts: receipts are `null` and logs an error.
 2. [ ] Tx pool and `sendRawTransaction`.
 3. [ ] Fuzz every decoder. Remove `.unwrap()` from code that reads peer data
        (457 calls in non-test code on 2026-11-17).
@@ -366,6 +398,10 @@ Mining, block templates and Stratum come last.
 
 ## Findings in go-quai v0.57.0
 
+- `core/vm/evm.go:55-68` `EVM.precompile`: when an address is not a
+  precompile, Go puts the zone prefix in its first byte and looks again. A
+  call to another zone's `0x…0N` (N 1 to 9, the other bytes zero) therefore
+  runs this zone's precompile N and sends no ETX.
 - `p2p/protocol/handler.go:49-92` `ProcRequestRate`: the per-peer request
   rate limit never triggers. `tracker` is a copy of the map value and is never
   written back; the average on line 67 misses the division by 100 for its first
@@ -407,3 +443,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 3.1 | Native RPC on replayed state (`b69422e`, `4b2cb40`, `1c6ef5a`, and the commit of this row): `ChainView`, `--mode native` (30 read methods, go-quai JSON and errors), `quai-node rpc`. Replay of the Go export 0-27,406 with `--state` PASS (1,358 s) as the view's state. Live against go-quai v0.57.0: fixture 617/625 equal, 8 documented differences, 0 failed; the 600 equal vectors asked again live 600/600; 1,000 random heights 4,770/4,770. Offline zone 0-8 test 253/253. 358/358 workspace tests in 67 suites (23.6 min), fmt clean, clippy without errors. Merge `417f48e`; coordinator rerun on merged main: 358/358 workspace in 67 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1.4, 1.6 | Prime controllers after ControllerKickInBlock ported (`4bf54f9`); Go oracle prime-transition (`bb66950`): 73 linked blocks, 584 + 124 Go-rejected changes, 146 Go-accepted, all equal. Mainnet replay of the branch binary `d207b70` from checkpoint 686,009: PASS to zone 1,250,000 (end of `peer-export-1250k`; kick-in at zone 1,223,601, first conversions at 1,223,711, first feedback rate at prime 266,001), every root equal, 38.8 blocks/s. Merge `c466449`; coordinator rerun on merged main: 361/361 workspace in 68 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1 | Two runs with the merged binary `c466449` (sha256 `db24ef65…`): `scripts/mainnet/rolling_replay.sh` continues from checkpoint 1,250,000 toward the head (`replay-public`, log `logs/rolling.log`); a single-binary replay from genesis on a clone of `peer-export-1250k` (`replay-genesis-c466449`) checks today's execution changes on zone 0–1,250,000 |
+| 2026-11-18 | Phase 3.1 | Calls in go-quai's debug mode (`9e6f953`, `a1c55f3`, `4d918e1`, `b6a8e10`, `8d9bba4`, and the commit of this row): no access-list checks, Go's access-list tracer and error texts; `quai_estimateGas` builds the access list of contract calls; new `quai_createAccessList` and `quai_gasPrice`. Go oracle (production quaiapi handlers): 392/404 equal, 12 documented (another zone's precompile). Live, checkpoint 27,406: call fixture 111/111, existing fixture 617/625 with 8 documented (as before), 300 random heights 1,320/1,320; `calc_base_fee` of 27,406 real blocks equal to the next header's base fee. Replay 0-27,406 with `--state` from genesis PASS (4,722 s). 367/367 tests in 69 suites (`cargo test --release --locked --workspace` 366/366, 56 min; the new offline gas-price test 1/1 in a release rerun of its suite), fmt clean, clippy without errors. Found two consensus differences (step 1.4 note) |

@@ -14,8 +14,8 @@ is marked fully ported. The RPC executable continues to serve frozen imported re
 bounded nested execution, signed Quai/Qi settlement, UTXO/MuHash commitments,
 16 linked early private whole-block execution differentials with reward payouts
 and complete local state images, durable scratch checkpoints and optional private libp2p transport. Full block consensus, complete
-historical economic state and global canonical native sync remain open. The fixed early private profile now qualifies native canonical publication and loopback raw-block acquisition; see NATIVE_CANONICAL_RESULTS.md.
-[Stateful results](NATIVE_STATEFUL_RESULTS.md) record the exact scope.
+historical economic state and global canonical native sync remain open. The fixed early private profile now qualifies native canonical publication and loopback raw-block acquisition; see docs/history/NATIVE_CANONICAL_RESULTS.md.
+[Stateful results](docs/history/NATIVE_STATEFUL_RESULTS.md) record the exact scope.
 
 The published v0.57.0 release matches the pinned official source
 reference, verified against the release page on 2026-11-13. The five local
@@ -50,10 +50,10 @@ VERSION label. [Official release](https://github.com/dominant-strategies/go-quai
 | [Gossip topics, workshares, blocks and auxiliary templates](../go-quai/p2p/node/pubsubManager/gossipsub.go) | partial | 2 / 4 | Optional signed strict GossipSub with manual validation before forwarding. Three-peer test proves messages wait for acceptance and rejected payloads are withheld. Full chain-data admission and production scoring/resource qualification remain open. |
 | [Native chain acquisition and synchronization](../go-quai/quai/handler.go) | partial | 4 / 3 | Reusable private_sync and an optional private-node runner acquire raw zone/context objects over actual loopback Noise/Yamux, verify ID/location/type/hash and native work/order/ancestry, then import through sealed native private admission. Independent Rust OS processes qualify the early profile, one native fork reorg, receiver/source restarts, SIGKILL recovery and cancellation with exact Go roots/head. Persistent checksummed peer identities retain enrollment across restarts. Known heads need no peer connection. Broader forks, mixed transactions, global coordinator, production peer scheduling and automatic head following remain open. |
 | [JSON-RPC transport, IDs, errors and limits](../go-quai/rpc/server.go) | partial | 15 / 5 | Native HTTP JSON-RPC subset with IDs, notifications, batches, limits and backpressure. |
-| [Node RPC methods and filters](../go-quai/internal/quaiapi/backend.go) | partial | 11 / 6 | Eight frozen-view read methods; live state/calls/estimates/submission are unavailable. The official v0.57.0 Polaris update is now the source baseline; implementation scope and remaining gaps are recorded in NATIVE_UPSTREAM_RESULTS.md. |
+| [Node RPC methods and filters](../go-quai/internal/quaiapi/backend.go) | partial | 11 / 6 | Eight frozen-view read methods; live state/calls/estimates/submission are unavailable. The official v0.57.0 Polaris update is now the source baseline; implementation scope and remaining gaps are recorded in docs/history/NATIVE_UPSTREAM_RESULTS.md. |
 | [Client/ABI libraries and wallet integration](../go-quai/interfaces.go) | deferred | 15 / 9 | Pinned Quais.js read acceptance exists; no Rust client/ABI library or complete wallet flow. |
 | [Node daemon, CLI, config and lifecycle](../go-quai/node/node.go) | partial | 23 / 8 | Default binaries remain a frozen-view read-only RPC service and bounded protocol checker. An optional separately packaged private-node runner composes early-profile native admission/selected state with actual peer acquisition in independent OS processes. It has persistent checksummed peer identity, bounded local JSON control, one acquisition/import worker, cancellation between atomic block commits and clean shutdown. It requires an explicit source address and announced head. A complete production validating daemon, global protocol replay, public target and live state RPC remain open. |
-| [Block/workshare construction, mining RPC and Stratum](../go-quai/core/worker.go) | deferred | 7 / 5 | No native block producer or Stratum server. The official v0.57.0 Polaris update is now the source baseline; implementation scope and remaining gaps are recorded in NATIVE_UPSTREAM_RESULTS.md. |
+| [Block/workshare construction, mining RPC and Stratum](../go-quai/core/worker.go) | deferred | 7 / 5 | No native block producer or Stratum server. The official v0.57.0 Polaris update is now the source baseline; implementation scope and remaining gaps are recorded in docs/history/NATIVE_UPSTREAM_RESULTS.md. |
 | [Other cryptographic primitives and precompile backends](../go-quai/crypto/crypto.go) | partial | 16 / 6 | Native ECDSA recovery, SHA256/RIPEMD160/identity, modular exponentiation, BN254 add/mul/pairing and Blake2F precompile backends plus exact MuHash3072 hashing. Complete protocol/domain and whole-client parity remain open. |
 | [Native event feeds and canonical notifications](../go-quai/event/feed.go) | missing | 4 / 7 | No committed-chain event/subscription system. |
 | [Metrics, logs, statistics and operations](../go-quai/metrics_config/metrics.go) | partial | 9 / 1 | Basic frozen-service health counters and benchmark instrumentation. |
@@ -72,76 +72,76 @@ libp2p transport exists; its existence does not qualify full native sync.
 The current evidence is 281 Rust tests and
 6,979 bounded protocol comparisons, plus
 70 frozen RPC and 16 SDK cases.
-There are also 0 native execution-helper/live-ETX-state
-comparisons and 0 bounded VM/state-gas
-comparisons. [VM results](NATIVE_EVM_RESULTS.md) and [foundation results](NATIVE_FOUNDATION_RESULTS.md)
-distinguish their scopes. There are also 0
-consensus kernel/rule comparisons; [consensus results](NATIVE_CONSENSUS_RESULTS.md)
+There are also 7,490 native execution-helper/live-ETX-state
+comparisons and 37,747 bounded VM/state-gas
+comparisons. [VM results](docs/history/NATIVE_EVM_RESULTS.md) and [foundation results](docs/history/NATIVE_FOUNDATION_RESULTS.md)
+distinguish their scopes. There are also 6,461
+consensus kernel/rule comparisons; [consensus results](docs/history/NATIVE_CONSENSUS_RESULTS.md)
 list the remaining full-admission gates. Signed auxiliary verification adds
-0 comparisons; [auxiliary results](NATIVE_AUXILIARY_RESULTS.md)
+6,503 comparisons; [auxiliary results](docs/history/NATIVE_AUXILIARY_RESULTS.md)
 record those bounded domains. Candidate ancestry and inclusion add
-0 comparisons; [history results](NATIVE_HISTORY_RESULTS.md)
+2,115 comparisons; [history results](docs/history/NATIVE_HISTORY_RESULTS.md)
 separate controlled-hash policy from native signed KAWPOW cases. Imported history
 remains unverified. Bounded zone header/conversion policy adds
-0 comparisons; [header results](NATIVE_HEADER_RESULTS.md)
+6,319 comparisons; [header results](docs/history/NATIVE_HEADER_RESULTS.md)
 separate parent policy, candidate proofs and economic replay. Prime/region header
-policy adds 0 comparisons;
-[hierarchy results](NATIVE_HIERARCHY_RESULTS.md) record the wrapping/bitmap rules,
+policy adds 5,876 comparisons;
+[hierarchy results](docs/history/NATIVE_HIERARCHY_RESULTS.md) record the wrapping/bitmap rules,
 actual native proof fixtures and remaining canonical/hierarchy-placement gates.
-Bounded candidate append preparation adds 0
-comparisons; [placement results](NATIVE_PLACEMENT_RESULTS.md) distinguish computed
+Bounded candidate append preparation adds 5,478
+comparisons; [placement results](docs/history/NATIVE_PLACEMENT_RESULTS.md) distinguish computed
 order/routing, local parent manifest/interlink commitments and PCRC candidate
 transitions from canonical branch admission. Full placement qualification,
 complete expansion/genesis state initialization, economic replay and fork choice remain open.
 Canonical genesis/geometry/difficulty and multi-block candidate branch storage add
-0 comparisons; [genesis results](NATIVE_GENESIS_RESULTS.md)
+2,526 comparisons; [genesis results](docs/history/NATIVE_GENESIS_RESULTS.md)
 separate payload construction and in-memory branch isolation from allocation
 replay, durable canonical state and fork choice. Expanded-genesis startup,
-local PoEM scores and coordinator projections add 0
-comparisons; [frontier results](NATIVE_FRONTIER_RESULTS.md) document explicit
+local PoEM scores and coordinator projections add 9,988
+comparisons; [frontier results](docs/history/NATIVE_FRONTIER_RESULTS.md) document explicit
 legacy location-name aliasing and the open global coordinator/fork-choice gates.
 Bounded multi-context ancestry, constraint tracing and PCRC frontier gates add
-0 comparisons;
-[eligibility results](NATIVE_ELIGIBILITY_RESULTS.md) separate six native coincident
+14,328 comparisons;
+[eligibility results](docs/history/NATIVE_ELIGIBILITY_RESULTS.md) separate six native coincident
 blocks from controlled policy projections. Coordinator runtime integration,
 economic replay and canonical fork choice remain open.
 Recent admission, exact pinned-Go ordering, bounded leader search/retries and
-pending-frontier reapplication add 0
-comparisons; [coordinator results](NATIVE_COORDINATOR_RESULTS.md) distinguish
+pending-frontier reapplication add 42,731
+comparisons; [coordinator results](docs/history/NATIVE_COORDINATOR_RESULTS.md) distinguish
 controlled projections from native-proof cases and open generation/runtime gates.
-Polaris fork-boundary evidence adds 0
-comparisons; [upstream migration results](NATIVE_UPSTREAM_RESULTS.md) distinguish
+Polaris fork-boundary evidence adds 198
+comparisons; [upstream migration results](docs/history/NATIVE_UPSTREAM_RESULTS.md) distinguish
 ported binding/identity/Qi-input checks from unimplemented economic and network
 changes. Fee feedback/reward-depth arithmetic and 16 linked early whole-block
-execution replays add 0 checks;
-[NATIVE_CONSENSUS_RESULTS.md](NATIVE_CONSENSUS_RESULTS.md) distinguishes controlled
+execution replays add 1,686 checks;
+[docs/history/NATIVE_CONSENSUS_RESULTS.md](docs/history/NATIVE_CONSENSUS_RESULTS.md) distinguishes controlled
 work projections, real native proof kernels and trusted local state-image
 restoration from complete hierarchy/admission and canonical durability/sync.
 Two private execution branches add 289
 state/receipt/history recovery and branch-switch comparisons;
-[durable results](NATIVE_DURABLE_RESULTS.md) separate explicit private selection
+[durable results](docs/history/NATIVE_DURABLE_RESULTS.md) separate explicit private selection
 from PoEM canonical publication and production storage. A distinct local-zone
 profile adds 284 real-Go matched
 header/body/manifest/PCRC and execution checks, including valid-work mutations.
-[Local admission results](NATIVE_ADMISSION_RESULTS.md) preserve its pre-transaction,
+[Local admission results](docs/history/NATIVE_ADMISSION_RESULTS.md) preserve its pre-transaction,
 non-dominant boundary. A separate early mixed-order profile adds
 430 comparisons for native
 prime/region/zone append, committed rollups, derived incoming coinbases and durable
-context witnesses. [Confirmation results](NATIVE_CONFIRMATION_RESULTS.md) retain
+context witnesses. [Confirmation results](docs/history/NATIVE_CONFIRMATION_RESULTS.md) retain
 its original single-zone/no-workshare boundary. A further strong-uncle corpus adds
 505 comparisons for full-target
 ProgPoW inclusion, integer entropy, payouts and confirmed incoming coinbases.
-[Uncle results](NATIVE_UNCLES_RESULTS.md) retain their original strong-only scope. The current weak-share increment adds
+[Uncle results](docs/history/NATIVE_UNCLES_RESULTS.md) retain their original strong-only scope. The current weak-share increment adds
 6,637 checks: controlled binary-precision
 arithmetic plus native strong/weak share, PoEM, reward and branch execution.
-[Weak-share results](NATIVE_WEAKSHARES_RESULTS.md) distinguish bounded score
+[Weak-share results](docs/history/NATIVE_WEAKSHARES_RESULTS.md) distinguish bounded score
 components from full canonical fork choice and retain remaining fork/sync gates.
-Conditional activated coverage adds 0
-local blocks and 0 distinct
+Conditional activated coverage adds 4
+local blocks and 24 distinct
 coincident zone blocks. The coincident suite has
-0 checks and
-0 valid-work mutations.
-[Activated hierarchy results](NATIVE_COINCIDENT_RESULTS.md) separate supplied-checkpoint
+4,068 checks and
+246 valid-work mutations.
+[Activated hierarchy results](docs/history/NATIVE_COINCIDENT_RESULTS.md) separate supplied-checkpoint
 execution and branch recovery from authenticated ancestry and canonical admission.
 These blocks do not extend the 24-block genesis-linked early canonical corpus.
 
@@ -150,7 +150,7 @@ The experimental genesis-only runtime qualifies
 122,930 replay/reopen assertions and
 8,192 separately acquired blocks across
 64 bounded forward windows.
-[Genesis/sync results](NATIVE_GENESIS_SYNC_RESULTS.md) preserve the separate runtime
+[Genesis/sync results](docs/history/NATIVE_GENESIS_SYNC_RESULTS.md) preserve the separate runtime
 fingerprint, exact-executable replay-evidence reuse, fresh process checks and unqualified
 transaction-activation boundary. These figures do not promote the public network gates.
 
@@ -168,7 +168,7 @@ Refresh or detect drift without contacting a network:
     python3 scripts/refresh_porting_map.py --go-quai ../go-quai --check
     python3 scripts/check_network_plan.py
 
-The [incremental state database](NATIVE_STATE_DB_RESULTS.md) qualifies secure trie mutations, durable fork versions and pinned reads against actual Go. The [native private canonical path](NATIVE_CANONICAL_DB_RESULTS.md) now uses it for keyed execution state; bounded map materialization, ancestry/catalog limits, production indexes and global replay remain open.
+The [incremental state database](docs/history/NATIVE_STATE_DB_RESULTS.md) qualifies secure trie mutations, durable fork versions and pinned reads against actual Go. The [native private canonical path](docs/history/NATIVE_CANONICAL_DB_RESULTS.md) now uses it for keyed execution state; bounded map materialization, ancestry/catalog limits, production indexes and global replay remain open.
 
 The generator rejects unclassified paths, missing references, changed native
 source versus build evidence and a different/dirty pinned Go baseline. Review

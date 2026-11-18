@@ -1095,8 +1095,8 @@ impl Pool {
                 while pending > self.config.global_slots
                     && len(self, &offenders[offenders.len() - 2]) > threshold
                 {
-                    for i in 0..offenders.len() - 1 {
-                        self.drop_last_pending(offenders[i]);
+                    for addr in offenders.iter().take(offenders.len() - 1) {
+                        self.drop_last_pending(*addr);
                         pending -= 1;
                     }
                 }
@@ -1106,8 +1106,8 @@ impl Pool {
             while pending > self.config.global_slots
                 && len(self, &offenders[offenders.len() - 1]) as u64 > account_slots
             {
-                for i in 0..offenders.len() {
-                    self.drop_last_pending(offenders[i]);
+                for addr in &offenders {
+                    self.drop_last_pending(*addr);
                     pending -= 1;
                 }
             }

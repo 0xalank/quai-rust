@@ -397,12 +397,7 @@ fn snapshot(svc: &Service, want: &Value) -> Value {
 
 fn config(c: &Value, endpoints: Vec<String>) -> Config {
     Config {
-        locals: c["locals"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|a| fixed(a))
-            .collect(),
+        locals: c["locals"].as_array().unwrap().iter().map(fixed).collect(),
         no_locals: c["no_locals"].as_bool().unwrap(),
         sync_tx_with_return: c["sync_tx_with_return"].as_bool().unwrap(),
         price_limit: c["price_limit"].as_u64().unwrap(),
@@ -575,7 +570,6 @@ fn replay(s: &Value, rt: &tokio::runtime::Runtime, tally: &mut Tally, failures: 
                 }
             }
             let key = |v: &Value| (v["client"].to_string(), v["body"].to_string());
-            let mut got = got;
             let mut want = want.clone();
             got.sort_by_key(key);
             want.sort_by_key(key);

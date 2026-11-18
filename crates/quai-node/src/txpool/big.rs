@@ -81,8 +81,8 @@ pub fn sub(a: &[u8], b: &[u8]) -> Vec<u8> {
     let (x, y) = (limbs(a), limbs(b));
     let mut out = Vec::with_capacity(x.len());
     let mut borrow = 0i64;
-    for i in 0..x.len() {
-        let mut d = x[i] as i64 - *y.get(i).unwrap_or(&0) as i64 - borrow;
+    for (i, xi) in x.iter().enumerate() {
+        let mut d = *xi as i64 - *y.get(i).unwrap_or(&0) as i64 - borrow;
         borrow = 0;
         if d < 0 {
             d += 1 << 32;

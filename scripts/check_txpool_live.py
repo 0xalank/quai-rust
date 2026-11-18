@@ -46,7 +46,7 @@ for n in range(head, max(head - 2000, 0), -1):
     b = call('quai_getBlockByNumber', [hex(n), False])['result']
     cb = b['woHeader']['primaryCoinbase']
     if int(cb[4:6], 16) >= 0x80:
-        for o in call('quai_getOutpointsByAddress', [cb, 'latest']).get('result') or []:
+        for o in call('quai_getOutpointsByAddress', [cb]).get('result') or []:
             utxos.append({'hash': o['txHash'], 'index': int(o['index'], 16),
                           'denomination': int(o['denomination'], 16), 'address': cb.lower(),
                           'lock': o.get('lock') or '0x'})

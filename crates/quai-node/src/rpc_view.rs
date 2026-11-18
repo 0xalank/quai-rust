@@ -1429,7 +1429,7 @@ impl ExportView {
 /// heads it has seen (1,024).
 pub struct ViewChain {
     view: ExportView,
-    seen: Mutex<(HashMap<Hash, Arc<BlockData>>, VecDeque<Hash>)>,
+    seen: Mutex<Lru<Arc<BlockData>>>,
     last: Mutex<Option<Arc<BlockData>>>,
 }
 const SEEN_HEADS: usize = 1024;

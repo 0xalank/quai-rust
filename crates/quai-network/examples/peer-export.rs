@@ -1999,9 +1999,11 @@ async fn run_export(args: Args) -> Res<()> {
     }
     let resume_at = export.next_zone();
     let tips = export.checker.last;
+    let pruned = export.segments.iter().filter(|s| s.pruned).count();
     emit(
         json!({"event":"start","out":args.out.display().to_string(),"resume_at":resume_at,
-        "kept_segments":export.segments.len(),"local":args.local,"public":args.public,
+        "kept_segments":export.segments.len() - pruned,"pruned_segments":pruned,
+        "local":args.local,"public":args.public,
         "inflight":args.inflight,"margin":args.margin,"max_peers":args.max_peers}),
     );
     let sched = Arc::new(Mutex::new(Sched {

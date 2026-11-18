@@ -623,9 +623,16 @@ fn workshare(
     stats: &mut TipStats,
     log: &Log,
 ) {
+    // A share view carries the work object header (and transactions), not a
+    // body header: decode the header as go-quai's gossip validator does.
     let schedule = quai_consensus::verifier::PINNED_SCHEDULE;
-    let header = match quai_primitives::work::WorkObject::decode_auxiliary(raw, schedule)
-        .and_then(|o| o.auxiliary_work_header(schedule))
+    let header = match quai_primitives::schema::block::ProtoWorkObject::decode(raw)
+        .map_err(|e| e.to_string())
+        .and_then(|wo| {
+            wo.wo_header
+                .ok_or_else(|| "no work object header".to_string())
+        })
+        .and_then(|h| quai_primitives::Header::decode_auxiliary(&h.encode_to_vec(), schedule))
     {
         Ok(h) => h,
         Err(e) => {

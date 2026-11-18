@@ -182,6 +182,18 @@ pub fn execute_call_with_env(
     gas: u64,
     environment: &Environment,
 ) -> Result<Outcome, CapabilityError> {
+    super::with_call_stack(world, |world| {
+        call_with_env(world, context, access, input, gas, environment)
+    })
+}
+fn call_with_env(
+    world: &mut World,
+    context: &Context,
+    access: &[AccessTuple],
+    input: &[u8],
+    gas: u64,
+    environment: &Environment,
+) -> Result<Outcome, CapabilityError> {
     if !local(&context.caller, context.location) {
         return Err(CapabilityError::Context("local Quai call required"));
     }
@@ -419,6 +431,18 @@ pub(crate) fn create(
 /// Top-level CREATE keeps the creator nonce on EVM failures, matching the
 /// transaction/frame boundary in Go; capability failures commit nothing.
 pub fn execute_creation_with_env(
+    world: &mut World,
+    context: &Context,
+    access: &[AccessTuple],
+    code: &[u8],
+    gas: u64,
+    environment: &Environment,
+) -> Result<(Outcome, Option<Address>), CapabilityError> {
+    super::with_call_stack(world, |world| {
+        creation_with_env(world, context, access, code, gas, environment)
+    })
+}
+fn creation_with_env(
     world: &mut World,
     context: &Context,
     access: &[AccessTuple],

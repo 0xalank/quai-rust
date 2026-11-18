@@ -7,7 +7,7 @@ p=argparse.ArgumentParser();p.add_argument('--go-quai',required=True);m=p.add_mu
 source=ROOT/'reference/settlement/main.go';env={**os.environ,'GOPROXY':'off','GOTOOLCHAIN':'local'}
 with tempfile.TemporaryDirectory(prefix='quai-settlement-')as directory:
  d=Path(directory);overlay=d/'overlay.json';binary=d/'oracle';original=(go/'core/state_processor.go').read_text();needle='result, err := ApplyMessage(evm, msg, gp)';assert original.count(needle)==1;instrumented=d/'state_processor.go';instrumented.write_text(original.replace(needle,needle+'\n NativeSettlementLast = result'));overlay.write_text(json.dumps({'Replace':{str(go/'cmd/quai-settlement-vectors/main.go'):str(source),str(go/'core/native_settlement_vectors.go'):str(ROOT/'reference/settlement/core-export.go'),str(go/'core/state_processor.go'):str(instrumented)}}));subprocess.run(['go','build','-overlay',str(overlay),'-ldflags','-X main.referenceRevision='+PIN,'-o',str(binary),'./cmd/quai-settlement-vectors'],cwd=go,env=env,check=True);v=json.loads(subprocess.check_output([str(binary)],cwd=d,env=env))
-assert v['reference_revision']==PIN and len(v['vectors'])==196
+assert v['reference_revision']==PIN and len(v['vectors'])==197
 path=ROOT/'fixtures/protocol/settlement.json';encoded=(json.dumps(v,sort_keys=True,indent=2)+'\n').encode()
 if a.write:path.write_bytes(encoded)
 elif path.read_bytes()!=encoded:raise SystemExit('Settlement corpus differs')

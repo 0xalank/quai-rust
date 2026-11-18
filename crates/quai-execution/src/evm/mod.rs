@@ -1166,6 +1166,48 @@ pub fn execute_frame(
     }
     Ok(outcome)
 }
+/// Call frames that a transaction runs on its caller's thread. go-quai allows
+/// 1,025 nested frames (`params.CallCreateDepth`) and grows goroutine stacks
+/// on demand. A Rust thread has a fixed stack (2 MiB for a spawned thread,
+/// 8 MiB for a main thread). One frame takes about 6 KiB in release builds and
+/// up to 52 KiB in debug builds, and 50,000,000 gas reaches about 700 frames.
+const CALLER_STACK_FRAMES: usize = if cfg!(debug_assertions) { 16 } else { 64 };
+/// Stack of the thread that runs a deeper transaction: 1,025 debug frames fit.
+const DEEP_STACK_BYTES: usize = 128 << 20;
+const DEEP_CALLS: &str = "call chain deeper than the caller stack";
+thread_local! {
+    static ON_DEEP_STACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+/// Run one transaction against `world`. A call chain that grows past
+/// `CALLER_STACK_FRAMES` stops in `run_code` before any change reaches
+/// `world`: transactions work on a journal over a clone and write `world` only
+/// at their end. The transaction then runs again from the start on a thread
+/// whose stack holds every frame. Execution is deterministic, so the result
+/// equals one run on a large enough stack.
+pub(crate) fn with_call_stack<T: Send>(
+    world: &mut World,
+    run: impl Fn(&mut World) -> Result<T, CapabilityError> + Sync,
+) -> Result<T, CapabilityError> {
+    match run(world) {
+        Err(CapabilityError::StateUnavailable(message)) if message == DEEP_CALLS => {
+            std::thread::scope(|scope| {
+                let deep = std::thread::Builder::new()
+                    .name("quai-evm-deep".into())
+                    .stack_size(DEEP_STACK_BYTES)
+                    .spawn_scoped(scope, || {
+                        ON_DEEP_STACK.with(|on| on.set(true));
+                        run(world)
+                    })
+                    .map_err(|error| {
+                        CapabilityError::StateUnavailable(format!("EVM stack thread: {error}"))
+                    })?;
+                deep.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            })
+        }
+        other => other,
+    }
+}
 pub(crate) fn run_code(
     state: &mut Journal,
     context: &Context,
@@ -1174,6 +1216,9 @@ pub(crate) fn run_code(
     code: Vec<u8>,
     depth: usize,
 ) -> Result<Outcome, CapabilityError> {
+    if depth >= CALLER_STACK_FRAMES && !ON_DEEP_STACK.with(|on| on.get()) {
+        return Err(CapabilityError::StateUnavailable(DEEP_CALLS.into()));
+    }
     let initial_size = state
         .world()
         .account(&context.address)?

@@ -376,3 +376,41 @@ fn mainnet_slice_state_roots_match_go() {
     assert_eq!(s.highest_passed, Some(8));
     assert_eq!(s.state_blocks, Some(8));
 }
+
+#[test]
+fn mainnet_slice_prepares_through_the_hierarchy_with_the_colosseum_spec() {
+    // The shared hierarchy (confirmation::Hierarchy) prepares and commits the
+    // real mainnet heights 1..=8 with the colosseum spec: no private
+    // qualification scope applies, and the orders match the exported records.
+    use quai_consensus::{
+        chain::Chain, confirmation::Hierarchy, history::Record, verifier::Verifier,
+    };
+    use quai_node::qex::{ExportReader, Manifest};
+    let src = mainnet_slice();
+    let manifest = Manifest::load(&src).unwrap();
+    let mut reader = ExportReader::new(&src, manifest, None);
+    let chain = Chain::colosseum().unwrap();
+    let mut graph = Hierarchy::for_chain(chain.clone()).unwrap();
+    let mut verifier = Verifier::default();
+    let now = 1_800_000_000;
+    let mut orders = vec![];
+    while let Some(h) = reader.next_height().unwrap() {
+        if h.zone_height == 0 {
+            assert_eq!(h.zone().hash, chain.genesis_hash());
+            continue;
+        }
+        let zone = Record::decode(&h.zone().block).unwrap();
+        let views: Vec<(u8, Vec<u8>)> = h.records[..2]
+            .iter()
+            .flatten()
+            .map(|r| (r.context.index() as u8, r.block.clone()))
+            .collect();
+        let prepared = graph.prepare(&mut verifier, &zone, &views, now).unwrap();
+        assert_eq!(prepared.context_components(), 3 - prepared.order() as usize);
+        orders.push(prepared.order());
+        graph.commit(prepared).unwrap();
+        assert_eq!(graph.heads()[2], zone.id());
+    }
+    assert_eq!(orders.len(), 8);
+    assert_eq!(orders.iter().filter(|o| **o == 0).count(), 2);
+}

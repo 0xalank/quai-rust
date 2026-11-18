@@ -9,14 +9,13 @@ use crate::{
     share_rules, Error,
 };
 use crypto_bigint::{Encoding, U512};
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     transaction::{External, Kind, Transaction},
     Hash,
 };
-const MAX_ETXS: usize = 8192;
-const MAX_ETX_BYTES: usize = 32 << 20;
-const SLIP_CHANGE: u64 = 285_000;
-const BLOCKS_PER_YEAR: u64 = 365 * 17_280;
+/// params.BlocksPerYear.
+const BLOCKS_PER_YEAR: u64 = quai_primitives::spec::BLOCKS_PER_YEAR;
 fn u(n: u64) -> Uint {
     Uint::from_u64(n)
 }
@@ -92,18 +91,6 @@ fn conversions_impl(
     old_exchange: Option<Uint>,
     retain_pricing: bool,
 ) -> Result<Converted, Error> {
-    if inbound.len() > MAX_ETXS {
-        return Err(Error::ResourceLimit("prime conversion ETXs"));
-    }
-    let mut encoded_total = 0usize;
-    for tx in inbound {
-        encoded_total = encoded_total
-            .checked_add(tx.encode().len())
-            .ok_or(Error::ResourceLimit("prime conversion encoded bytes"))?;
-        if encoded_total > MAX_ETX_BYTES {
-            return Err(Error::ResourceLimit("prime conversion encoded bytes"));
-        }
-    }
     let number = parent.number(0)?;
     let h = parent.object().header().wire();
     let exchange = share_rules::uint(h.exchange_rate.as_deref().unwrap())?;
@@ -125,7 +112,7 @@ fn conversions_impl(
     let to_quai = |n| ratio(n, quote.conversion_quai, quote.qi);
     let to_qi = |n| ratio(n, quote.qi, quote.conversion_quai);
     let cubic = |amount| {
-        if number > SLIP_CHANGE {
+        if number > quai_primitives::spec::FORKS.conversion_slip_change {
             cubic_discount::apply(
                 amount,
                 share_rules::uint(h.conversion_flow_amount.as_deref().unwrap())?,
@@ -298,7 +285,7 @@ pub fn prepare_component(
     parent.verify_binding()?;
     grandparent.verify_binding()?;
     let number = parent.number(0)?;
-    if number < controllers::KICK_IN {
+    if number < FORKS.controller_kick_in {
         return Err(Error::Unsupported("prime controller before activation"));
     }
     if parent.parents[0] != grandparent.id()

@@ -25,6 +25,7 @@
 //!
 //! `MAX_TRACE_BYTES` applies only when `Context::trace` is set. Consensus
 //! callers always clear it, so it cannot change a block result.
+use quai_primitives::spec::FORKS;
 pub mod calls;
 pub mod etx;
 pub mod journal;
@@ -42,7 +43,6 @@ use quai_primitives::{
 use state::World;
 use std::collections::BTreeSet;
 use word::{boolean, bytes, from_bytes, uint, Word};
-pub const NEW_OPS_HEIGHT: u64 = 3_490_000;
 /// Diagnostic trace budget. Only `Context::trace` frames use it; consensus
 /// execution never sets that flag.
 pub const MAX_TRACE_BYTES: usize = 64 << 20;
@@ -501,7 +501,8 @@ impl Machine<'_> {
             }
             return Err(Fault::InvalidOpcode.into());
         };
-        if matches!(op, 0x5c..=0x5f) && self.ctx.block_number < Word::from_u64(NEW_OPS_HEIGHT) {
+        if matches!(op, 0x5c..=0x5f) && self.ctx.block_number < Word::from_u64(FORKS.max_code_size)
+        {
             return Err(Fault::InvalidOpcode.into());
         }
         if self.stack.len() < instruction.required {
@@ -957,7 +958,7 @@ impl Machine<'_> {
                         .state
                         .prime_number
                         .ok_or(CapabilityError::Context("SELFDESTRUCT prime context"))?
-                        < 1_919_500
+                        < FORKS.self_destruct_refund
                 {
                     let rent =
                         Word::from_u64(state_gas::scaled(self.ctx.state_size, Word::ZERO, 25000))

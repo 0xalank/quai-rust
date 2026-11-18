@@ -100,7 +100,7 @@ pub fn verify(corpus: &Value) -> Result<Value, String> {
     if corpus["schema"] != 1
         || corpus["kind"] != "serial-vm"
         || corpus["reference_revision"] != quai_primitives::REFERENCE_REVISION
-        || corpus["new_ops_height"] != evm::NEW_OPS_HEIGHT
+        || corpus["new_ops_height"] != quai_primitives::spec::FORKS.max_code_size
     {
         return Err("unrecognized VM corpus/reference/fork".into());
     }

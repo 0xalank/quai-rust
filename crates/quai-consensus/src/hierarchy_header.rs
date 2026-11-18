@@ -9,6 +9,7 @@ use crate::{
     Error,
 };
 use crypto_bigint::{Encoding, U1024};
+use quai_primitives::spec::FORKS;
 use quai_primitives::{work::Context, Hash};
 use std::collections::BTreeSet;
 #[derive(Clone, Debug)]
@@ -94,7 +95,7 @@ pub fn update_etx_eligible(
     }
     let pos = location[0] as usize * 16 + location[1] as usize;
     let bit = 1u8 << (pos % 8);
-    if zone_number > rules::START_TX {
+    if zone_number > FORKS.start_tx {
         bitmap[pos / 8] |= bit
     } else {
         bitmap[pos / 8] &= !bit
@@ -122,20 +123,21 @@ fn cheap(
     uncle: bool,
 ) -> Result<(), Error> {
     profile.validate()?;
-    if now > i64::MAX as u64 - 15 {
+    if now > i64::MAX as u64 - quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
         return Err(Error::Unsupported("header clock domain"));
     }
     let ctx = profile.context();
     let parent = history.get(&header.parents[ctx])?;
     let b = header.object.header().wire();
     let w = header.header.wire();
-    if b.extra.as_deref().unwrap_or_default().len() > 32 {
+    if b.extra.as_deref().unwrap_or_default().len() > quai_primitives::spec::MAXIMUM_EXTRA_DATA_SIZE
+    {
         return Err(Error::Invalid("extra data size"));
     }
     if w.header_hash.as_ref().unwrap().value.as_slice() != header.object.header().hash() {
         return Err(Error::Invalid("body header commitment"));
     }
-    if !uncle && w.time.unwrap() > now + 15 {
+    if !uncle && w.time.unwrap() > now + quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
         return Err(Error::Invalid("future block"));
     }
     if w.time.unwrap() < parent.header.wire().time.unwrap() {
@@ -263,7 +265,7 @@ pub fn check_projection(
         return Err(Error::Invalid("region state root"));
     }
     role(header)?;
-    if header.prime >= rules::KAWPOW_FORK && w.aux_pow.is_some() {
+    if header.prime >= FORKS.kawpow && w.aux_pow.is_some() {
         verifier.verify_auxiliary_components(&header.header, false)?;
     }
     let number = if profile.genesis.contains(&parent.id) {

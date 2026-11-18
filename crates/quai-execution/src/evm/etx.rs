@@ -5,15 +5,14 @@ use super::{
     CapabilityError, Context, Fault,
 };
 use crypto_bigint::U512;
+use quai_primitives::spec::FORKS;
 use quai_primitives::transaction::{AccessTuple, Address, External, Transaction};
 fn magnitude(n: Word) -> Vec<u8> {
     let b = word::bytes(n);
     b[b.iter().position(|b| *b != 0).unwrap_or(32)..].to_vec()
 }
 fn conversion_allowed(prime: u64) -> bool {
-    prime >= 262000
-        && !(1_171_500..1_191_500).contains(&prime)
-        && !(1_755_000..1_775_000).contains(&prime)
+    prime >= FORKS.controller_kick_in && !FORKS.conversion_hold(prime)
 }
 fn eligible(s: &Journal, to: Address) -> Result<bool, CapabilityError> {
     let bits = s
@@ -91,7 +90,10 @@ pub(crate) fn transfer(
     }
     let forwarded = gas - 21000;
     let access = s.access_list.clone();
-    if !conversion && prime >= 2_317_000 && !intrinsic_covers(forwarded, to, data, &access) {
+    if !conversion
+        && prime >= FORKS.security_hardening
+        && !intrinsic_covers(forwarded, to, data, &access)
+    {
         return Ok(Err(Fault::Etx));
     }
     if !debit(s, ctx.address, value)? {
@@ -134,13 +136,13 @@ pub(crate) fn opcode(
     let prime = s
         .prime_number
         .ok_or(CapabilityError::Context("ETX prime context"))?;
-    if prime >= 2_317_000 && to[1] & 128 != 0 {
+    if prime >= FORKS.security_hardening && to[1] & 128 != 0 {
         return Ok(Some(false));
     }
     let sum = tip.wrapping_add(&cap);
     let fee = sum.wrapping_mul(&limit);
     let total = value.wrapping_add(&fee);
-    if prime >= 1_919_500 {
+    if prime >= FORKS.self_destruct_refund {
         let a: U512 = tip.resize();
         let b: U512 = cap.resize();
         let l: U512 = limit.resize();
@@ -164,7 +166,7 @@ pub(crate) fn opcode(
         return Ok(Some(false));
     }
     let gas = word::uint(limit).unwrap();
-    if prime < 2_317_000 {
+    if prime < FORKS.security_hardening {
         debit(s, ctx.address, total)?;
     }
     let access = if access_bytes.is_empty() {
@@ -175,20 +177,20 @@ pub(crate) fn opcode(
             Err(_) => return Ok(Some(false)),
         }
     };
-    if prime >= 2_317_000 && !intrinsic_covers(gas, to, &data, &access) {
+    if prime >= FORKS.security_hardening && !intrinsic_covers(gas, to, &data, &access) {
         return Ok(Some(false));
     }
     if s.etxs.len() > u16::MAX as usize {
         return Ok(Some(false));
     }
     if !eligible(s, to)? {
-        return Ok(if prime >= 2_317_000 {
+        return Ok(if prime >= FORKS.security_hardening {
             Some(false)
         } else {
             None
         });
     }
-    if prime >= 2_317_000 {
+    if prime >= FORKS.security_hardening {
         debit(s, ctx.address, total)?;
     }
     append(s, to, ctx.address, value, gas, data, access, 0)?;
@@ -213,7 +215,7 @@ pub(crate) fn convert(
     }
     let fee = ctx.gas_price.wrapping_mul(&limit);
     let total = value.wrapping_add(&fee);
-    if prime >= 1_919_500 {
+    if prime >= FORKS.self_destruct_refund {
         let p: U512 = ctx.gas_price.resize();
         let g: U512 = limit.resize();
         let v: U512 = value.resize();

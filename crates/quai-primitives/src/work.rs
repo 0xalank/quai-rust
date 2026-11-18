@@ -131,9 +131,6 @@ impl BodyHeader {
         wire.location = None;
         wire.mix_hash = None;
         wire.nonce = None;
-        if wire.extra.as_ref().is_some_and(|v| v.len() > 131_072) {
-            return Err("body-header extra exceeds supported scope".into());
-        }
         Ok(Self { wire })
     }
     pub fn encode(&self) -> Vec<u8> {
@@ -249,18 +246,15 @@ impl WorkObject {
             };
         let transactions = decode_list(&mut body.transactions)?;
         let outbound = decode_list(&mut body.outbound_etxs)?;
+        // No uncle, manifest or interlink count caps: go-quai decodes these
+        // lists without one (the 3 MiB message bound applies above), and
+        // block validation limits the uncle count by fork.
         let uncles = body.uncles.get_or_insert_default();
-        if uncles.wo_headers.len() > 4096 {
-            return Err("uncle count exceeds supported scope".into());
-        }
         for uncle in &mut uncles.wo_headers {
             normalize_work_header(uncle, schedule, allow_auxiliary)?;
         }
         let manifest = body.manifest.get_or_insert_default();
         let interlink = body.interlink_hashes.get_or_insert_default();
-        if manifest.manifest.len() > 4096 || interlink.hashes.len() > 4096 {
-            return Err("hash-list exceeds supported scope".into());
-        }
         for h in manifest.manifest.iter_mut().chain(&mut interlink.hashes) {
             fixed(&mut h.value)?;
         }

@@ -128,7 +128,7 @@ pub fn check_scope(r: &Record) -> io::Result<()> {
     let h = r.header().wire();
     let b = r.object().header().wire();
     need(
-        r.prime() < 262000
+        r.prime() < quai_primitives::spec::FORKS.controller_kick_in
             && b.expansion_number == Some(0)
             && h.aux_pow.is_none()
             && h.location.as_ref().is_some_and(|l| l.value == [0, 0]),

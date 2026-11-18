@@ -84,6 +84,48 @@ fn persist(
         .id;
     (v, c.unwrap())
 }
+/// go-quai bounds neither the ETX set nor the lockup records; a lazy overlay
+/// that lives across many blocks before a commit must accept more than the
+/// former 65,536-change and 32 MiB caps and persist exactly.
+#[test]
+fn lazy_etx_and_lockup_overlays_have_no_change_or_payload_cap() {
+    let directory = dir("uncapped");
+    let db =
+        quai_store::state_db::StateDatabase::open(&directory.join("state.redb"), [52; 32]).unwrap();
+    let mut memory = World::default();
+    memory.etxs_mut().push(&[tx(0)]).unwrap();
+    memory.set_lockup(key(1), Some(value(1))).unwrap();
+    let (parent, c) = persist(&db, None, 0, &World::default(), &memory);
+    let (old, _) =
+        restore_sparse(Arc::new(Mutex::new(db.snapshot(Some(parent)).unwrap())), &c).unwrap();
+    let mut next = old.clone();
+    let n = 70_000u64;
+    let batch = (1..=n).map(tx).collect::<Vec<_>>();
+    for chunk in batch.chunks(10_000) {
+        next.etxs_mut().push(chunk).unwrap();
+    }
+    assert_eq!(next.etxs_mut().pop().unwrap().unwrap(), tx(0));
+    for k in 2..=n as u32 {
+        next.set_lockup(key(k), Some(value(k as u64))).unwrap();
+    }
+    next.set_lockup(key(1), None).unwrap();
+    assert_eq!(next.etxs().len(), n as usize);
+    let etx_root = next.etxs().root().unwrap();
+    let (child, c2) = persist(&db, Some(parent), 1, &old, &next);
+    let (restored, _) =
+        restore_sparse(Arc::new(Mutex::new(db.snapshot(Some(child)).unwrap())), &c2).unwrap();
+    assert_eq!(restored.etxs().root().unwrap(), etx_root);
+    assert_eq!(restored.etxs().len(), n as usize);
+    assert_eq!(restored.etxs().read(n).unwrap().unwrap().as_ref(), &tx(n));
+    assert_eq!(restored.lockup(&key(n as u32)).unwrap(), Some(value(n)));
+    assert!(restored.lockup(&key(1)).unwrap().is_none());
+    // The in-memory image keeps its bounds.
+    let mut image = World::default();
+    assert!(image.etxs_mut().push(&batch[..20_000]).is_err());
+    drop(restored);
+    drop(db);
+    std::fs::remove_dir_all(directory).unwrap();
+}
 #[test]
 fn lazy_etx_and_lockup_roundtrip_reads_only_touched_records_and_keeps_pinned_parents() {
     let directory = dir("roundtrip");

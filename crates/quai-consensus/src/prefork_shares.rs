@@ -7,6 +7,7 @@ use crate::{
     Error,
 };
 use crypto_bigint::{Encoding, U512};
+use quai_primitives::spec::FORKS;
 #[derive(Debug)]
 pub struct Entropy {
     pub workshares: Uint,
@@ -26,7 +27,7 @@ pub fn native_components(
     history: &History,
     block: &Record,
 ) -> Result<Entropy, Error> {
-    if block.prime() >= rules::KAWPOW_FORK {
+    if block.prime() >= FORKS.kawpow {
         return Err(Error::Unsupported("pre-fork workshare profile required"));
     }
     let headers = block.uncles()?;

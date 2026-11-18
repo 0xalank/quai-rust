@@ -1,39 +1,36 @@
-//! `quai-node replay`: stream a QEX1 export and run every consensus check that
-//! needs no execution state, in import order. Proof-of-work runs in parallel
-//! (see `pow.rs`); everything else runs on one thread, height by height.
+//! `quai-node replay`: stream a QEX1 export and validate every block with
+//! `Verifier::validate_block` against the replay's ancestry window, in import
+//! order. Proof-of-work runs in parallel (see `pow.rs`) and enters through the
+//! verifier memo; everything else runs on one thread, height by height.
 //!
-//! Per zone height the checks are, in order:
-//! 1. decode each record and compare its hash with the hash go-quai recorded;
-//! 2. parent hash and number in each context;
-//! 3. body commitments (header hash, transactions, outbound ETXs, uncles,
-//!    manifest, interlinks);
-//! 4. the block proof-of-work;
-//! 5. the computed order must match the exported prime/region records;
-//! 6. `placement::prepare_append_components` in each coincident context:
-//!    header rules, workshare inclusion, parent manifest/interlink commitments
-//!    and PCRC;
-//! 7. pre-KAWPOW uncled entropy, the ETX rollup root and the region/zone
-//!    rollup agreement.
+//! Per zone height:
+//! 1. decode each record and compare its hash and number with the values
+//!    go-quai recorded, and the stored receipts with the receipt root;
+//! 2. `Verifier::validate_block` (`quai_consensus::block`): coincident
+//!    binding, parent hash and number in each context, body commitments, the
+//!    block proof-of-work, the computed order against the exported records,
+//!    header/inclusion/append rules and PCRC in each coincident context, the
+//!    uncled entropy, the prime starting values, the ETX rollup root and the
+//!    region/zone rollup agreement; with `--state`, the confirmed ETXs and
+//!    the execution of the zone block with every state root.
 use crate::checkpoint::{self, Checkpoint};
 use crate::log::Log;
 use crate::pow::{Done, Job, Pool};
 use crate::qex::{self, Context, ExportError, ExportReader, Height, Manifest};
-use crate::spec::ChainSpec;
+use crate::spec::Chain;
 use crate::state::{self, StateReplay};
 use crate::store::{self, PastDb, StateStore};
 use crate::window::Window;
-use crypto_bigint::Encoding as _;
 use quai_consensus::{
-    confirmation::cross_prime,
-    economics,
+    block,
     history::{History, Record},
     placement::{self, CandidateIndex, Snapshot},
     pow::SharedCaches,
-    prefork_shares, rules, share_rules, validation,
+    share_rules,
     verifier::Verifier,
-    zone_header, Error,
+    Error,
 };
-use quai_primitives::{encode_hex, transaction::Transaction, work, Hash};
+use quai_primitives::{encode_hex, work, Hash};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -218,38 +215,10 @@ fn quote(v: &str) -> String {
     }
 }
 pub fn describe(e: &Error) -> String {
-    match e {
-        Error::Invalid(m) => format!("invalid: {m}"),
-        Error::Unsupported(m) => format!("unsupported: {m}"),
-        Error::ResourceLimit(m) => format!("resource limit: {m}"),
-        Error::Unavailable(m) => format!("unavailable: {m}"),
-    }
-}
-fn message(e: &Error) -> &'static str {
-    match e {
-        Error::Invalid(m)
-        | Error::Unsupported(m)
-        | Error::ResourceLimit(m)
-        | Error::Unavailable(m) => m,
-    }
+    block::describe(e)
 }
 fn hex(h: &[u8]) -> String {
     encode_hex(h)
-}
-fn uint_hex(bytes: &[u8]) -> String {
-    match share_rules::uint(bytes) {
-        Ok(v) => uint(v),
-        Err(_) => hex(bytes),
-    }
-}
-fn uint(v: rules::Uint) -> String {
-    // Decimal for values that fit u128, hex otherwise.
-    let b = v.to_be_bytes();
-    if b[..16].iter().all(|x| *x == 0) {
-        u128::from_be_bytes(b[16..].try_into().unwrap()).to_string()
-    } else {
-        hex(&b)
-    }
 }
 
 /// A decoded zone height waiting for its proof-of-work result.
@@ -261,9 +230,8 @@ struct Slot {
 }
 
 struct Checker {
-    spec: ChainSpec,
+    chain: Arc<Chain>,
     profiles: [placement::Profile; 3],
-    zone_profile: validation::Profile,
     verifier: Verifier,
     window: Arc<Window>,
     histories: [History; 3],
@@ -296,40 +264,23 @@ fn fail(
     }
 }
 const CONTEXTS: [Context; 3] = [Context::Prime, Context::Region, Context::Zone];
-fn wo_context(c: Context) -> work::Context {
-    match c {
-        Context::Prime => work::Context::Prime,
-        Context::Region => work::Context::Region,
-        Context::Zone => work::Context::Zone,
-    }
-}
 fn h32(v: &[u8]) -> Hash {
     v.try_into().unwrap_or([0; 32])
 }
 
 impl Checker {
     fn new(
-        spec: ChainSpec,
+        chain: Arc<Chain>,
         caches: Arc<SharedCaches>,
         receipts: bool,
         state: Option<StateReplay>,
     ) -> Self {
         let window = Window::new();
-        let profiles = std::array::from_fn(|c| spec.profile(c));
-        let zone_profile = validation::Profile {
-            location: spec.location.to_vec(),
-            minimum_difficulty: spec.minimum_difficulty,
-            duration: spec.duration,
-            gas_ceiling: spec.gas_ceiling,
-            p2p_threshold: spec.p2p_threshold,
-            genesis: [spec.genesis_hash()].into(),
-            default_genesis: spec.default_genesis,
-        };
+        let profiles = std::array::from_fn(|c| chain.placement_profile(c));
         Self {
             histories: std::array::from_fn(|c| History::with_reader(window.history_reader(c))),
             indexes: std::array::from_fn(|c| CandidateIndex::with_reader(window.index_reader(c))),
             profiles,
-            zone_profile,
             verifier: Verifier::with_shared_caches(caches),
             window,
             heads: [None; 3],
@@ -341,7 +292,7 @@ impl Checker {
                 .unwrap_or(0),
             receipts,
             state,
-            spec,
+            chain,
         }
     }
     fn remember_order(&mut self, id: Hash, order: u8) {
@@ -353,7 +304,7 @@ impl Checker {
         }
     }
     fn genesis(&mut self, slot: Slot) -> Result<(), Fail> {
-        let expected = self.spec.genesis_hash();
+        let expected = self.chain.genesis_hash();
         let mut zone = None;
         for c in CONTEXTS {
             let raw = slot.height.records[c.index()].as_ref().unwrap();
@@ -384,7 +335,7 @@ impl Checker {
         drop(zone);
         self.install_genesis();
         self.window
-            .pin_prime_view(Arc::new(self.spec.genesis.clone()));
+            .pin_prime_view(Arc::new(self.chain.genesis().clone()));
         for c in 0..3 {
             self.heads[c] = Some((expected, 0));
         }
@@ -393,7 +344,7 @@ impl Checker {
     }
     /// The trusted genesis in every context, as the chain spec builds it.
     fn install_genesis(&mut self) {
-        let zone = Arc::new(self.spec.genesis.clone());
+        let zone = Arc::new(self.chain.genesis().clone());
         let snapshots: [Arc<Snapshot>; 3] = std::array::from_fn(|c| {
             Arc::new(
                 placement::bootstrap_candidate(&zone, &self.profiles[c])
@@ -425,8 +376,8 @@ impl Checker {
                 .collect()
         });
         Ok(Checkpoint {
-            environment: self.spec.environment.to_string(),
-            genesis: self.spec.genesis_hash(),
+            environment: self.chain.spec().environment.clone(),
+            genesis: self.chain.genesis_hash(),
             height,
             block,
             counters,
@@ -471,7 +422,7 @@ impl Checker {
                 .map_err(|e| format!("checkpoint prime view: {}", describe(&e)))?;
             self.window.pin_prime_view(Arc::new(record));
         }
-        let genesis = self.spec.genesis_hash();
+        let genesis = self.chain.genesis_hash();
         for (c, head) in cp.heads.iter().enumerate() {
             let (hash, number) = head.ok_or("checkpoint without a head")?;
             let tail = match cp.windows[c].last() {
@@ -513,335 +464,6 @@ impl Checker {
             size,
         ))
     }
-    fn body(record: &Record, c: Context) -> Result<(), Fail> {
-        let o = record.object();
-        let b = o.header().wire();
-        let committed = h32(&record.header().wire().header_hash.as_ref().unwrap().value);
-        if committed != o.header().hash() {
-            return Err(fail(
-                c,
-                "body: header hash",
-                hex(&committed),
-                hex(&o.header().hash()),
-            ));
-        }
-        let empty = quai_primitives::trie::ordered_root(&[]).unwrap();
-        let root = |r: Result<Hash, String>, what: &str| -> Result<Hash, Fail> {
-            r.map_err(|e| {
-                fail(
-                    c,
-                    format!("body: {what}"),
-                    "a root within the codec bounds",
-                    e,
-                )
-            })
-        };
-        match c {
-            Context::Zone => {
-                let n = o.manifest_hashes().len();
-                if n != 0 {
-                    return Err(fail(
-                        c,
-                        "body: zone manifest",
-                        "0 hashes",
-                        format!("{n} hashes"),
-                    ));
-                }
-                let links = root(o.interlink_root(), "zone interlinks")?;
-                if links != empty {
-                    return Err(fail(c, "body: zone interlinks", hex(&empty), hex(&links)));
-                }
-                let tx = root(o.transaction_root(), "transaction root")?;
-                if tx != h32(&b.tx_hash.as_ref().unwrap().value) {
-                    return Err(fail(
-                        c,
-                        "body: transaction root",
-                        hex(&b.tx_hash.as_ref().unwrap().value),
-                        hex(&tx),
-                    ));
-                }
-                let etx = root(o.outbound_root(), "outbound ETX root")?;
-                if etx != h32(&b.outbound_etx_hash.as_ref().unwrap().value) {
-                    return Err(fail(
-                        c,
-                        "body: outbound ETX root",
-                        hex(&b.outbound_etx_hash.as_ref().unwrap().value),
-                        hex(&etx),
-                    ));
-                }
-                let uncles = o.uncle_root();
-                if uncles != h32(&b.uncle_hash.as_ref().unwrap().value) {
-                    return Err(fail(
-                        c,
-                        "body: uncle root",
-                        hex(&b.uncle_hash.as_ref().unwrap().value),
-                        hex(&uncles),
-                    ));
-                }
-            }
-            Context::Prime | Context::Region => {
-                let txs = o.transactions().len();
-                let etxs = o.outbound_etxs().len();
-                let uncles = record.uncles().map(|u| u.len()).unwrap_or(usize::MAX);
-                if txs != 0 || etxs != 0 || uncles != 0 {
-                    return Err(fail(
-                        c,
-                        "body: dominant body contents",
-                        "no transactions, outbound ETXs or uncles",
-                        format!("{txs} transactions, {etxs} outbound ETXs, {uncles} uncles"),
-                    ));
-                }
-                let manifest = root(o.manifest_root(), "manifest root")?;
-                let committed = &b.manifest_hash[c.index() + 1].value;
-                if manifest == empty || manifest.as_slice() != committed.as_slice() {
-                    return Err(fail(
-                        c,
-                        "body: subordinate manifest root",
-                        hex(committed),
-                        hex(&manifest),
-                    ));
-                }
-                if c == Context::Prime {
-                    let links = root(o.interlink_root(), "interlink root")?;
-                    let committed = &b.interlink_root_hash.as_ref().unwrap().value;
-                    if links.as_slice() != committed.as_slice() {
-                        return Err(fail(c, "body: interlink root", hex(committed), hex(&links)));
-                    }
-                }
-            }
-        }
-        // The library check must agree with the explicit one above.
-        o.verify_commitments(wo_context(c))
-            .map_err(|e| fail(c, "body: commitments", "commitments hold", e))
-    }
-    /// Expected and actual values for the zone header rules that have a
-    /// public calculation; other rules report the refusal text.
-    fn explain(&mut self, c: Context, record: &Record, e: &Error) -> (String, String) {
-        let fallback = ("the rule holds".to_string(), describe(e));
-        if c != Context::Zone {
-            return fallback;
-        }
-        let Ok(parent) = self.histories[2].get(&record.parent(2).unwrap_or([0; 32])) else {
-            return fallback;
-        };
-        let b = record.object().header().wire();
-        let pb = parent.object().header().wire();
-        let w = record.header().wire();
-        let p = &self.zone_profile;
-        let parent_number = if p.genesis.contains(&parent.id()) {
-            0
-        } else {
-            parent.number(2).unwrap_or(0)
-        };
-        match message(e) {
-            "header difficulty" => {
-                match validation::expected_difficulty(&self.histories[2], &parent, p) {
-                    Ok(v) => (
-                        uint(v),
-                        uint_hex(w.difficulty.as_deref().unwrap_or_default()),
-                    ),
-                    Err(x) => ("difficulty".into(), describe(&x)),
-                }
-            }
-            "gas limit schedule" | "gas use/limit" => (
-                format!(
-                    "gas_limit {} and gas_used <= gas_limit",
-                    rules::next_limit(
-                        parent.number(2).unwrap_or(0),
-                        pb.gas_limit.unwrap_or(0),
-                        p.gas_ceiling
-                    )
-                ),
-                format!(
-                    "gas_limit {} gas_used {}",
-                    b.gas_limit.unwrap_or(0),
-                    b.gas_used.unwrap_or(0)
-                ),
-            ),
-            "state limit schedule" => (
-                format!(
-                    "state_limit {} and state_used <= state_limit",
-                    rules::next_limit(
-                        parent.number(2).unwrap_or(0),
-                        pb.state_limit.unwrap_or(0),
-                        50_000_000
-                    )
-                ),
-                format!(
-                    "state_limit {} state_used {}",
-                    b.state_limit.unwrap_or(0),
-                    b.state_used.unwrap_or(0)
-                ),
-            ),
-            "base fee" => match economics::expected_base_fee(&self.histories[2], &parent, p) {
-                Ok(v) => (uint(v), uint_hex(b.base_fee.as_deref().unwrap_or_default())),
-                Err(x) => ("base fee".into(), describe(&x)),
-            },
-            "header number" => (
-                (parent_number + 1).to_string(),
-                record.number(2).map(|n| n.to_string()).unwrap_or_default(),
-            ),
-            "older block time" => (
-                format!(">= {}", parent.header().wire().time.unwrap_or(0)),
-                w.time.unwrap_or(0).to_string(),
-            ),
-            "extra data size" => (
-                "<= 32 bytes".into(),
-                format!("{} bytes", b.extra.as_deref().unwrap_or_default().len()),
-            ),
-            "parent total entropy" | "parent delta entropy" | "parent uncled delta entropy" => {
-                match validation::native_parent_metrics(
-                    &mut self.verifier,
-                    &self.histories[2],
-                    &parent,
-                    p,
-                ) {
-                    Ok(m) => (
-                        format!(
-                            "order {} total {} delta {} uncled_delta {}",
-                            m.order,
-                            uint(m.total),
-                            uint(if m.order < 2 {
-                                rules::Uint::ZERO
-                            } else {
-                                m.delta
-                            }),
-                            uint(if m.order < 2 {
-                                rules::Uint::ZERO
-                            } else {
-                                m.uncled_delta
-                            }),
-                        ),
-                        format!(
-                            "total {} delta {} uncled_delta {}",
-                            uint_hex(&b.parent_entropy[2]),
-                            uint_hex(&b.parent_delta_entropy[2]),
-                            uint_hex(&b.parent_uncled_delta_entropy[2]),
-                        ),
-                    ),
-                    Err(x) => ("parent metrics".into(), describe(&x)),
-                }
-            }
-            "zone expansion" => match self.orders.get(&parent.id()).copied() {
-                Some(order) => {
-                    match zone_header::expected_expansion(&self.histories[2], &parent, p, order) {
-                        Ok(v) => (v.to_string(), b.expansion_number.unwrap_or(0).to_string()),
-                        Err(x) => ("expansion".into(), describe(&x)),
-                    }
-                }
-                None => fallback,
-            },
-            "prime terminus binding" => match self.orders.get(&parent.id()).copied() {
-                Some(order) => {
-                    let (ph, pn) = if order == 0 || p.genesis.contains(&parent.id()) {
-                        (parent.id(), parent.number(0).unwrap_or(0))
-                    } else {
-                        (
-                            h32(&pb.prime_terminus_hash.as_ref().unwrap().value),
-                            parent.prime(),
-                        )
-                    };
-                    (
-                        format!("{} at prime {pn}", hex(&ph)),
-                        format!(
-                            "{} at prime {}",
-                            hex(&b.prime_terminus_hash.as_ref().unwrap().value),
-                            record.prime()
-                        ),
-                    )
-                }
-                None => fallback,
-            },
-            _ => fallback,
-        }
-    }
-    fn execute(
-        &mut self,
-        st: &mut StateReplay,
-        records: &[Option<Arc<Record>>; 3],
-        order: u8,
-        accumulated: &[Transaction],
-        cross: Vec<Transaction>,
-        zone: &Record,
-    ) -> Result<(), Fail> {
-        let z = Context::Zone;
-        let confirmed = st
-            .confirm(
-                &self.histories,
-                &self.orders,
-                records,
-                order,
-                accumulated,
-                self.spec.location,
-            )
-            .map_err(|e| fail(z, "state: confirmation", "confirmed ETXs", describe(&e)))?;
-        let inbound = st
-            .confirmed_after(&zone.parent(2).unwrap_or([0; 32]))
-            .map_err(|e| {
-                fail(
-                    z,
-                    "state: inbound ETXs",
-                    "parent confirmation",
-                    describe(&e),
-                )
-            })?;
-        let executed = state::native_components(
-            &mut self.verifier,
-            &mut st.state,
-            &self.histories[2],
-            &st.past,
-            zone,
-            &st.profile,
-            &inbound,
-        );
-        let e = match executed {
-            Ok(x) => {
-                return st
-                    .record(zone, order, cross, confirmed, x.created_keys)
-                    .map_err(|e| fail(z, "state: commit", "recorded history", describe(&e)));
-            }
-            Err(e) => e,
-        };
-        // Execute again without the commitment comparison to report values.
-        let location = self.spec.location;
-        let verifier = &mut self.verifier;
-        let computed = state::diagnose(
-            &st.state,
-            &self.histories[2],
-            &st.past,
-            zone,
-            &st.profile,
-            &inbound,
-            |h| verifier.precompute_inclusion_work(h, &location),
-        );
-        let b = zone.object().header().wire();
-        let field = |v: &Option<quai_primitives::schema::common::ProtoHash>| {
-            hex(&v.as_ref().unwrap().value)
-        };
-        let (expected, actual) = match &computed {
-            Ok(c) => match message(&e) {
-                "execution account root" => (field(&b.evm_root), hex(&c.evm_root)),
-                "execution ETX root" => (field(&b.etx_set_root), hex(&c.etx_root)),
-                "execution UTXO root" => (field(&b.utxo_root), hex(&c.utxo_root)),
-                "execution receipt root" => (field(&b.receipt_hash), hex(&c.receipt_root)),
-                "execution outbound root" => (field(&b.outbound_etx_hash), hex(&c.outbound_root)),
-                "execution gas counter" => {
-                    (b.gas_used.unwrap_or(0).to_string(), c.gas_used.to_string())
-                }
-                "execution state counter" => (
-                    b.state_used.unwrap_or(0).to_string(),
-                    c.state_used.to_string(),
-                ),
-                "execution account count" => (
-                    uint_hex(b.quai_state_size.as_deref().unwrap_or_default()),
-                    c.account_count.to_string(),
-                ),
-                _ => ("execution succeeds".to_string(), describe(&e)),
-            },
-            Err(_) => ("execution succeeds".to_string(), describe(&e)),
-        };
-        Err(fail(z, format!("state: {}", message(&e)), expected, actual))
-    }
     fn check(&mut self, slot: Slot, done: Option<Done>) -> Result<u8, Fail> {
         let h = &slot.height;
         // 1. decode, hash and record number
@@ -875,32 +497,20 @@ impl Checker {
             }
             records[c.index()] = Some(Arc::new(record.clone()));
         }
-        // 2. parent links
-        for c in CONTEXTS {
-            let Some(r) = &records[c.index()] else {
-                continue;
-            };
-            let (ph, pn) = self.heads[c.index()].expect("genesis checked first");
-            let parent = r.parent(c.index()).unwrap_or([0; 32]);
-            if parent != ph {
-                return Err(fail(c, "parent hash", hex(&ph), hex(&parent)));
-            }
-            let n = r.number(c.index()).unwrap_or(u64::MAX);
-            if n != pn + 1 {
-                return Err(fail(c, "number", (pn + 1).to_string(), n.to_string()));
-            }
-        }
-        // 3. body commitments, and the stored receipts against the receipt root
-        for c in CONTEXTS {
-            if let Some(r) = &records[c.index()] {
-                Self::body(r, c)?;
-            }
-        }
-        let zone = records[2].clone().unwrap();
+        let zone = records[2].clone().ok_or_else(|| {
+            fail(
+                Context::Zone,
+                "records",
+                "a zone record at every height",
+                "none",
+            )
+        })?;
+        // The stored receipts against the receipt root, before execution.
         if self.receipts {
             stored_receipts(&zone, &h.zone().receipts)?;
         }
-        // 4. proof-of-work, computed by the parallel pass
+        // Proof-of-work results of the parallel pass enter through the memo;
+        // the pipeline checks the block proof again (a memo hit).
         let done = done.ok_or_else(|| {
             fail(
                 Context::Zone,
@@ -909,182 +519,76 @@ impl Checker {
                 "no result",
             )
         })?;
-        if let Err(e) = &done.block {
-            let w = zone.header().wire();
-            let algorithm = if w.aux_pow.is_some() {
-                "KAWPOW auxpow"
-            } else {
-                "ProgPoW"
-            };
-            return Err(fail(
-                Context::Zone,
-                "proof-of-work",
-                format!(
-                    "{algorithm} proof meeting difficulty {} at prime terminus {}",
-                    uint_hex(w.difficulty.as_deref().unwrap_or_default()),
-                    zone.prime()
-                ),
-                describe(e),
-            ));
-        }
         self.verifier.reuse_header_proof_memo(done.proofs);
         self.verifier.reuse_inclusion_work_memo(done.work);
-        // 5. computed order against the exported records
-        let order = placement::verify_placement(&mut self.verifier, &zone, &self.profiles[2])
-            .map_err(|e| fail(Context::Zone, "order", "a placed block", describe(&e)))?
-            .order;
-        let present: Vec<&str> = CONTEXTS
-            .iter()
-            .filter(|c| records[c.index()].is_some())
-            .map(|c| c.name())
-            .collect();
-        let expected: Vec<&str> = CONTEXTS[order as usize..]
-            .iter()
-            .map(|c| c.name())
-            .collect();
-        if present != expected {
-            return Err(fail(
-                Context::Zone,
-                "coincident order",
-                format!("order {order}: records {}", expected.join("+")),
-                format!("records {}", present.join("+")),
-            ));
-        }
-        // 6. header rules, inclusion, parent commitments and PCRC per context
-        let mut claim = [0u8; 32];
-        let mut next: [Option<Snapshot>; 3] = [None, None, None];
-        for c in &CONTEXTS[order as usize..] {
-            let r = records[c.index()].clone().unwrap();
-            let prepared = placement::prepare_append_components(
-                &mut self.verifier,
-                &self.histories[c.index()],
-                &self.indexes[c.index()],
-                &r,
-                &self.profiles[c.index()],
-                self.now,
-                (order as usize) < c.index(),
-                claim,
-            );
-            match prepared {
-                Ok(p) => {
-                    claim = p.previous_dominant;
-                    next[c.index()] = Some(p.next);
-                }
-                Err(e) => {
-                    let (expected, actual) = self.explain(*c, &r, &e);
-                    return Err(fail(
-                        *c,
-                        format!("{} rules: {}", c.name(), message(&e)),
-                        expected,
-                        actual,
-                    ));
-                }
+        // 2-8. Verifier::validate_block against the window: parent links,
+        // bodies, proof-of-work, order, header/append rules, uncled entropy,
+        // prime starting values, rollups and, with --state, execution.
+        let heads = self.heads.map(|h| h.expect("genesis checked first"));
+        let validated = match self.state.as_mut() {
+            Some(st) => {
+                let (maps, mut parent_state) = st.split();
+                let known = state::KnownView {
+                    orders: &self.orders,
+                    maps: Some(maps),
+                };
+                let parent = block::Parent {
+                    chain: &self.chain,
+                    histories: &self.histories,
+                    indexes: &self.indexes,
+                    heads,
+                    known: &known,
+                    now: self.now,
+                };
+                self.verifier
+                    .validate_block(&parent, records, Some(&mut parent_state))
+            }
+            None => {
+                let known = state::KnownView {
+                    orders: &self.orders,
+                    maps: None,
+                };
+                let parent = block::Parent {
+                    chain: &self.chain,
+                    histories: &self.histories,
+                    indexes: &self.indexes,
+                    heads,
+                    known: &known,
+                    now: self.now,
+                };
+                self.verifier
+                    .validate_block::<block::NoPast>(&parent, records, None)
             }
         }
-        // 7a. pre-KAWPOW uncled entropy
-        let zb = zone.object().header().wire();
-        if zone.prime() < rules::KAWPOW_FORK {
-            let shares =
-                prefork_shares::native_components(&mut self.verifier, &self.histories[2], &zone)
-                    .map_err(|e| {
-                        fail(
-                            Context::Zone,
-                            "uncled entropy",
-                            "native share entropy",
-                            describe(&e),
-                        )
-                    })?;
-            let actual = share_rules::uint(zb.uncled_entropy.as_deref().unwrap_or_default())
-                .map_err(|e| {
-                    fail(
-                        Context::Zone,
-                        "uncled entropy",
-                        "a 256-bit value",
-                        describe(&e),
-                    )
-                })?;
-            if actual != shares.uncled {
-                return Err(fail(
-                    Context::Zone,
-                    "uncled entropy",
-                    uint(shares.uncled),
-                    uint(actual),
-                ));
-            }
-        }
-        // 7b. ETX rollup root over the zone parent's manifest
-        let parent = self.indexes[2]
-            .get(&zone.parent(2).unwrap_or([0; 32]))
-            .map_err(|e| fail(Context::Zone, "ETX rollup", "parent manifest", describe(&e)))?;
-        let manifest = parent
-            .manifest
-            .as_ref()
-            .ok_or_else(|| fail(Context::Zone, "ETX rollup", "parent manifest", "none"))?;
-        let mut accumulated = vec![];
-        for id in manifest {
-            let block = self.histories[2].get(id).map_err(|e| {
+        .map_err(|f| Fail {
+            context: CONTEXTS[f.context.min(2)],
+            check: f.check,
+            expected: f.expected,
+            actual: f.actual,
+        })?;
+        let block::Validated { checked, executed } = validated;
+        let order = checked.order;
+        if let (Some(st), Some(x)) = (self.state.as_mut(), executed) {
+            st.record(
+                &zone,
+                order,
+                checked.cross.clone(),
+                x.confirmed,
+                x.execution.created_keys,
+            )
+            .map_err(|e| {
                 fail(
                     Context::Zone,
-                    "ETX rollup",
-                    format!("manifest block {}", hex(id)),
+                    "state: commit",
+                    "recorded history",
                     describe(&e),
                 )
             })?;
-            accumulated.extend_from_slice(block.object().outbound_etxs());
-        }
-        let cross = cross_prime(&accumulated, self.spec.location[0]).map_err(|e| {
-            fail(
-                Context::Zone,
-                "ETX rollup",
-                "rollup within bounds",
-                describe(&e),
-            )
-        })?;
-        let root = work::transactions_root(&cross)
-            .map_err(|e| fail(Context::Zone, "ETX rollup", "rollup root", e))?;
-        let committed = &zb.etx_rollup_hash.as_ref().unwrap().value;
-        if root.as_slice() != committed.as_slice() {
-            return Err(fail(
-                Context::Zone,
-                "ETX rollup root",
-                hex(&root),
-                hex(committed),
-            ));
-        }
-        // 7c. the region manifest must roll up the same zone ETXs
-        if order <= 1 {
-            let region = records[1].as_ref().unwrap();
-            let mut from_region = vec![];
-            for id in region.object().manifest_hashes() {
-                let block = self.histories[2].get(&id).map_err(|e| {
-                    fail(
-                        Context::Region,
-                        "region/zone rollup",
-                        format!("manifest block {}", hex(&id)),
-                        describe(&e),
-                    )
-                })?;
-                from_region.extend(block.object().outbound_etxs().iter().map(|t| t.encode()));
-            }
-            let from_zone: Vec<_> = accumulated.iter().map(|t| t.encode()).collect();
-            if from_region != from_zone {
-                return Err(fail(
-                    Context::Region,
-                    "region/zone rollup",
-                    format!("{} ETXs from the zone parent manifest", from_zone.len()),
-                    format!("{} ETXs from the region manifest", from_region.len()),
-                ));
-            }
-        }
-        // 8. state: execute the zone block and compare the header roots
-        if let Some(mut st) = self.state.take() {
-            let result = self.execute(&mut st, &records, order, &accumulated, cross, &zone);
-            self.state = Some(st);
-            result?;
         }
         // Commit to the window.
+        let mut next = checked.next;
         for c in &CONTEXTS[order as usize..] {
-            let r = records[c.index()].clone().unwrap();
+            let r = checked.records[c.index()].clone().unwrap();
             self.heads[c.index()] = Some((r.id(), r.number(c.index()).unwrap()));
             self.window
                 .insert(c.index(), r, Arc::new(next[c.index()].take().unwrap()));
@@ -1256,8 +760,8 @@ fn io_err(what: &str) -> impl Fn(std::io::Error) -> String + '_ {
     move |e| format!("{what}: {e}")
 }
 /// Checkpoint directory for this chain and mode.
-pub fn checkpoint_dir(datadir: &std::path::Path, spec: &ChainSpec, state: bool) -> PathBuf {
-    store::chain_dir(datadir, spec.environment, &spec.genesis_hash()).join(if state {
+pub fn checkpoint_dir(datadir: &std::path::Path, chain: &Chain, state: bool) -> PathBuf {
+    store::chain_dir(datadir, &chain.spec().environment, &chain.genesis_hash()).join(if state {
         "state"
     } else {
         "headers"
@@ -1270,7 +774,7 @@ struct Resumed {
 }
 fn load_checkpoint(
     dir: &std::path::Path,
-    spec: &ChainSpec,
+    chain: &Chain,
     state: bool,
 ) -> Result<Option<Resumed>, String> {
     let list = checkpoint::list(dir).map_err(io_err("checkpoint directory"))?;
@@ -1279,8 +783,8 @@ fn load_checkpoint(
     };
     let cp = checkpoint::read(path).map_err(|e| format!("checkpoint {height} rejected: {e}"))?;
     if cp.height != *height
-        || cp.environment != spec.environment
-        || cp.genesis != spec.genesis_hash()
+        || cp.environment != chain.spec().environment
+        || cp.genesis != chain.genesis_hash()
     {
         return Err(format!(
             "checkpoint {height} rejected: it is for {} {} at height {}",
@@ -1295,13 +799,7 @@ fn load_checkpoint(
     let state = match &cp.state {
         None => None,
         Some(section) => {
-            let profile = state::profile_for(
-                spec.environment,
-                spec.chain_id,
-                spec.location,
-                spec.genesis_hash(),
-            )
-            .map_err(|e| describe(&e))?;
+            let profile = state::profile_for(chain).map_err(|e| describe(&e))?;
             let commitment = quai_execution::state_store::Commitment {
                 roots: quai_execution::state_image::Roots {
                     evm: section.evm,
@@ -1314,7 +812,7 @@ fn load_checkpoint(
             };
             let store = StateStore::open(
                 dir,
-                store::profile(spec.environment, &spec.genesis_hash()),
+                store::profile(&chain.spec().environment, &chain.genesis_hash()),
                 *height,
                 section.version,
                 commitment,
@@ -1325,7 +823,7 @@ fn load_checkpoint(
             Some(
                 StateReplay::resume(
                     profile,
-                    spec.genesis_hash(),
+                    chain.genesis_hash(),
                     store,
                     past,
                     section,
@@ -1429,7 +927,7 @@ pub fn run_with(
 ) -> Result<Summary, String> {
     let started = Instant::now();
     let manifest = Manifest::load(&opts.export).map_err(|e| e.to_string())?;
-    let spec = ChainSpec::for_environment(&manifest.environment).map_err(|e| {
+    let spec = Chain::for_environment(&manifest.environment).map_err(|e| {
         format!(
             "chain spec for environment {:?}: {}",
             manifest.environment,
@@ -1440,7 +938,7 @@ pub fn run_with(
         return Err(format!(
             "manifest genesis_hash {} is not the {} genesis {}",
             hex(&manifest.genesis_hash),
-            spec.environment,
+            spec.spec().environment,
             hex(&spec.genesis_hash())
         ));
     }
@@ -1488,8 +986,8 @@ pub fn run_with(
     log.info(&format!(
         "replay {}: environment {} (chain {}), genesis {}, {} segments, zone heights {start}..={}{}, {} proof-of-work threads{}",
         opts.export.display(),
-        spec.environment,
-        spec.chain_id,
+        spec.spec().environment,
+        spec.spec().chain_id,
         hex(&spec.genesis_hash()),
         manifest.segments.len(),
         manifest.last_zone,
@@ -1515,7 +1013,7 @@ pub fn run_with(
         Some(c) => c,
         None => Arc::new(SharedCaches::new(4).map_err(|e| describe(&e))?),
     };
-    let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location.to_vec());
+    let mut pool = Pool::new(opts.jobs, caches.clone(), spec.location().to_vec());
     let genesis = spec.genesis_hash();
     let mut summary = Summary {
         environment,
@@ -1559,9 +1057,8 @@ pub fn run_with(
         None => {
             let state = if opts.state {
                 let dir = dir.as_ref().unwrap();
-                let profile =
-                    state::profile_for(spec.environment, spec.chain_id, spec.location, genesis)
-                        .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
+                let profile = state::profile_for(&spec)
+                    .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
                 let past_path = dir.join("past.redb");
                 if past_path.exists() {
                     std::fs::remove_file(&past_path).map_err(io_err("past.redb"))?;
@@ -1569,7 +1066,7 @@ pub fn run_with(
                 let past = PastDb::open(&past_path).map_err(io_err("past.redb"))?;
                 let store = StateStore::create_genesis(
                     dir,
-                    store::profile(spec.environment, &genesis),
+                    store::profile(&spec.spec().environment, &genesis),
                     genesis,
                 )
                 .map_err(io_err("state database"))?;

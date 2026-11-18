@@ -62,13 +62,13 @@ fn manifests_distinguish_missing_empty_reset_and_growth_limit() {
     );
     assert_eq!(placement::next_manifest(2, 1, id, None).unwrap(), vec![id]);
     assert!(placement::next_manifest(0, 0, id, None).unwrap().is_empty());
+    // go-quai has no manifest length limit: a region manifest grows with
+    // every zone block until the next region block.
     let parent = vec![[1; 32]; placement::MAX_MANIFEST];
-    assert!(matches!(
-        placement::next_manifest(1, 1, id, Some(&parent)),
-        Err(Error::ResourceLimit(_))
-    ));
-    assert_eq!(parent.len(), placement::MAX_MANIFEST);
-    assert!(placement::hash_list_root(&vec![[0; 32]; placement::MAX_MANIFEST + 1]).is_err());
+    let next = placement::next_manifest(1, 1, id, Some(&parent)).unwrap();
+    assert_eq!(next.len(), placement::MAX_MANIFEST + 1);
+    assert_eq!(next.last(), Some(&id));
+    assert!(placement::hash_list_root(&next).is_ok());
 }
 #[test]
 fn interlink_rank_replaces_only_the_leading_slots() {
@@ -268,11 +268,15 @@ fn bootstrap_and_zero_number_placement_require_explicit_trust() {
         placement::verify_placement(&mut Verifier::default(), &root, &profile),
         Err(Error::Unsupported(_))
     ));
+    // A genesis record is not a block that extends a genesis.
     let b = Record::decode(root.bytes()).unwrap();
-    assert!(matches!(
-        Verifier::default().validate_block(b.bytes(), quai_primitives::work::Context::Prime),
-        Err(Error::Unsupported(_))
-    ));
+    assert!(quai_consensus::block::validate_on_genesis(
+        &mut Verifier::default(),
+        quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+        [None, None, Some(std::sync::Arc::new(b))],
+        1_800_000_000,
+    )
+    .is_err());
 }
 
 #[test]

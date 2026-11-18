@@ -3,6 +3,9 @@
 use super::*;
 const MAGIC: &[u8] = b"QUAI-HIERARCHY-DELTA-1\n";
 const MAX_BYTES: usize = 32 << 20;
+/// Bound of this private branch storage format (with `MAX_BYTES`); it is not
+/// a consensus limit and the mainnet path never encodes a delta.
+const MAX_ETXS: usize = 8192;
 /// Decoded local hierarchy outputs. This format checks record/parent/role
 /// bindings but supplies no consensus or ancestry authority. Persist it only in
 /// a provenance-checked local branch version; never trust it as peer state.

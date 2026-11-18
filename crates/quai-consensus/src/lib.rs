@@ -1,6 +1,8 @@
 //! Native consensus components. No Go fallback, fake-proof mode or chain authority.
 //! Bounded proof, auxiliary and ancestry components do not establish canonical
 //! history, economic state validity or full block consensus.
+pub mod block;
+pub mod chain;
 pub mod donor;
 pub mod pow;
 pub mod rules;

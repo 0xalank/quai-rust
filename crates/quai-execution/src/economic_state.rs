@@ -7,12 +7,20 @@ use crate::{
     settlement::Error,
 };
 use crypto_bigint::U512;
-use quai_primitives::transaction::Address;
-pub const DAY: u64 = 17280;
-pub const MONTH: u64 = 30 * DAY;
-pub const YEAR: u64 = 365 * DAY;
-pub const CONVERSION_LOCK: u64 = 14 * DAY;
-pub const LOCK_PERIODS: [u64; 4] = [CONVERSION_LOCK, 3 * MONTH, 6 * MONTH, YEAR];
+use quai_primitives::{
+    spec::{self, FORKS},
+    transaction::Address,
+};
+/// params.BlocksPerDay.
+pub const DAY: u64 = spec::BLOCKS_PER_DAY;
+/// params.BlocksPerMonth.
+pub const MONTH: u64 = spec::BLOCKS_PER_MONTH;
+/// params.BlocksPerYear.
+pub const YEAR: u64 = spec::BLOCKS_PER_YEAR;
+/// params.ConversionLockPeriod.
+pub const CONVERSION_LOCK: u64 = spec::LOCK_PERIODS.conversion;
+/// params.LockupByteToBlockDepth.
+pub const LOCK_PERIODS: [u64; 4] = spec::LOCK_PERIODS.by_lock_byte;
 pub fn magnitude(v: Word) -> Vec<u8> {
     let b = bytes(v);
     b[b.iter().position(|v| *v != 0).unwrap_or(32)..].to_vec()
@@ -21,7 +29,8 @@ pub fn reward(value: Word, lock: u8, height: u64) -> Result<Word, Error> {
     if lock > 3 {
         return Err(Error::Invalid("coinbase lock byte"));
     }
-    if lock == 0 || height < 2 * MONTH {
+    // params.CalculateCoinbaseValueWithLockup.
+    if lock == 0 || height < FORKS.lockup_start {
         return Ok(value);
     }
     let first = [0, 103500, 110000, 125000];

@@ -11,6 +11,7 @@ use crate::{
     muhash::MuHash,
     settlement::{self, BlockContext, Error},
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     receipt::{receipts_root, Receipt},
     transaction::Kind,
@@ -103,10 +104,7 @@ impl EarlyReplay {
             .verify_commitments(BodyContext::Zone)
             .map_err(|_| invalid("block body commitments"))?;
         let wh = object
-            .work_header(quai_primitives::Schedule {
-                kawpow_fork: 1_171_500,
-                transition_period: 129600,
-            })
+            .work_header(FORKS.header_schedule())
             .map_err(|_| invalid("work header"))?;
         let h = wh.wire();
         let body = object.header().wire();
@@ -121,10 +119,7 @@ impl EarlyReplay {
             || from_bytes(h.prime_terminus_number.as_deref().unwrap()) != Word::ZERO
             || h.location.as_ref().unwrap().value != [0, 0]
             || !object
-                .uncle_headers(quai_primitives::Schedule {
-                    kawpow_fork: 1_171_500,
-                    transition_period: 129600,
-                })
+                .uncle_headers(FORKS.header_schedule())
                 .map_err(|_| invalid("uncle encoding"))?
                 .is_empty()
         {

@@ -114,12 +114,18 @@ fn auxiliary_budgets_and_full_admission_boundary_are_enforced() {
     let bytes = decode_hex(v["quai_header"].as_str().unwrap()).unwrap();
     assert!(Header::decode(&bytes, PINNED_SCHEDULE).is_err());
     assert!(Header::decode_auxiliary(&bytes, PINNED_SCHEDULE).is_ok());
-    assert!(matches!(
-        Verifier::default().validate_block(
-            &decode_hex(v["work_object"].as_str().unwrap()).unwrap(),
-            quai_primitives::work::Context::Zone
-        ),
-        Err(Error::Unsupported(_))
-    ));
+    // Without its ancestry a block fails validation.
+    let object = decode_hex(v["work_object"].as_str().unwrap()).unwrap();
+    assert!(
+        quai_consensus::history::Record::decode(&object).map_or(true, |r| {
+            quai_consensus::block::validate_on_genesis(
+                &mut Verifier::default(),
+                quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+                [None, None, Some(std::sync::Arc::new(r))],
+                1_800_000_000,
+            )
+            .is_err()
+        })
+    );
     assert!(Quorum::from_trusted_keys([[0; 33]; 3]).is_err());
 }

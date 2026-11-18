@@ -94,9 +94,14 @@ fn unavailable_history_and_invalid_clock_never_produce_header_authority() {
         ),
         Err(Error::Unsupported(_))
     ));
-    assert!(verifier
-        .validate_block(b.bytes(), quai_primitives::work::Context::Zone)
-        .is_err());
+    // Without its ancestry a block fails validation.
+    assert!(quai_consensus::block::validate_on_genesis(
+        &mut verifier,
+        quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+        [None, None, Some(std::sync::Arc::new(b.clone()))],
+        1_800_000_000,
+    )
+    .is_err());
 }
 #[test]
 fn conversion_fee_signal_is_fork_selected_and_amounts_are_bounded() {

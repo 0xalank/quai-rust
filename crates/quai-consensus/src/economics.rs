@@ -2,15 +2,17 @@
 //! Does not distribute rewards, settle fees, or execute economic state.
 use crate::{
     history::Record,
-    rules::{self, Uint},
+    rules::Uint,
     share_rules::{self, Triple},
     Error,
 };
 use crypto_bigint::U1024;
-use quai_primitives::Header;
-pub const SHA_EQUIVALENT_FORK: u64 = 1_755_000;
-pub const CONVERSION_LOCK_FORK: u64 = 2_237_000;
-pub const INITIAL_EXCHANGE_RATE: u64 = 221_077_819_000_000_000;
+use quai_primitives::{
+    spec::{self, ECONOMICS, FORKS},
+    Header,
+};
+/// params.ExchangeRate (the starting exchange rate in Qit per Quai Its).
+pub const INITIAL_EXCHANGE_RATE: u128 = ECONOMICS.exchange_rate;
 fn wide(n: Uint) -> U1024 {
     n.resize()
 }
@@ -23,13 +25,14 @@ fn narrow(n: U1024) -> Result<Uint, Error> {
 fn u(n: u64) -> Uint {
     Uint::from_u64(n)
 }
+/// params.OneOverKqi.
 pub fn one_over_kqi(number: u64) -> Uint {
-    let base = if number > 1_220_000 {
+    let base = if number > FORKS.qi_activation {
         8_000_000_000u64
     } else {
         26_000_000
     };
-    let period = 365u64 * 17280 * 269 / 100;
+    let period = 365u64 * spec::BLOCKS_PER_DAY * 269 / 100;
     if number > 2 * period {
         return u(4 * base);
     }
@@ -40,12 +43,12 @@ pub fn one_over_kqi(number: u64) -> Uint {
 }
 pub fn equivalent_difficulty(h: &Header, difficulty: Uint) -> Result<Uint, Error> {
     let prime = share_rules::number(h.wire().prime_terminus_number.as_deref().unwrap())?;
-    if prime < rules::KAWPOW_FORK {
+    if prime < FORKS.kawpow {
         return Ok(difficulty);
     }
     let sha = Triple::from_header(h, true)?;
     let scrypt = Triple::from_header(h, false)?;
-    let base = if prime >= SHA_EQUIVALENT_FORK {
+    let base = if prime >= FORKS.sha_equivalent_difficulty {
         sha.difficulty
             .wrapping_div(&u(167000))
             .max(u(750_000_000_000))
@@ -100,7 +103,7 @@ pub fn reward_quote_at_difficulty(
     let number = share_rules::number(h.number.as_deref().unwrap())?;
     let equivalent = equivalent_difficulty(header, difficulty)?;
     let mut logarithm = quai_execution::evm::state_gas::log_q64(equivalent);
-    if prime >= rules::KAWPOW_FORK {
+    if prime >= FORKS.kawpow {
         let reset = quai_execution::evm::state_gas::log_q64(u(300_000_000_000));
         logarithm = logarithm
             .checked_sub(reset)
@@ -115,7 +118,7 @@ pub fn reward_quote_at_difficulty(
     let qi = equivalent
         .wrapping_div(&one_over_kqi(number))
         .max(Uint::ONE);
-    let conversion_quai = if prime >= CONVERSION_LOCK_FORK {
+    let conversion_quai = if prime >= FORKS.conversion_lock_change {
         narrow(wide(quai).wrapping_add(&wide(average_fees).wrapping_mul(&U1024::from_u64(2))))?
     } else {
         quai
@@ -144,7 +147,7 @@ pub fn expected_base_fee(
         return Ok(Uint::ZERO);
     }
     let exchange = if profile.genesis.contains(&parent.parents[2]) {
-        u(INITIAL_EXCHANGE_RATE)
+        Uint::from_u128(INITIAL_EXCHANGE_RATE)
     } else {
         let hash = parent
             .object

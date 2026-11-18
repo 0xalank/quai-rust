@@ -11,6 +11,7 @@ use crate::{
     gas,
 };
 use crypto_bigint::U512;
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     receipt::{logs_bloom, Receipt},
     transaction::{Address, Kind, Transaction},
@@ -239,7 +240,7 @@ fn apply_authenticated(
                 .prime_number
                 .ok_or(CapabilityError::Context("selfdestruct prime context"))?;
             let amount = balance(&staged, &sender)?;
-            if prime >= 2_444_574 {
+            if prime >= FORKS.polaris {
                 staged.account_mut(&sender)?.unwrap().nonce = nonce.wrapping_add(1);
                 set_balance(&mut staged, sender, Word::ZERO)?;
                 if beneficiary != sender {
@@ -389,7 +390,7 @@ pub fn apply_external(
         .ok_or(CapabilityError::Context("ETX fork context"))?;
     let maximum = block.vm.block_gas_limit / 5;
     let oversize = tx.gas > maximum;
-    if oversize && prime < 2_317_000 {
+    if oversize && prime < FORKS.security_hardening {
         return Err(Error::Invalid("ETX gas limit"));
     }
     let reserved = if oversize { 21000 } else { tx.gas };
@@ -401,7 +402,7 @@ pub fn apply_external(
     let creation = tx.to == zero;
     let intrinsic = gas::intrinsic_gas(&tx.data, &tx.access_list, creation)
         .map_err(|_| Error::Invalid("intrinsic_gas_overflow"))?;
-    if !oversize && tx.gas < intrinsic && prime < 2_317_000 {
+    if !oversize && tx.gas < intrinsic && prime < FORKS.security_hardening {
         return Err(Error::Invalid("intrinsic_gas"));
     }
     let mut staged = world.clone();
@@ -596,7 +597,7 @@ mod authority_tests {
                     trace: false,
                 },
                 environment: Environment {
-                    prime_number: Some(2444574),
+                    prime_number: Some(FORKS.polaris),
                     delete_empty: true,
                     ..Default::default()
                 },

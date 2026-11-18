@@ -10,6 +10,7 @@ use crate::{
     settlement::{self, BlockContext, Error},
     utxo::UtxoState,
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::{
     receipt::{Log, Receipt, BLOOM_BYTES},
     transaction::{keccak, Address, Kind, Transaction},
@@ -182,11 +183,7 @@ fn inner(
         let mut gas = t.gas;
         let min = if t.etx_type == 6 { 6 } else { 0 };
         let period = if t.etx_type == 6 {
-            if p >= 2_237_000 {
-                10
-            } else {
-                CONVERSION_LOCK
-            }
+            FORKS.unwrap_qi_lock_period(p)
         } else {
             0
         };
@@ -248,13 +245,14 @@ fn inner(
         if lock > 3 || !local(t.to, c) {
             return Err(Error::Invalid("coinbase recipient/lock"));
         }
-        let gas = if c.parent_height < 15 * economy::DAY {
+        // core/state_processor.go: coinbase gas is free before TimeToStartTx.
+        let gas = if c.parent_height < FORKS.start_tx {
             0
         } else {
             21000
         };
         let mut status = 2;
-        if qi && p < 262000 {
+        if qi && p < FORKS.controller_kick_in {
             return Ok(Applied {
                 created,
                 deleted_hashes,
@@ -288,7 +286,7 @@ fn inner(
                 if !crate::evm::calls::local(&owner, c.block.vm.location) {
                     return Err(Error::Invalid("coinbase owner scope"));
                 }
-                if h < 5 * 7 * economy::DAY
+                if h < FORKS.coinbase_lockup_precompile
                     || world.account(&owner)?.is_none_or(|v| v.code.is_empty())
                 {
                     status = 0;
@@ -317,7 +315,7 @@ fn inner(
             }
         }
         let v = receipt(status, gas);
-        if h > 15 * economy::DAY {
+        if h > FORKS.start_tx {
             charge(c, gas, true)?;
         }
         r = Some(v);
@@ -361,7 +359,7 @@ fn inner(
         }
     } else if qi {
         if t.sender[0] == t.to[0] {
-            if p < 262000 {
+            if p < FORKS.controller_kick_in {
                 r = Some(receipt(0, 0));
             } else if t.gas < 21000 {
                 charge(c, t.gas, false)?;
@@ -391,7 +389,7 @@ fn inner(
                 r = Some(v);
             }
         } else {
-            if p >= 2_317_000 && value > Word::from_u64(14) {
+            if p >= FORKS.security_hardening && value > Word::from_u64(14) {
                 return Err(Error::Invalid("regular Qi denomination"));
             }
             let denom = bytes(value)[31];

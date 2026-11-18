@@ -311,15 +311,7 @@ impl confirmation::Reader for Reader {
         if let Some(d) = &value.delta {
             return Ok(d.snapshots[c].clone().map(Arc::new));
         }
-        let p = placement::Profile {
-            location: self.profile.location[..c].to_vec(),
-            genesis: std::collections::BTreeSet::from([self.profile.genesis[2].id()]),
-            default_genesis: None,
-            minimum_difficulty: crate::rules::Uint::from_u64(2),
-            duration: 5,
-            gas_ceiling: self.profile.gas_limit,
-            p2p_threshold: 7,
-        };
+        let p = crate::chain::Chain::from_private(self.profile.clone()).placement_profile(c);
         Ok(Some(Arc::new(placement::bootstrap_candidate(
             &self.profile.genesis[2],
             &p,

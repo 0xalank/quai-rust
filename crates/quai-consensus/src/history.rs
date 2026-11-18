@@ -1,5 +1,6 @@
 //! Bounded ancestry snapshots. Imported records are candidates, never chain authority.
 use crate::{rules::Uint, share_rules, verifier::PINNED_SCHEDULE, Error};
+use quai_primitives::spec::FORKS;
 use quai_primitives::{work::WorkObject, Hash, Header};
 use std::{collections::BTreeMap, sync::Arc};
 pub const MAX_RECORDS: usize = 4096;
@@ -76,7 +77,7 @@ impl Record {
         if !crate::rules::pow_id_valid(self.prime, aux.as_ref().map(|a| a.id()), false) {
             return Err(Error::Invalid("work-object proof ID"));
         }
-        if self.prime >= crate::rules::KAWPOW_FORK {
+        if self.prime >= FORKS.kawpow {
             if let Some(a) = aux {
                 a.verify_binding(self.header.seal_hash())?;
             }

@@ -12,6 +12,7 @@ use crate::{
     utxo::{self, UtxoState},
 };
 use quai_primitives::{
+    spec::{self, FORKS},
     transaction::{Address, Kind, Transaction},
     Hash,
 };
@@ -34,6 +35,8 @@ pub fn allocate(
     prime: u64,
     location: [u8; 2],
 ) -> Result<usize, Error> {
+    // core/headerchain_validation.go Finalize unlocks only in zone [0, 0];
+    // core/state/gen_allocs.go AddLockedBalances at height 1 and each month.
     if location != [0, 0] || height != 1 && height % economy::MONTH != 0 {
         return Ok(0);
     }
@@ -57,7 +60,9 @@ pub fn allocate(
             break;
         }
         let flags = row[28];
-        if prime >= 1_530_500 && flags & 1 != 0 || prime >= 2_444_574 && flags & 2 != 0 {
+        // Forfeiture from SingularityForkBlock, founder forfeiture from PolarisForkBlock.
+        if prime >= FORKS.singularity && flags & 1 != 0 || prime >= FORKS.polaris && flags & 2 != 0
+        {
             continue;
         }
         let address: Address = row[8..28].try_into().unwrap();
@@ -162,7 +167,7 @@ pub fn trim(
     let mut trimmed = vec![];
     let mut removed = Word::ZERO;
     for denomination in 0..=5u8 {
-        let depth = 2 * (denomination as u64 + 1) * 7 * economy::DAY;
+        let depth = spec::TRIM_DEPTHS[denomination as usize];
         if height <= depth {
             continue;
         }
@@ -183,7 +188,7 @@ pub fn trim(
                 continue;
             }
             let hash = utxo::utxo_hash(point, &value);
-            if prime >= 2_237_000 && !deleted.insert(hash) {
+            if prime >= FORKS.conversion_lock_change && !deleted.insert(hash) {
                 continue;
             }
             staged

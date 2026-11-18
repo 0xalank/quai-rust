@@ -4,10 +4,10 @@ use crate::{
     Error,
 };
 use crypto_bigint::{Encoding, U1024};
-use quai_primitives::{Hash, Header};
-pub const DEPTH_FORK: u64 = 1_330_000;
-pub const COUNT_FORK: u64 = 1_530_500;
-pub const STABILITY_FORK: u64 = 1_872_600;
+use quai_primitives::{
+    spec::{self, FORKS},
+    Hash, Header,
+};
 const Q: u64 = 1 << 32;
 fn w(n: Uint) -> U1024 {
     n.resize()
@@ -89,18 +89,10 @@ impl Triple {
     }
 }
 pub fn inclusion_depth(prime: u64) -> usize {
-    if prime >= DEPTH_FORK {
-        4
-    } else {
-        3
-    }
+    FORKS.inclusion_depth(prime)
 }
 pub fn count_limits(prime: u64) -> (usize, usize, usize) {
-    if prime >= COUNT_FORK {
-        (32, 16, 16)
-    } else {
-        (16, 8, 8)
-    }
+    FORKS.workshare_counts(prime)
 }
 pub fn kawpow_share_difficulty(
     diff: Uint,
@@ -147,15 +139,20 @@ pub fn share_target(
     parent_target: Uint,
     prime: u64,
 ) -> Result<Uint, Error> {
-    if prime < rules::KAWPOW_FORK {
+    if prime < FORKS.kawpow {
         return Err(Error::Unsupported("pre-fork share target"));
     }
-    if prime == rules::KAWPOW_FORK {
+    if prime == FORKS.kawpow {
         return Ok(u(3 * Q));
     }
-    if prime >= DEPTH_FORK {
-        let progress = (prime - DEPTH_FORK).min(10_000);
-        return Ok(u(3 * Q + (Q as u128 * progress as u128 / 10_000) as u64));
+    if prime >= FORKS.inclusion_depth_change {
+        // core/headerchain.go CalculateShareTarget: a linear ramp from
+        // TargetShaShares to MaxShaShares over InclusionDepthUpdatePeriod.
+        let period = FORKS.inclusion_depth_update_period;
+        let progress = (prime - FORKS.inclusion_depth_change).min(period);
+        return Ok(u(
+            3 * Q + (Q as u128 * progress as u128 / period as u128) as u64
+        ));
     }
     if parent_diff == Uint::ZERO {
         return Err(Error::Invalid("zero parent difficulty"));
@@ -170,7 +167,7 @@ pub fn share_target(
         w(parent_diff).wrapping_sub(&cap)
     };
     let n = delta.wrapping_mul(&w(parent_target));
-    let d = w(parent_diff).wrapping_mul(&U1024::from_u64(17280));
+    let d = w(parent_diff).wrapping_mul(&U1024::from_u64(spec::BLOCKS_PER_DAY));
     let change = qdiv(n, d, negative);
     let next = if negative {
         if change > w(parent_target) {
@@ -192,10 +189,10 @@ pub fn next_pow_triple(
     prime: u64,
     sha: bool,
 ) -> Result<Triple, Error> {
-    if prime < rules::KAWPOW_FORK {
+    if prime < FORKS.kawpow {
         return Err(Error::Unsupported("pre-fork share controller"));
     }
-    if prime == rules::KAWPOW_FORK {
+    if prime == FORKS.kawpow {
         let factor = if sha { 167000 * 600 } else { 12 * 60 };
         return Ok(Triple {
             difficulty: narrow(
@@ -218,12 +215,12 @@ pub fn next_pow_triple(
     } else {
         w(samples).wrapping_sub(&w(target))
     };
-    let factor = if prime >= STABILITY_FORK {
+    let factor = if prime >= FORKS.conversion_stability {
         3_000_000
     } else {
         300_000
     };
-    let period = if prime >= STABILITY_FORK {
+    let period = if prime >= FORKS.conversion_stability {
         20_000
     } else {
         1000
@@ -274,10 +271,10 @@ pub fn classify(header: &Header, pow: Hash, p2p_threshold: u16) -> Result<Classi
         .as_ref()
         .map(|bytes| crate::auxiliary::Auxiliary::decode(bytes).map(|a| a.id()))
         .transpose()?;
-    if prime >= rules::KAWPOW_FORK + rules::TRANSITION && id.is_none() {
+    if prime >= FORKS.progpow_grace_end() && id.is_none() {
         return Ok(Classification::Invalid);
     }
-    if prime >= rules::KAWPOW_FORK && matches!(id, Some(2..=4)) {
+    if prime >= FORKS.kawpow && matches!(id, Some(2..=4)) {
         let triple = Triple::from_header(header, id != Some(4))?;
         if triple.difficulty == Uint::ZERO {
             return Ok(Classification::Invalid);
@@ -296,8 +293,10 @@ pub fn classify(header: &Header, pow: Hash, p2p_threshold: u16) -> Result<Classi
     {
         return Ok(Classification::Block);
     }
-    if prime < rules::KAWPOW_FORK {
-        if w(Uint::from_be_bytes(pow)) <= rules::share_target(difficulty, 3)?.resize() {
+    if prime < FORKS.kawpow {
+        if w(Uint::from_be_bytes(pow))
+            <= rules::share_target(difficulty, spec::WORKSHARES_THRESHOLD_DIFF)?.resize()
+        {
             return Ok(Classification::Valid);
         }
     } else {
@@ -332,10 +331,10 @@ pub fn next_kawpow_difficulty(
     prime: u64,
     parent: Option<&crate::auxiliary::Auxiliary>,
 ) -> Result<Uint, Error> {
-    if prime < rules::KAWPOW_FORK {
+    if prime < FORKS.kawpow {
         return Err(Error::Unsupported("pre-fork KAWPOW controller"));
     }
-    if prime == rules::KAWPOW_FORK {
+    if prime == FORKS.kawpow {
         return Ok(u(21_500_000_000_000));
     }
     let Some(parent) = parent else {

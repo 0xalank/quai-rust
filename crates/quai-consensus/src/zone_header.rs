@@ -1,12 +1,13 @@
 //! Zone header policy components on supplied candidate history. No chain authority.
 use crate::{
     history::{History, Record},
-    rules::{self, Uint},
+    rules::Uint,
     share_rules::{self, Triple},
     validation::{self, Profile},
     verifier::Verifier,
     Error,
 };
+use quai_primitives::spec::FORKS;
 use quai_primitives::Hash;
 #[derive(Clone, Debug)]
 pub struct ParentEntropyProjection {
@@ -77,7 +78,7 @@ pub fn check_zone_header_projection(
     metrics: &ParentEntropyProjection,
 ) -> Result<ZoneHeaderReport, Error> {
     header.verify_binding()?;
-    if now > i64::MAX as u64 - 15 {
+    if now > i64::MAX as u64 - quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
         return Err(Error::Unsupported("header clock domain"));
     }
     validation::check_header_ancestry(history, header, profile, now, uncle)?;
@@ -111,7 +112,7 @@ pub fn check_zone_header_projection(
     if b.expansion_number.unwrap() as u8 != expansion {
         return Err(Error::Invalid("zone expansion"));
     }
-    if header.prime >= rules::KAWPOW_FORK && w.aux_pow.is_some() {
+    if header.prime >= FORKS.kawpow && w.aux_pow.is_some() {
         verifier.verify_auxiliary_components(&header.header, false)?;
     }
     let base_fee = crate::economics::expected_base_fee(history, &parent, profile)?;
@@ -139,7 +140,7 @@ pub fn check_zone_header_projection(
     if b.prime_terminus_hash.as_ref().unwrap().value.as_slice() != ph || header.prime != pn {
         return Err(Error::Invalid("prime terminus binding"));
     }
-    if header.prime >= rules::KAWPOW_FORK {
+    if header.prime >= FORKS.kawpow {
         let (sha, scrypt) =
             validation::expected_share_triples(&parent, header.prime, &profile.location)?;
         if Triple::from_header(&header.header, true)? != sha {
@@ -195,7 +196,7 @@ pub fn verify_zone_header_components(
     uncle: bool,
 ) -> Result<ZoneHeaderReport, Error> {
     profile.validate()?;
-    if now > i64::MAX as u64 - 15 {
+    if now > i64::MAX as u64 - quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
         return Err(Error::Unsupported("header clock domain"));
     }
     validation::check_header_ancestry(history, header, profile, now, uncle)?;

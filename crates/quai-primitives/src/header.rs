@@ -60,14 +60,9 @@ impl Header {
         schedule: Schedule,
         allow_auxiliary: bool,
     ) -> Result<Self, String> {
-        if bytes.len()
-            > if allow_auxiliary {
-                crate::auxiliary::MAX_AUX_BYTES + 65536
-            } else {
-                65536
-            }
-        {
-            return Err("header input exceeds 64 KiB".into());
+        // go-quai bounds a header only by the 3 MiB message that carries it.
+        if bytes.len() > crate::schema::MAX_MESSAGE_BYTES {
+            return Err("header input exceeds the 3 MiB message bound".into());
         }
         if allow_auxiliary {
             crate::schema::preflight(".block.ProtoWorkObjectHeader", bytes)?;
@@ -94,9 +89,6 @@ impl Header {
         let location = wire.location.as_ref().ok_or("required location missing")?;
         if location.value.len() > 2 || location.value.iter().any(|n| *n > 15) {
             return Err("unsupported chain location".into());
-        }
-        if wire.data.len() > 4096 {
-            return Err("header data exceeds supported 4 KiB domain".into());
         }
         wire.lock = Some(wire.lock.unwrap_or(0) as u8 as u32);
         let activated = prime >= schedule.kawpow_fork;

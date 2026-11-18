@@ -8,6 +8,7 @@ use crate::{
     Error,
 };
 use crypto_bigint::Encoding;
+use quai_primitives::spec::FORKS;
 use quai_primitives::{Hash, Header};
 use std::collections::BTreeSet;
 pub fn internal_address(address: &[u8], location: &[u8]) -> bool {
@@ -43,13 +44,14 @@ pub fn data_policy(
 ) -> Result<(), Error> {
     let h = header.wire();
     let address = &h.primary_coinbase.as_ref().unwrap().value;
-    if address[1] > 127 && qi_restriction_height < 262_000 {
+    if address[1] > 127 && qi_restriction_height < FORKS.controller_kick_in {
         return Err(Error::Invalid("Qi coinbase before controller activation"));
     }
     if h.data.is_empty() {
         return Err(Error::Invalid("empty header data"));
     }
-    if h.data[0] > 3 {
+    // len(params.LockupByteToBlockDepth) - 1 = params.MaxLockupByte.
+    if h.data[0] as usize > quai_primitives::spec::LOCK_PERIODS.by_lock_byte.len() - 1 {
         return Err(Error::Invalid("header data lock byte"));
     }
     let location = &h.location.as_ref().unwrap().value;
@@ -59,7 +61,7 @@ pub fn data_policy(
     if h.data.len() == 41 && !internal_address(&h.data[21..41], location) {
         return Err(Error::Invalid("beneficiary scope"));
     }
-    if early_lock && num(header)? < 2 * rules::BLOCKS_PER_MONTH && h.lock.unwrap() != 0 {
+    if early_lock && num(header)? < FORKS.lockup_start && h.lock.unwrap() != 0 {
         return Err(Error::Invalid("early header lock"));
     }
     Ok(())
@@ -208,13 +210,16 @@ pub fn check_header_ancestry(
     let parent = history.get(&header.parents[2])?;
     let w = header.header.wire();
     let b = header.object.header().wire();
-    if b.extra.as_deref().unwrap_or_default().len() > 32 {
+    if b.extra.as_deref().unwrap_or_default().len() > quai_primitives::spec::MAXIMUM_EXTRA_DATA_SIZE
+    {
         return Err(Error::Invalid("extra data size"));
     }
     if w.header_hash.as_ref().unwrap().value.as_slice() != header.object.header().hash() {
         return Err(Error::Invalid("body header commitment"));
     }
-    if !uncle && w.time.unwrap() > now.saturating_add(15) {
+    if !uncle
+        && w.time.unwrap() > now.saturating_add(quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME)
+    {
         return Err(Error::Invalid("future block"));
     }
     if w.time.unwrap() < parent.header.wire().time.unwrap() {
@@ -344,6 +349,35 @@ fn check_inclusions_verified(
         |p| Ok(native_parent_metrics(verifier, history, p, profile)?.order),
     )
 }
+/// core/poem.go UncledLogEntropy: the intrinsic entropy of every included
+/// header whose proof-of-work meets its own difficulty (VerifySeal), except
+/// SHA and scrypt shares (PowID above Kawpow). Go applies it after KawPow;
+/// before KawPow the port uses `prefork_shares`, which also weighs the shares.
+pub fn uncled_log_entropy(verifier: &mut Verifier, block: &Record) -> Result<Uint, Error> {
+    let location = block.header.wire().location.as_ref().unwrap().value.clone();
+    let mut total = crypto_bigint::U512::ZERO;
+    for h in block.uncles()? {
+        if let Some(bytes) = &h.wire().aux_pow {
+            if crate::auxiliary::Auxiliary::decode(bytes)?.id() > 1 {
+                continue;
+            }
+        }
+        let difficulty = diff(&h)?;
+        if difficulty == Uint::ZERO {
+            continue;
+        }
+        let work = verifier.work_for_inclusion(&h, &location)?;
+        if quai_primitives::meets_blake3_target(&work.hash(), &difficulty.to_be_bytes())
+            .map_err(|_| Error::Invalid("uncle difficulty"))?
+        {
+            total = total.wrapping_add(&rules::intrinsic(work.hash())?.resize());
+        }
+    }
+    if total.bits_vartime() > 256 {
+        return Err(Error::Unsupported("uncled entropy magnitude"));
+    }
+    Ok(total.resize())
+}
 /// Native parent proof, order and entropy that the zone header rules expect.
 pub fn native_parent_metrics(
     verifier: &mut Verifier,
@@ -383,7 +417,7 @@ pub fn native_parent_metrics(
             .try_into()
             .map_err(|_| Error::Invalid("entropy array"))
     };
-    let pre_work = if parent.prime < rules::KAWPOW_FORK {
+    let pre_work = if parent.prime < FORKS.kawpow {
         crate::prefork_shares::native_components(verifier, history, parent)?.workshares
     } else {
         Uint::ZERO
@@ -396,7 +430,7 @@ pub fn native_parent_metrics(
         parent_delta: arr(&b.parent_delta_entropy)?,
         parent_uncled_delta: arr(&b.parent_uncled_delta_entropy)?,
         uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap())?,
-        postfork_share_count: if parent.prime >= rules::KAWPOW_FORK {
+        postfork_share_count: if parent.prime >= FORKS.kawpow {
             Some(parent.uncles()?.len() as u32)
         } else {
             None
@@ -463,12 +497,12 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
     for _ in 0..share_rules::inclusion_depth(block.prime) {
         let ancestor = history.get(&p)?;
         ancestors.insert(p);
-        if block.prime >= rules::POLARIS_FORK {
+        if block.prime >= FORKS.polaris {
             ancestor_work.insert(identity(ancestor.header())?);
         }
         for uncle in ancestor.uncles()? {
             banned.insert(header_id(&uncle)?);
-            if block.prime >= rules::POLARIS_FORK {
+            if block.prime >= FORKS.polaris {
                 banned_work.insert(identity(&uncle)?);
             }
         }
@@ -476,7 +510,7 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
     }
     ancestors.insert(block.id);
     banned.insert(block.id);
-    if block.prime >= rules::POLARIS_FORK {
+    if block.prime >= FORKS.polaris {
         ancestor_work.insert(identity(block.header())?);
         for h in headers {
             let id = identity(h)?;
@@ -502,7 +536,7 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
             return Err(Error::Invalid("uncle is ancestor"));
         }
         let classification = share_rules::classify(h, *pow, profile.p2p_threshold)?;
-        let workshare = if block.prime < rules::KAWPOW_FORK {
+        let workshare = if block.prime < FORKS.kawpow {
             !quai_primitives::meets_blake3_target(pow, &diff(h)?.to_be_bytes())
                 .map_err(|_| Error::Invalid("difficulty"))?
         } else {
@@ -522,7 +556,7 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
         if !rules::pow_id_valid(prime(h)?, algo, workshare) {
             return Err(Error::Invalid("uncle proof ID"));
         }
-        if block.prime >= rules::KAWPOW_FORK {
+        if block.prime >= FORKS.kawpow {
             if matches!(algo, Some(2 | 3)) {
                 sha += 1;
                 if sha > sha_max {
@@ -556,7 +590,7 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
         if diff(h)? != expected_difficulty(history, &parent, profile)? {
             return Err(Error::Invalid("uncle difficulty"));
         }
-        if block.prime >= rules::KAWPOW_FORK {
+        if block.prime >= FORKS.kawpow {
             let order = parent_order(&parent)?;
             let expected = if order == 0 || profile.genesis.contains(&parent.id) {
                 parent.numbers[0]
@@ -566,7 +600,7 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
             if prime(h)? != expected {
                 return Err(Error::Invalid("uncle prime terminus"));
             }
-            if prime(h)? >= rules::KAWPOW_FORK {
+            if prime(h)? >= FORKS.kawpow {
                 let (sha, scrypt) = expected_share_triples(&parent, prime(h)?, &profile.location)?;
                 let actual = Triple::from_header(h, true)?;
                 if actual.difficulty != sha.difficulty || actual.count != sha.count {

@@ -171,10 +171,18 @@ pub fn verify_pow(corpus: &Value) -> Result<Value, String> {
             );
             compare(
                 json!(objects),
-                "full block admission unavailable",
-                json!(verifier
-                    .validate_block(&object, quai_primitives::work::Context::Zone)
-                    .is_err()),
+                "a block without its ancestry fails validation",
+                json!(
+                    quai_consensus::history::Record::decode(&object).map_or(true, |r| {
+                        quai_consensus::block::validate_on_genesis(
+                            &mut verifier,
+                            quai_consensus::chain::Chain::private_hierarchy().unwrap(),
+                            [None, None, Some(std::sync::Arc::new(r))],
+                            1_800_000_000,
+                        )
+                        .is_err()
+                    })
+                ),
                 &json!(true),
             );
             objects += 1;

@@ -2,6 +2,7 @@
 //! Header behavior follows the pinned go-quai sources documented in NOTICE.md.
 pub mod header;
 pub mod recover;
+pub mod spec;
 pub mod vectors;
 pub mod wire;
 pub use header::{Header, Schedule};

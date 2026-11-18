@@ -213,9 +213,11 @@ Gate: Quais.js and Pelagus work against the Rust node.
        reservation of about 2.2 MB from a few input bytes. Non-test
        `.unwrap()`: 466 to 354 in the old crates (`quai-node` adds 57). Left:
        about 150 unwraps of proto fields that `Header::decode` guarantees
-       (needs API changes), `evm/*`, `quai-rpc`. Open question: `Lockup::decode`
+       (needs API changes), `evm/*`, `quai-rpc`. Closed: `Lockup::decode`
        accepts a 58-byte record with a zero delegate that `encode` writes as
-       38 bytes; check Go's behaviour.
+       38 bytes. Go does the same: its writers add the delegate only when it
+       is not zero, and `ReadCoinbaseLockup` reads it only from a 58-byte
+       record. Test: `lockup::tests::record_layout_matches_go`.
 
 ## Phase 4: speed
 

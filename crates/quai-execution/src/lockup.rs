@@ -164,3 +164,43 @@ pub fn add(
     world.set_lockup(key, Some(next))?;
     Ok((previous, hash))
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // go-quai v0.57.0 `core/rawdb/accessors_chain.go`: every lockup writer
+    // appends the delegate only when `!delegate.Equal(common.Zero)`, and
+    // `Address.Equal` compares the address bytes, so no writer stores a
+    // 58-byte record with a zero delegate. `ReadCoinbaseLockup` reads
+    // `data[38:]` only when the record has 58 bytes. A 58-byte record with a
+    // zero delegate therefore reads as zero and writes back as 38 bytes.
+    #[test]
+    fn record_layout_matches_go() {
+        let mut lockup = Lockup {
+            balance: Word::from_u64(7),
+            unlock_height: 1_000,
+            elements: 3,
+            delegate: [0; 20],
+        };
+        let short = lockup.encode();
+        assert_eq!(short.len(), 38);
+        assert_eq!(Lockup::decode(&short), Ok(lockup.clone()));
+
+        lockup.delegate = [9; 20];
+        let long = lockup.encode();
+        assert_eq!(long.len(), 58);
+        assert_eq!(&long[..38], &short[..]);
+        assert_eq!(Lockup::decode(&long), Ok(lockup));
+
+        let mut zero_delegate = short.clone();
+        zero_delegate.extend([0; 20]);
+        let read = Lockup::decode(&zero_delegate).expect("58-byte record");
+        assert_eq!(read.delegate, [0; 20]);
+        assert_eq!(read.encode(), short);
+
+        // Go panics below 38 bytes and no Go writer makes another length.
+        for len in [0, 37, 39, 57, 59] {
+            assert!(Lockup::decode(&vec![0; len]).is_err(), "length {len}");
+        }
+    }
+}

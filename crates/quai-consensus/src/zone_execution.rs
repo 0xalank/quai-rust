@@ -95,6 +95,9 @@ impl Profile {
 }
 pub struct Executed {
     pub receipts: Vec<Receipt>,
+    /// The index in the block body of the transaction behind each receipt
+    /// (an incoming ETX can leave no receipt).
+    pub receipt_txs: Vec<u32>,
     pub outbound: Vec<Transaction>,
     pub unlocks: Vec<Unlock>,
     pub trimmed: Vec<Trimmed>,
@@ -340,8 +343,10 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
     let mut previous_external = true;
     let mut first_qi = true;
     let mut etx_count = 0u64;
-    for tx in block.object.transactions() {
+    let mut receipt_txs = vec![];
+    for (tx_index, tx) in block.object.transactions().iter().enumerate() {
         let mut price = None;
+        let receipts_before = receipts.len();
         match tx.kind() {
             Kind::Quai(q) => {
                 let v = settlement::apply_quai(&mut state.world, tx, &mut c.block)
@@ -436,6 +441,8 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                 etx_count += 1;
             }
         }
+        receipt_txs.resize(receipts.len(), tx_index as u32);
+        debug_assert!(receipts.len() <= receipts_before + 1);
         if let Some(price) = price {
             if price < base_fee {
                 return Err(invalid("transaction price below base fee"));
@@ -580,6 +587,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
     }
     Ok(Executed {
         receipts,
+        receipt_txs,
         outbound,
         unlocks,
         trimmed,

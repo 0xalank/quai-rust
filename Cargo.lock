@@ -2571,9 +2571,11 @@ name = "quai-node"
 version = "0.1.0"
 dependencies = [
  "crypto-bigint",
+ "libp2p",
  "prost",
  "quai-consensus",
  "quai-execution",
+ "quai-network",
  "quai-primitives",
  "quai-rpc",
  "quai-store",

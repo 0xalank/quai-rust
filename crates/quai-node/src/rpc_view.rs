@@ -1,25 +1,35 @@
-//! `quai-node rpc`: a `quai_rpc::view::ChainView` over a QEX1 export and the
-//! state of the latest replay checkpoint in the data directory.
+//! The native RPC view: a `quai_rpc::view::ChainView` over validated chain
+//! data. Three ways to open it:
+//! - [`ExportView::open`] (`quai-node rpc --export DIR`): a QEX1 export and
+//!   the state of the latest replay checkpoint in the data directory;
+//! - [`ExportView::open_store`] (`quai-node rpc`): the node's block store
+//!   (`blockstore.rs`) and the state of the latest checkpoint;
+//! - [`ExportView::live`] (`quai-node run`): the block store and head state
+//!   of a running node. Its head moves; every call reads one snapshot of the
+//!   store, the head and its state ([`ChainView::pinned`]).
 //!
 //! What is validated, and how:
-//! - The checkpoint names the block at its height; the replay that wrote it
-//!   checked every block up to there and every state root. At startup the
-//!   view recomputes the hash of each zone block from genesis to the
-//!   checkpoint, checks the parent links, and requires the block at the
+//! - Export: the checkpoint names the block at its height; the replay that
+//!   wrote it checked every block up to there and every state root. At
+//!   startup the view recomputes the hash of each zone block from genesis to
+//!   the checkpoint, checks the parent links, and requires the block at the
 //!   checkpoint height to be the checkpoint's block. The head is that block.
-//! - The state is the checkpoint's state file; its roots must equal the head
-//!   header's EVM, ETX and UTXO roots.
-//! - Receipts come from the export (Go exports only); the replay compared
-//!   them with the header receipt roots.
+//! - Store: the chain processor writes only blocks that passed every check;
+//!   the head is the checkpoint's block (standalone) or the processor's
+//!   published head (live).
+//! - The state's roots must equal the head header's EVM, ETX and UTXO roots.
+//! - Receipts come from the export (Go exports only) or the store (Go
+//!   receipts, or the node's own execution), never from peers.
 //! - Derived block fields: the order comes from the export's prime and region
-//!   records (the replay checked them against the computed order); the total
-//!   entropy of a block is its child's zone parent entropy (checked by the
-//!   replay), and for the head it is computed natively. Uncles are classified
-//!   with their proof-of-work, as go-quai does.
+//!   records or the processor's computed order; the total entropy of a block
+//!   is its child's zone parent entropy (checked when the child was
+//!   validated), and for the head it is computed natively. Uncles are
+//!   classified with their proof-of-work, as go-quai does.
 //!
 //! "Latest" is the head. State at other blocks is served only when their
 //! EVM root is the head's (or empty); otherwise the answer is go-quai's for
 //! state that a pruned node no longer keeps.
+use crate::blockstore::{self, StoreReader};
 use crate::checkpoint;
 use crate::log::Log;
 use crate::qex::{self, Context, Manifest, SegmentReader};
@@ -27,18 +37,19 @@ use crate::replay;
 use crate::rpc_call;
 use crate::spec::Chain;
 use crate::store::{self, PastDb, StateStore};
+use crate::uncles;
 use quai_consensus::{
     history::{self, History, Record},
-    pow::{Algorithm, SharedCaches},
-    share_rules::{self, Classification},
+    pow::SharedCaches,
     verifier::{Verifier, PINNED_SCHEDULE},
+    zone_execution::State,
 };
 use quai_execution::{
     historical::History as _,
     qi::{OutPoint, UtxoView},
     state_store::Commitment,
 };
-use quai_primitives::{transaction::Address, work::WorkObject, Hash, Header};
+use quai_primitives::{transaction::Address, work::WorkObject, Hash};
 use quai_rpc::view::{
     AccountState, BlockData, CallError, CallRequest, CallResult, ChainView, LogData, OutpointData,
     ReceiptData, TxPosition, UncleKind, UtxoData, ViewError, U256,
@@ -47,7 +58,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 /// `types.EmptyRootHash`.
@@ -55,10 +66,59 @@ pub const EMPTY_ROOT: Hash = [
     0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6, 0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e,
     0x5b, 0x48, 0xe0, 0x1b, 0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
 ];
-/// go-quai's default `WorkShareP2PThresholdDiff`.
-const P2P_THRESHOLD: u16 = 7;
 /// Decoded blocks kept in memory.
 const BLOCK_CACHE: usize = 512;
+
+fn unavailable(e: impl std::fmt::Display) -> ViewError {
+    ViewError::Unavailable(e.to_string())
+}
+fn hash_of(v: &Option<quai_primitives::schema::common::ProtoHash>) -> Hash {
+    let mut h = [0u8; 32];
+    if let Some(v) = v {
+        let take = v.value.len().min(32);
+        h[32 - take..].copy_from_slice(&v.value[v.value.len() - take..]);
+    }
+    h
+}
+fn u256(v: &[u8]) -> U256 {
+    let mut out = [0u8; 32];
+    let take = v.len().min(32);
+    out[32 - take..].copy_from_slice(&v[v.len() - take..]);
+    out
+}
+
+/// A zone block as a backend keeps it.
+struct Raw {
+    hash: Hash,
+    order: u8,
+    bytes: Vec<u8>,
+    /// Uncle classes, when the backend keeps them.
+    kinds: Option<Vec<u8>>,
+}
+/// The blocks of one consistent snapshot: an export index or a store read.
+trait Blocks: Send + Sync {
+    /// The canonical hash at `height`, up to the snapshot's head.
+    fn hash_at(&self, height: u64) -> Result<Option<Hash>, ViewError>;
+    /// The canonical height of a block.
+    fn height_of(&self, hash: &Hash) -> Result<Option<u64>, ViewError>;
+    fn block(&self, height: u64, hash: &Hash) -> Result<Raw, ViewError>;
+    /// Any kept block by hash (ancestry reads).
+    fn record_by_hash(&self, hash: &Hash) -> Result<Option<Record>, ViewError>;
+    /// The backend keeps receipts.
+    fn receipts_kept(&self) -> bool;
+    /// What to say when a block has none.
+    fn no_receipts(&self) -> &'static str;
+    /// go-quai storage receipts of a canonical block; None: not kept.
+    fn receipts(&self, height: u64, hash: &Hash) -> Result<Option<Vec<u8>>, ViewError>;
+    /// The block's total entropy as its child records it, if it has one.
+    fn child_entropy(&self, height: u64, hash: &Hash) -> Result<Option<U256>, ViewError>;
+    /// Where a transaction may be: (height, index) candidates.
+    fn tx_candidates(&self, hash: &Hash) -> Result<Vec<(u64, u32)>, ViewError>;
+    /// The UTXOs block `height` created.
+    fn created(&self, height: u64) -> Result<Vec<OutPoint>, ViewError>;
+    /// The indexed outpoints of an address; None: no index here.
+    fn outpoints(&self, address: &Address) -> Result<Option<Vec<OutPoint>>, ViewError>;
+}
 
 /// Where a zone record's bytes are.
 #[derive(Clone, Copy)]
@@ -71,7 +131,6 @@ struct Entry {
     order: u8,
     hash: Hash,
 }
-
 /// The export index: one entry per zone height from genesis to the head.
 pub struct Index {
     files: Vec<Option<File>>,
@@ -80,6 +139,8 @@ pub struct Index {
     /// (first 8 bytes of the transaction hash, height, index), sorted.
     txs: Vec<(u64, u64, u32)>,
     receipts: bool,
+    /// The checkpoint's redemption and trim history (created UTXOs).
+    past: Mutex<PastDb>,
 }
 impl Index {
     fn read(&self, segment: u16, at: u64, len: u32) -> Result<Vec<u8>, ViewError> {
@@ -93,69 +154,380 @@ impl Index {
             .map_err(|e| ViewError::Unavailable(format!("export read: {e}")))?;
         Ok(buf)
     }
-    fn block_bytes(&self, height: u64) -> Result<Vec<u8>, ViewError> {
-        let e = self.entry(height)?;
-        self.read(e.segment, e.block_at, e.block_len)
-    }
     fn entry(&self, height: u64) -> Result<&Entry, ViewError> {
         self.heights
             .get(height as usize)
             .ok_or_else(|| ViewError::Unavailable(format!("zone height {height}")))
     }
     fn record(&self, height: u64) -> Result<Record, ViewError> {
-        Record::decode(&self.block_bytes(height)?)
+        let e = self.entry(height)?;
+        let bytes = self.read(e.segment, e.block_at, e.block_len)?;
+        Record::decode(&bytes)
             .map_err(|e| ViewError::Unavailable(format!("zone block {height}: {e}")))
     }
 }
-/// Ancestry reads for the native entropy computation.
-struct Records(Arc<Index>);
-impl history::Reader for Records {
-    fn read(&self, id: &Hash) -> Result<Option<Arc<Record>>, quai_consensus::Error> {
-        let Some(height) = self.0.by_hash.get(id) else {
+impl Blocks for Index {
+    fn hash_at(&self, height: u64) -> Result<Option<Hash>, ViewError> {
+        Ok(self.heights.get(height as usize).map(|e| e.hash))
+    }
+    fn height_of(&self, hash: &Hash) -> Result<Option<u64>, ViewError> {
+        Ok(self.by_hash.get(hash).copied())
+    }
+    fn block(&self, height: u64, _: &Hash) -> Result<Raw, ViewError> {
+        let e = *self.entry(height)?;
+        Ok(Raw {
+            hash: e.hash,
+            order: e.order,
+            bytes: self.read(e.segment, e.block_at, e.block_len)?,
+            kinds: None,
+        })
+    }
+    fn record_by_hash(&self, hash: &Hash) -> Result<Option<Record>, ViewError> {
+        match self.by_hash.get(hash) {
+            Some(h) => self.record(*h).map(Some),
+            None => Ok(None),
+        }
+    }
+    fn receipts_kept(&self) -> bool {
+        self.receipts
+    }
+    fn no_receipts(&self) -> &'static str {
+        "receipts (this export has none)"
+    }
+    fn receipts(&self, height: u64, _: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
+        if !self.receipts {
             return Ok(None);
-        };
-        self.0
-            .record(*height)
-            .map(|r| Some(Arc::new(r)))
-            .map_err(|_| quai_consensus::Error::Unavailable("export ancestry record"))
+        }
+        let e = *self.entry(height)?;
+        if e.receipts_len == 0 {
+            return Ok(Some(vec![]));
+        }
+        self.read(e.segment, e.receipts_at, e.receipts_len)
+            .map(Some)
+    }
+    fn child_entropy(&self, height: u64, _: &Hash) -> Result<Option<U256>, ViewError> {
+        if height + 1 >= self.heights.len() as u64 {
+            return Ok(None);
+        }
+        let child = self.record(height + 1)?;
+        let v = child
+            .object()
+            .header()
+            .wire()
+            .parent_entropy
+            .get(2)
+            .cloned()
+            .unwrap_or_default();
+        Ok(Some(u256(&v)))
+    }
+    fn tx_candidates(&self, hash: &Hash) -> Result<Vec<(u64, u32)>, ViewError> {
+        let prefix = u64::from_be_bytes(hash[..8].try_into().unwrap_or_default());
+        let start = self.txs.partition_point(|t| t.0 < prefix);
+        Ok(self.txs[start..]
+            .iter()
+            .take_while(|t| t.0 == prefix)
+            .map(|&(_, height, i)| (height, i))
+            .collect())
+    }
+    fn created(&self, height: u64) -> Result<Vec<OutPoint>, ViewError> {
+        let past = self
+            .past
+            .lock()
+            .map_err(|_| unavailable("past.redb lock"))?;
+        Ok(past
+            .created_at(height)
+            .map_err(|e| ViewError::Unavailable(format!("UTXOs created at {height}: {e:?}")))?
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect())
+    }
+    fn outpoints(&self, _: &Address) -> Result<Option<Vec<OutPoint>>, ViewError> {
+        Ok(None)
     }
 }
 
-/// The checkpoint state: the lazy World and UTXO set.
-struct Checkpointed {
-    state: quai_consensus::zone_execution::State,
-    evm_root: Hash,
-    /// Unspent outputs per address, when the set is small enough to scan.
+/// A read snapshot of the block store, up to `head`.
+struct StoreBlocks {
+    reader: StoreReader,
+    head: u64,
+}
+fn store_error(e: std::io::Error) -> ViewError {
+    ViewError::Unavailable(format!("block store: {e}"))
+}
+impl Blocks for StoreBlocks {
+    fn hash_at(&self, height: u64) -> Result<Option<Hash>, ViewError> {
+        if height > self.head {
+            return Ok(None);
+        }
+        self.reader.hash_at(height).map_err(store_error)
+    }
+    fn height_of(&self, hash: &Hash) -> Result<Option<u64>, ViewError> {
+        Ok(self
+            .reader
+            .canonical_number(hash)
+            .map_err(store_error)?
+            .filter(|n| *n <= self.head))
+    }
+    fn block(&self, height: u64, hash: &Hash) -> Result<Raw, ViewError> {
+        let b = self
+            .reader
+            .block(hash)
+            .map_err(store_error)?
+            .ok_or_else(|| ViewError::Unavailable(format!("stored zone block {height}")))?;
+        Ok(Raw {
+            hash: b.hash,
+            order: b.order,
+            bytes: b.block,
+            kinds: Some(b.uncle_kinds),
+        })
+    }
+    fn record_by_hash(&self, hash: &Hash) -> Result<Option<Record>, ViewError> {
+        match self.reader.block(hash).map_err(store_error)? {
+            Some(b) => Record::decode(&b.block)
+                .map(Some)
+                .map_err(|e| ViewError::Unavailable(format!("stored zone block: {e}"))),
+            None => Ok(None),
+        }
+    }
+    fn receipts_kept(&self) -> bool {
+        true
+    }
+    fn no_receipts(&self) -> &'static str {
+        "receipts (this node has none for the block: it came from peers and was not executed)"
+    }
+    fn receipts(&self, _: u64, hash: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
+        Ok(self
+            .reader
+            .block(hash)
+            .map_err(store_error)?
+            .and_then(|b| b.receipts))
+    }
+    fn child_entropy(&self, height: u64, hash: &Hash) -> Result<Option<U256>, ViewError> {
+        if height >= self.head {
+            return Ok(None);
+        }
+        self.reader.entropy(hash).map_err(store_error)
+    }
+    fn tx_candidates(&self, hash: &Hash) -> Result<Vec<(u64, u32)>, ViewError> {
+        Ok(self
+            .reader
+            .transaction(hash)
+            .map_err(store_error)?
+            .filter(|(n, _)| *n <= self.head)
+            .into_iter()
+            .collect())
+    }
+    fn created(&self, height: u64) -> Result<Vec<OutPoint>, ViewError> {
+        if !self.reader.keeps_utxos() {
+            return Err(ViewError::Unavailable(
+                "UTXOs (this node runs without state)".into(),
+            ));
+        }
+        Ok(self
+            .reader
+            .created(height)
+            .map_err(store_error)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| c.point)
+            .collect())
+    }
+    fn outpoints(&self, address: &Address) -> Result<Option<Vec<OutPoint>>, ViewError> {
+        if !self.reader.keeps_utxos() {
+            return Ok(None);
+        }
+        self.reader
+            .outpoints(address)
+            .map(Some)
+            .map_err(store_error)
+    }
+}
+
+/// Ancestry reads for the native entropy computation.
+struct Records(Arc<dyn Blocks>);
+impl history::Reader for Records {
+    fn read(&self, id: &Hash) -> Result<Option<Arc<Record>>, quai_consensus::Error> {
+        self.0
+            .record_by_hash(id)
+            .map(|r| r.map(Arc::new))
+            .map_err(|_| quai_consensus::Error::Unavailable("view ancestry record"))
+    }
+}
+
+/// The state after the head block.
+pub struct HeadState {
+    pub state: State,
+    pub evm_root: Hash,
+    pub etx_root: Hash,
+    /// Unspent outputs per address from a full scan, for a view without an
+    /// address index (export).
     by_address: Option<HashMap<Address, Vec<OutpointData>>>,
-    past: Mutex<PastDb>,
+}
+impl HeadState {
+    pub fn new(state: State, evm_root: Hash, etx_root: Hash) -> Self {
+        Self {
+            state,
+            evm_root,
+            etx_root,
+            by_address: None,
+        }
+    }
+}
+/// One consistent view: blocks, head and the head's state.
+pub struct Snapshot {
+    blocks: Arc<dyn Blocks>,
+    head: u64,
+    head_hash: Hash,
+    /// None: the node runs without state.
+    state: Option<Arc<HeadState>>,
+    head_entropy: OnceLock<Result<U256, String>>,
+}
+/// The moving head of a running node.
+pub struct Live {
+    current: RwLock<Arc<Snapshot>>,
+    events: tokio::sync::broadcast::Sender<Hash>,
+    removed: tokio::sync::broadcast::Sender<Arc<quai_rpc::view::RemovedLogs>>,
+}
+impl Live {
+    /// Publish a new head: a store snapshot that holds it and the state
+    /// after it.
+    pub fn publish(&self, reader: StoreReader, head: (u64, Hash), state: Option<Arc<HeadState>>) {
+        let snapshot = Arc::new(Snapshot {
+            blocks: Arc::new(StoreBlocks {
+                reader,
+                head: head.0,
+            }),
+            head: head.0,
+            head_hash: head.1,
+            state,
+            head_entropy: OnceLock::new(),
+        });
+        let changed = {
+            let mut current = self.current.write().unwrap_or_else(|e| e.into_inner());
+            let changed = current.head_hash != head.1;
+            *current = snapshot;
+            changed
+        };
+        if changed {
+            let _ = self.events.send(head.1);
+        }
+    }
+    pub fn head(&self) -> (u64, Hash) {
+        let c = self.current.read().unwrap_or_else(|e| e.into_inner());
+        (c.head, c.head_hash)
+    }
+    /// Announce the logs of blocks a reorg removed.
+    pub fn removed(&self, logs: quai_rpc::view::RemovedLogs) {
+        let _ = self.removed.send(Arc::new(logs));
+    }
+    pub fn has_state(&self) -> bool {
+        let c = self.current.read().unwrap_or_else(|e| e.into_inner());
+        c.state.is_some()
+    }
 }
 
 pub struct ExportView {
     chain: Arc<Chain>,
-    index: Arc<Index>,
-    head: u64,
-    checkpointed: Checkpointed,
+    /// The snapshot of a fixed or pinned view; a live view reads `live`.
+    snap: Arc<Snapshot>,
+    live: Option<Arc<Live>>,
     caches: Arc<SharedCaches>,
-    blocks: Mutex<Lru<Arc<BlockData>>>,
-    kinds: Mutex<Lru<Arc<Vec<UncleKind>>>>,
-    head_entropy: OnceLock<Result<U256, String>>,
+    /// Decoded blocks and uncle classes by block hash.
+    blocks: Arc<Mutex<Lru<Arc<BlockData>>>>,
+    kinds: Arc<Mutex<Lru<Arc<Vec<UncleKind>>>>>,
 }
-/// A small cache by zone height, oldest entry out first.
-type Lru<T> = (HashMap<u64, T>, VecDeque<u64>);
-
-fn unavailable(e: impl std::fmt::Display) -> ViewError {
-    ViewError::Unavailable(e.to_string())
+/// A small cache by block hash, oldest entry out first.
+type Lru<T> = (HashMap<Hash, T>, VecDeque<Hash>);
+fn lru<T>() -> Arc<Mutex<Lru<T>>> {
+    Arc::new(Mutex::new((HashMap::new(), VecDeque::new())))
 }
-fn hash_of(v: &Option<quai_primitives::schema::common::ProtoHash>) -> Hash {
-    let mut h = [0u8; 32];
-    if let Some(v) = v {
-        let take = v.value.len().min(32);
-        h[32 - take..].copy_from_slice(&v.value[v.value.len() - take..]);
+fn remember<T: Clone>(cache: &Mutex<Lru<T>>, key: Hash, value: &T, cap: usize) {
+    if let Ok(mut c) = cache.lock() {
+        if c.0.len() >= cap {
+            if let Some(old) = c.1.pop_front() {
+                c.0.remove(&old);
+            }
+        }
+        if c.0.insert(key, value.clone()).is_none() {
+            c.1.push_back(key);
+        }
     }
-    h
+}
+
+/// The state of a checkpoint and its binding to the head header.
+fn checkpoint_state(
+    dir: &Path,
+    chain: &Chain,
+    cp: &checkpoint::Checkpoint,
+    head: &Record,
+) -> Result<(State, Hash, Hash), String> {
+    let height = cp.height;
+    let section = cp
+        .state
+        .clone()
+        .ok_or_else(|| format!("checkpoint {height} has no state"))?;
+    let commitment = Commitment {
+        roots: quai_execution::state_image::Roots {
+            evm: section.evm,
+            etx: section.etx,
+            utxo: section.utxo,
+            accounts: section.accounts,
+            utxo_count: section.utxo_count,
+        },
+        digest: section.digest,
+    };
+    let body = head.object().header().wire();
+    if section.evm != hash_of(&body.evm_root)
+        || section.etx != hash_of(&body.etx_set_root)
+        || section.utxo != hash_of(&body.utxo_root)
+    {
+        return Err(format!(
+            "checkpoint {height} state roots differ from the head header"
+        ));
+    }
+    let store = StateStore::open(
+        dir,
+        store::profile(&chain.spec().environment, &chain.genesis_hash()),
+        height,
+        section.version,
+        commitment,
+    )
+    .map_err(|e| format!("state {height}: {e}"))?;
+    let state = store
+        .restore()
+        .map_err(|e| format!("state {height}: {e}"))?;
+    Ok((state, section.evm, section.etx))
+}
+fn latest_checkpoint(dir: &Path, chain: &Chain) -> Result<Option<checkpoint::Checkpoint>, String> {
+    let list = checkpoint::list(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let Some((height, path)) = list.first() else {
+        return Ok(None);
+    };
+    let cp = checkpoint::read(path).map_err(|e| e.to_string())?;
+    if cp.height != *height
+        || cp.environment != chain.spec().environment
+        || cp.genesis != chain.genesis_hash()
+    {
+        return Err(format!("checkpoint {height} is for another chain"));
+    }
+    Ok(Some(cp))
 }
 
 impl ExportView {
+    fn with_snapshot(
+        chain: Arc<Chain>,
+        snap: Arc<Snapshot>,
+        live: Option<Arc<Live>>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            chain,
+            snap,
+            live,
+            caches: Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?),
+            blocks: lru(),
+            kinds: lru(),
+        })
+    }
     /// Index `export` up to the latest checkpoint in `datadir` and open the
     /// checkpoint's state.
     pub fn open(export: &Path, datadir: &Path, log: &Log) -> Result<Self, String> {
@@ -167,24 +539,15 @@ impl ExportView {
             return Err("the export is for another genesis".into());
         }
         let dir = replay::checkpoint_dir(datadir, &chain, true);
-        let list = checkpoint::list(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let Some((height, path)) = list.first() else {
+        let Some(cp) = latest_checkpoint(&dir, &chain)? else {
             return Err(format!(
                 "no state checkpoint in {}: run `quai-node replay --state` first",
                 dir.display()
             ));
         };
-        let cp = checkpoint::read(path).map_err(|e| e.to_string())?;
-        if cp.height != *height
-            || cp.environment != chain.spec().environment
-            || cp.genesis != chain.genesis_hash()
-        {
-            return Err(format!("checkpoint {height} is for another chain"));
-        }
-        let section = cp
-            .state
-            .clone()
-            .ok_or_else(|| format!("checkpoint {height} has no state"))?;
+        let Some(section) = cp.state.clone() else {
+            return Err(format!("checkpoint {} has no state", cp.height));
+        };
         if cp.height > manifest.last_zone {
             return Err(format!(
                 "the export ends at zone {}, below checkpoint {}",
@@ -196,44 +559,16 @@ impl ExportView {
             "rpc view: indexing {} to checkpoint {head}",
             export.display()
         ));
-        let index = Arc::new(build_index(export, &manifest, &chain, head)?);
+        let past = PastDb::open(&dir.join("past.redb")).map_err(|e| format!("past.redb: {e}"))?;
+        let index = Arc::new(build_index(export, &manifest, &chain, head, past)?);
         if index.heights[head as usize].hash != cp.block {
             return Err(format!(
                 "the export block at {head} is not the checkpoint block {}",
                 qex::hex(&cp.block)
             ));
         }
-        // The checkpoint state and its binding to the head header.
-        let commitment = Commitment {
-            roots: quai_execution::state_image::Roots {
-                evm: section.evm,
-                etx: section.etx,
-                utxo: section.utxo,
-                accounts: section.accounts,
-                utxo_count: section.utxo_count,
-            },
-            digest: section.digest,
-        };
         let head_record = index.record(head).map_err(|e| e.to_string())?;
-        let body = head_record.object().header().wire();
-        if section.evm != hash_of(&body.evm_root)
-            || section.etx != hash_of(&body.etx_set_root)
-            || section.utxo != hash_of(&body.utxo_root)
-        {
-            return Err(format!(
-                "checkpoint {head} state roots differ from the head header"
-            ));
-        }
-        let store = StateStore::open(
-            &dir,
-            store::profile(&chain.spec().environment, &chain.genesis_hash()),
-            head,
-            section.version,
-            commitment,
-        )
-        .map_err(|e| format!("state {head}: {e}"))?;
-        let state = store.restore().map_err(|e| format!("state {head}: {e}"))?;
-        let past = PastDb::open(&dir.join("past.redb")).map_err(|e| format!("past.redb: {e}"))?;
+        let (state, evm, etx) = checkpoint_state(&dir, &chain, &cp, &head_record)?;
         let by_address = address_index(&state.utxos);
         log.info(&format!(
             "rpc view: {} zone blocks, {} transactions, head {head} {}, {} accounts, {} UTXOs{} ({:.1}s)",
@@ -249,34 +584,143 @@ impl ExportView {
             },
             started.elapsed().as_secs_f64()
         ));
-        Ok(Self {
-            chain,
-            index,
+        let snap = Arc::new(Snapshot {
+            blocks: index,
             head,
-            checkpointed: Checkpointed {
+            head_hash: cp.block,
+            state: Some(Arc::new(HeadState {
                 state,
-                evm_root: section.evm,
+                evm_root: evm,
+                etx_root: etx,
                 by_address,
-                past: Mutex::new(past),
-            },
-            caches: Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?),
-            blocks: Mutex::new((HashMap::new(), VecDeque::new())),
-            kinds: Mutex::new((HashMap::new(), VecDeque::new())),
+            })),
             head_entropy: OnceLock::new(),
-        })
+        });
+        Self::with_snapshot(chain, snap, None)
+    }
+    /// Serve the block store of `datadir` for `environment`: with state, up
+    /// to the latest state checkpoint and its state; without, the whole store.
+    pub fn open_store(datadir: &Path, environment: &str, log: &Log) -> Result<Self, String> {
+        let chain = Chain::for_environment(environment)
+            .map_err(|e| format!("chain spec {environment}: {e}"))?;
+        let state_dir = replay::checkpoint_dir(datadir, &chain, true);
+        let headers_dir = replay::checkpoint_dir(datadir, &chain, false);
+        let (dir, with_state) = if blockstore::path(&state_dir).is_file() {
+            (state_dir, true)
+        } else if blockstore::path(&headers_dir).is_file() {
+            (headers_dir, false)
+        } else {
+            return Err(format!(
+                "no block store in {} or {}: run `quai-node run` or `quai-node replay --store` first",
+                state_dir.display(),
+                headers_dir.display()
+            ));
+        };
+        let store = blockstore::BlockStore::open(&blockstore::path(&dir), with_state)
+            .map_err(|e| e.to_string())?;
+        let reader = store.reader().map_err(|e| e.to_string())?;
+        let (store_head, _) = reader.head().ok_or("the block store is empty")?;
+        let (head, state) = if with_state {
+            let cp = latest_checkpoint(&dir, &chain)?
+                .ok_or_else(|| format!("no state checkpoint in {}", dir.display()))?;
+            if reader.hash_at(cp.height).map_err(|e| e.to_string())? != Some(cp.block) {
+                return Err(format!(
+                    "the block store does not hold checkpoint block {} at {}",
+                    qex::hex(&cp.block),
+                    cp.height
+                ));
+            }
+            let stored = reader
+                .block(&cp.block)
+                .map_err(|e| e.to_string())?
+                .ok_or("checkpoint block bytes")?;
+            let record = Record::decode(&stored.block).map_err(|e| e.to_string())?;
+            let (state, evm, etx) = checkpoint_state(&dir, &chain, &cp, &record)?;
+            (
+                (cp.height, cp.block),
+                Some(Arc::new(HeadState::new(state, evm, etx))),
+            )
+        } else {
+            (reader.head().ok_or("the block store is empty")?, None)
+        };
+        log.info(&format!(
+            "rpc view: block store {} (base {}, head {store_head}), serving to {} {}{}",
+            blockstore::path(&dir).display(),
+            reader.base().unwrap_or_default(),
+            head.0,
+            qex::hex(&head.1),
+            if with_state {
+                ", with state"
+            } else {
+                ", without state"
+            }
+        ));
+        let snap = Arc::new(Snapshot {
+            blocks: Arc::new(StoreBlocks {
+                reader,
+                head: head.0,
+            }),
+            head: head.0,
+            head_hash: head.1,
+            state,
+            head_entropy: OnceLock::new(),
+        });
+        Self::with_snapshot(chain, snap, None)
+    }
+    /// The view of a running node; `Live::publish` moves its head.
+    pub fn live(
+        chain: Arc<Chain>,
+        reader: StoreReader,
+        head: (u64, Hash),
+        state: Option<Arc<HeadState>>,
+    ) -> Result<(Self, Arc<Live>), String> {
+        let (events, _) = tokio::sync::broadcast::channel(256);
+        let (removed, _) = tokio::sync::broadcast::channel(256);
+        let snap = Arc::new(Snapshot {
+            blocks: Arc::new(StoreBlocks {
+                reader,
+                head: head.0,
+            }),
+            head: head.0,
+            head_hash: head.1,
+            state,
+            head_entropy: OnceLock::new(),
+        });
+        let live = Arc::new(Live {
+            current: RwLock::new(snap.clone()),
+            events,
+            removed,
+        });
+        Ok((Self::with_snapshot(chain, snap, Some(live.clone()))?, live))
+    }
+    /// The snapshot this call reads: the published head of a live view.
+    fn snap(&self) -> Arc<Snapshot> {
+        match &self.live {
+            Some(l) => l.current.read().unwrap_or_else(|e| e.into_inner()).clone(),
+            None => self.snap.clone(),
+        }
     }
 
-    fn load(&self, height: u64) -> Result<Arc<BlockData>, ViewError> {
+    fn load(&self, snap: &Snapshot, height: u64) -> Result<Option<Arc<BlockData>>, ViewError> {
+        let Some(hash) = snap.blocks.hash_at(height)? else {
+            return Ok(None);
+        };
+        self.load_known(snap, height, hash).map(Some)
+    }
+    fn load_known(
+        &self,
+        snap: &Snapshot,
+        height: u64,
+        hash: Hash,
+    ) -> Result<Arc<BlockData>, ViewError> {
         if let Ok(cache) = self.blocks.lock() {
-            if let Some(b) = cache.0.get(&height) {
+            if let Some(b) = cache.0.get(&hash) {
                 return Ok(b.clone());
             }
         }
-        let entry = *self.index.entry(height)?;
-        let bytes = self
-            .index
-            .read(entry.segment, entry.block_at, entry.block_len)?;
-        let object = WorkObject::decode_auxiliary(&bytes, PINNED_SCHEDULE).map_err(unavailable)?;
+        let raw = snap.blocks.block(height, &hash)?;
+        let object =
+            WorkObject::decode_auxiliary(&raw.bytes, PINNED_SCHEDULE).map_err(unavailable)?;
         let header = object
             .auxiliary_work_header(PINNED_SCHEDULE)
             .map_err(unavailable)?;
@@ -294,109 +738,61 @@ impl ExportView {
             .collect::<Result<Vec<_>, _>>()
             .map_err(unavailable)?;
         let uncles = object.uncle_headers(PINNED_SCHEDULE).map_err(unavailable)?;
+        if let Some(kinds) = &raw.kinds {
+            if kinds.len() == uncles.len() {
+                let kinds = Arc::new(kinds.iter().map(|k| uncles::from_code(*k)).collect());
+                remember(&self.kinds, raw.hash, &kinds, BLOCK_CACHE * 8);
+            }
+        }
         let block = Arc::new(BlockData {
-            hash: entry.hash,
+            hash: raw.hash,
             number: height,
             object,
             header,
             uncles,
-            size: entry.block_len as u64,
-            order: entry.order,
+            size: raw.bytes.len() as u64,
+            order: raw.order,
             tx_hashes,
             etx_hashes,
         });
-        if let Ok(mut cache) = self.blocks.lock() {
-            if cache.0.len() >= BLOCK_CACHE {
-                if let Some(old) = cache.1.pop_front() {
-                    cache.0.remove(&old);
-                }
-            }
-            cache.0.insert(height, block.clone());
-            cache.1.push_back(height);
-        }
+        remember(&self.blocks, raw.hash, &block, BLOCK_CACHE);
         Ok(block)
-    }
-
-    /// `UncleWorkShareClassification`: the uncle's proof-of-work against the
-    /// block target, then the workshare thresholds.
-    fn classify(&self, h: &Header) -> UncleKind {
-        let Ok(pow) = self.pow_hash(h) else {
-            return UncleKind::Other;
-        };
-        match share_rules::classify(h, pow, P2P_THRESHOLD) {
-            Ok(Classification::Block) => UncleKind::Block,
-            Ok(Classification::Valid) => UncleKind::Workshare,
-            _ => UncleKind::Other,
-        }
-    }
-    /// The proof-of-work hash of a header (`ComputePowHash`, or the donor
-    /// hash of an auxiliary proof). A wrong mix hash is an error, as in Go.
-    fn pow_hash(&self, h: &Header) -> Result<Hash, quai_consensus::Error> {
-        let w = h.wire();
-        let height = share_rules::number(w.prime_terminus_number.as_deref().unwrap_or_default())?;
-        if let Some(bytes) = &w.aux_pow {
-            let aux = quai_consensus::auxiliary::Auxiliary::decode(bytes)?;
-            return match aux.id() {
-                1 => {
-                    let (seal, nonce, donor, mix) = aux.kawpow_input()?;
-                    let (actual, hash) = self
-                        .caches
-                        .get(Algorithm::Kawpow, donor)?
-                        .compute(seal, nonce, donor)?;
-                    if actual != mix {
-                        return Err(quai_consensus::Error::Invalid("mix hash"));
-                    }
-                    Ok(hash)
-                }
-                2 | 3 => quai_consensus::donor::sha256d(aux.header()),
-                _ => quai_consensus::donor::scrypt(aux.header()),
-            };
-        }
-        let mix =
-            hash_of(
-                &w.mix_hash
-                    .as_ref()
-                    .map(|m| quai_primitives::schema::common::ProtoHash {
-                        value: m.value.clone(),
-                    }),
-            );
-        let (actual, hash) = self.caches.get(Algorithm::Progpow, height)?.compute(
-            h.seal_hash(),
-            w.nonce.unwrap_or_default(),
-            height,
-        )?;
-        if actual != mix {
-            return Err(quai_consensus::Error::Invalid("mix hash"));
-        }
-        Ok(hash)
     }
     /// `TotalLogEntropy` in the zone: the child's zone parent entropy, or,
     /// for the head, the native computation.
-    fn entropy_at(&self, height: u64) -> Result<U256, ViewError> {
-        if height < self.head {
-            let child = self.index.record(height + 1)?;
-            let v = child
-                .object()
-                .header()
-                .wire()
-                .parent_entropy
-                .get(2)
-                .cloned()
-                .unwrap_or_default();
-            let mut out = [0u8; 32];
-            let take = v.len().min(32);
-            out[32 - take..].copy_from_slice(&v[v.len() - take..]);
-            return Ok(out);
+    fn entropy_at(&self, snap: &Snapshot, block: &BlockData) -> Result<U256, ViewError> {
+        if block.number < snap.head {
+            if let Some(e) = snap.blocks.child_entropy(block.number, &block.hash)? {
+                return Ok(e);
+            }
         }
-        self.head_entropy
-            .get_or_init(|| self.native_entropy(height))
-            .clone()
+        if block.hash == snap.head_hash {
+            return snap
+                .head_entropy
+                .get_or_init(|| self.native_entropy_of(snap, &block.hash))
+                .clone()
+                .map_err(ViewError::Unavailable);
+        }
+        self.native_entropy_of(snap, &block.hash)
             .map_err(ViewError::Unavailable)
     }
-    /// `native_parent_metrics` of the replay, over the export ancestry.
+    /// `native_parent_metrics` of the replay, over the view's ancestry.
     pub fn native_entropy(&self, height: u64) -> Result<U256, String> {
-        let record = self.index.record(height).map_err(|e| e.to_string())?;
-        let history = History::with_reader(Arc::new(Records(self.index.clone())));
+        let snap = self.snap();
+        let hash = snap
+            .blocks
+            .hash_at(height)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("no block at {height}"))?;
+        self.native_entropy_of(&snap, &hash)
+    }
+    fn native_entropy_of(&self, snap: &Snapshot, hash: &Hash) -> Result<U256, String> {
+        let record = snap
+            .blocks
+            .record_by_hash(hash)
+            .map_err(|e| e.to_string())?
+            .ok_or("block record")?;
+        let history = History::with_reader(Arc::new(Records(snap.blocks.clone())));
         let mut verifier = Verifier::with_shared_caches(self.caches.clone());
         let metrics = quai_consensus::validation::native_parent_metrics(
             &mut verifier,
@@ -404,17 +800,31 @@ impl ExportView {
             &record,
             &self.chain.zone_profile(),
         )
-        .map_err(|e| format!("total entropy of {height}: {e}"))?;
+        .map_err(|e| format!("total entropy of {}: {e}", qex::hex(hash)))?;
         use crypto_bigint::Encoding;
         Ok(metrics.total.to_be_bytes())
     }
     pub fn chain(&self) -> &Arc<Chain> {
         &self.chain
     }
-    /// The decoded zone record at `height` (for tests and tools).
+    /// The decoded canonical zone record at `height` (for tests and tools).
     pub fn record(&self, height: u64) -> Result<Record, ViewError> {
-        self.index.record(height)
+        Self::record_in(&self.snap(), height)
     }
+    fn record_in(snap: &Snapshot, height: u64) -> Result<Record, ViewError> {
+        let hash = snap
+            .blocks
+            .hash_at(height)?
+            .ok_or_else(|| ViewError::Unavailable(format!("zone height {height}")))?;
+        snap.blocks
+            .record_by_hash(&hash)?
+            .ok_or_else(|| ViewError::Unavailable(format!("zone height {height}")))
+    }
+}
+fn head_state(snap: &Snapshot) -> Result<&Arc<HeadState>, ViewError> {
+    snap.state
+        .as_ref()
+        .ok_or_else(|| ViewError::Unavailable("state (this node runs without state)".into()))
 }
 
 /// Read every segment up to `head`: check each segment's hash, the record
@@ -424,6 +834,7 @@ fn build_index(
     manifest: &Manifest,
     chain: &Chain,
     head: u64,
+    past: PastDb,
 ) -> Result<Index, String> {
     let mut files = Vec::with_capacity(manifest.segments.len());
     let mut heights: Vec<Entry> = Vec::with_capacity(head as usize + 1);
@@ -540,6 +951,7 @@ fn build_index(
         by_hash,
         txs,
         receipts: manifest.receipts,
+        past: Mutex::new(past),
     })
 }
 
@@ -704,25 +1116,21 @@ pub(crate) enum StateAt {
     Empty,
 }
 impl ExportView {
-    pub(crate) fn state_at(&self, block: &BlockData) -> Result<StateAt, ViewError> {
+    fn state_in(snap: &Snapshot, block: &BlockData) -> Result<StateAt, ViewError> {
         let body = block.object.header().wire();
         let evm = hash_of(&body.evm_root);
         let etx = hash_of(&body.etx_set_root);
-        let head_etx = self
-            .index
-            .record(self.head)?
-            .object()
-            .header()
-            .wire()
-            .etx_set_root
-            .clone();
         let empty = |h: &Hash| *h == [0; 32] || *h == EMPTY_ROOT;
         let missing =
             |h: &Hash| ViewError::Go(format!("missing trie node {} (path )", &qex::hex(h)[2..]));
-        if !(empty(&evm) || evm == self.checkpointed.evm_root) {
+        if empty(&evm) && empty(&etx) {
+            return Ok(StateAt::Empty);
+        }
+        let head = head_state(snap)?;
+        if !(empty(&evm) || evm == head.evm_root) {
             return Err(missing(&evm));
         }
-        if !(empty(&etx) || etx == hash_of(&head_etx)) {
+        if !(empty(&etx) || etx == head.etx_root) {
             return Err(missing(&etx));
         }
         Ok(if empty(&evm) {
@@ -741,23 +1149,25 @@ impl ChainView for ExportView {
         self.chain.location()
     }
     fn head(&self) -> u64 {
-        self.head
+        self.snap().head
     }
     fn block_by_number(&self, number: u64) -> Result<Option<Arc<BlockData>>, ViewError> {
-        if number > self.head {
+        let snap = self.snap();
+        if number > snap.head {
             return Ok(None);
         }
-        self.load(number).map(Some)
+        self.load(&snap, number)
     }
     fn block_by_hash(&self, hash: &Hash) -> Result<Option<Arc<BlockData>>, ViewError> {
-        match self.index.by_hash.get(hash) {
-            Some(h) => self.load(*h).map(Some),
+        let snap = self.snap();
+        match snap.blocks.height_of(hash)? {
+            Some(h) => self.load_known(&snap, h, *hash).map(Some),
             None => Ok(None),
         }
     }
     fn uncle_kinds(&self, block: &BlockData) -> Result<Arc<Vec<UncleKind>>, ViewError> {
         if let Ok(cache) = self.kinds.lock() {
-            if let Some(k) = cache.0.get(&block.number) {
+            if let Some(k) = cache.0.get(&block.hash) {
                 return Ok(k.clone());
             }
         }
@@ -765,47 +1175,40 @@ impl ChainView for ExportView {
             block
                 .uncles
                 .iter()
-                .map(|h| self.classify(h))
+                .map(|h| uncles::kind(h, uncles::pow_hash(&self.caches, h)))
                 .collect::<Vec<_>>(),
         );
-        if let Ok(mut cache) = self.kinds.lock() {
-            if cache.0.len() >= BLOCK_CACHE * 8 {
-                if let Some(old) = cache.1.pop_front() {
-                    cache.0.remove(&old);
-                }
-            }
-            cache.0.insert(block.number, kinds.clone());
-            cache.1.push_back(block.number);
-        }
+        remember(&self.kinds, block.hash, &kinds, BLOCK_CACHE * 8);
         Ok(kinds)
     }
     fn total_entropy(&self, block: &BlockData) -> Result<U256, ViewError> {
-        self.entropy_at(block.number)
+        self.entropy_at(&self.snap(), block)
     }
     fn may_have_logs(&self, number: u64) -> Result<bool, ViewError> {
-        if !self.index.receipts {
+        let snap = self.snap();
+        if !snap.blocks.receipts_kept() {
             return Ok(true);
         }
-        let e = *self.index.entry(number)?;
-        if e.receipts_len == 0 {
+        let Some(hash) = snap.blocks.hash_at(number)? else {
             return Ok(false);
+        };
+        match snap.blocks.receipts(number, &hash)? {
+            None => Ok(true),
+            Some(bytes) if bytes.is_empty() => Ok(false),
+            Some(bytes) => Ok(decode_receipts(&bytes)
+                .map_err(|e| ViewError::Unavailable(format!("stored receipts: {e}")))?
+                .iter()
+                .any(|r| !r.logs.is_empty())),
         }
-        let bytes = self.index.read(e.segment, e.receipts_at, e.receipts_len)?;
-        Ok(decode_receipts(&bytes)
-            .map_err(|e| ViewError::Unavailable(format!("stored receipts: {e}")))?
-            .iter()
-            .any(|r| !r.logs.is_empty()))
     }
     fn transaction(&self, hash: &Hash) -> Result<Option<TxPosition>, ViewError> {
-        let prefix = u64::from_be_bytes(hash[..8].try_into().unwrap_or_default());
-        let start = self.index.txs.partition_point(|t| t.0 < prefix);
+        let snap = self.snap();
         // The lookup entry of the newest block wins, as in rawdb.
         let mut found = None;
-        for &(p, height, i) in &self.index.txs[start..] {
-            if p != prefix {
-                break;
-            }
-            let block = self.load(height)?;
+        for (height, i) in snap.blocks.tx_candidates(hash)? {
+            let Some(block) = self.load(&snap, height)? else {
+                continue;
+            };
             if block.tx_hashes.get(i as usize) == Some(hash) {
                 match found {
                     Some(TxPosition { block_number, .. }) if block_number > height => {}
@@ -828,33 +1231,28 @@ impl ChainView for ExportView {
         Ok(found)
     }
     fn receipts(&self, block: &BlockData) -> Result<Arc<Vec<ReceiptData>>, ViewError> {
-        if !self.index.receipts {
-            return Err(ViewError::Unavailable(
-                "receipts (this export has none)".into(),
-            ));
-        }
-        let e = *self.index.entry(block.number)?;
-        if e.receipts_len == 0 {
-            return Ok(Arc::new(vec![]));
-        }
-        let bytes = self.index.read(e.segment, e.receipts_at, e.receipts_len)?;
+        let snap = self.snap();
+        let Some(bytes) = snap.blocks.receipts(block.number, &block.hash)? else {
+            return Err(ViewError::Unavailable(snap.blocks.no_receipts().into()));
+        };
         decode_receipts(&bytes)
             .map(Arc::new)
             .map_err(|e| ViewError::Unavailable(format!("stored receipts: {e}")))
     }
     fn state(&self, block: &BlockData) -> Result<Arc<dyn AccountState>, ViewError> {
-        Ok(match self.state_at(block)? {
+        let snap = self.snap();
+        Ok(match Self::state_in(&snap, block)? {
             StateAt::Empty => Arc::new(EmptyState),
-            StateAt::Head => Arc::new(WorldState(self.checkpointed.state.world.clone())),
+            StateAt::Head => Arc::new(WorldState(head_state(&snap)?.state.world.clone())),
         })
     }
     fn utxo(&self, tx_hash: &Hash, index: u16) -> Result<Option<UtxoData>, ViewError> {
+        let snap = self.snap();
         let point = OutPoint {
             hash: *tx_hash,
             index,
         };
-        Ok(self
-            .checkpointed
+        Ok(head_state(&snap)?
             .state
             .utxos
             .get(&point)
@@ -866,7 +1264,24 @@ impl ChainView for ExportView {
             }))
     }
     fn outpoints_by_address(&self, address: &Address) -> Result<Vec<OutpointData>, ViewError> {
-        match &self.checkpointed.by_address {
+        let snap = self.snap();
+        let head = head_state(&snap)?;
+        if let Some(points) = snap.blocks.outpoints(address)? {
+            // The index can hold outputs spent since; the UTXO set decides.
+            let mut out = vec![];
+            for point in points {
+                if let Some(u) = head.state.utxos.get(&point).map_err(read_error)? {
+                    out.push(OutpointData {
+                        tx_hash: point.hash,
+                        index: point.index,
+                        denomination: u.denomination,
+                        lock: trim(&u.lock),
+                    });
+                }
+            }
+            return Ok(out);
+        }
+        match &head.by_address {
             Some(m) => Ok(m.get(address).cloned().unwrap_or_default()),
             None => Err(ViewError::Unavailable(
                 "an address index for more than 1,000,000 UTXOs".into(),
@@ -879,25 +1294,13 @@ impl ChainView for ExportView {
         start: u32,
         end: u32,
     ) -> Result<Vec<OutpointData>, ViewError> {
-        let past = self
-            .checkpointed
-            .past
-            .lock()
-            .map_err(|_| unavailable("past.redb lock"))?;
+        let snap = self.snap();
+        let head = head_state(&snap)?;
         let mut out = vec![];
         // The genesis creates no UTXOs; the replay records heights from 1.
-        for height in (start as u64).max(1)..=(end as u64).min(self.head) {
-            let created = past
-                .created_at(height)
-                .map_err(|e| ViewError::Unavailable(format!("UTXOs created at {height}: {e:?}")))?;
-            for (point, _) in created {
-                let Some(u) = self
-                    .checkpointed
-                    .state
-                    .utxos
-                    .get(&point)
-                    .map_err(read_error)?
-                else {
+        for height in (start as u64).max(1)..=(end as u64).min(snap.head) {
+            for point in snap.blocks.created(height)? {
+                let Some(u) = head.state.utxos.get(&point).map_err(read_error)? else {
                     continue;
                 };
                 if u.address[..16] != address[..16] {
@@ -914,23 +1317,44 @@ impl ChainView for ExportView {
         Ok(out)
     }
     fn call(&self, block: &BlockData, request: &CallRequest) -> Result<CallResult, CallError> {
-        let world = match self.state_at(block)? {
-            StateAt::Head => self.checkpointed.state.world.clone(),
+        let snap = self.snap();
+        let world = match Self::state_in(&snap, block)? {
+            StateAt::Head => head_state(&snap)?.state.world.clone(),
             StateAt::Empty => quai_execution::evm::state::World::default(),
         };
         rpc_call::call(self, world, block, request)
+    }
+    fn head_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
+        self.live.as_ref().map(|l| l.events.subscribe())
+    }
+    fn removed_logs(
+        &self,
+    ) -> Option<tokio::sync::broadcast::Receiver<Arc<quai_rpc::view::RemovedLogs>>> {
+        self.live.as_ref().map(|l| l.removed.subscribe())
+    }
+    fn pinned(&self) -> Option<Arc<dyn ChainView>> {
+        self.live.as_ref()?;
+        Some(Arc::new(Self {
+            chain: self.chain.clone(),
+            snap: self.snap(),
+            live: None,
+            caches: self.caches.clone(),
+            blocks: self.blocks.clone(),
+            kinds: self.kinds.clone(),
+        }))
     }
 }
 
 impl ExportView {
     /// Hashes of the 256 ancestors before `block`, for BLOCKHASH.
     pub(crate) fn ancestor_hashes(&self, block: &BlockData) -> BTreeMap<u64, Hash> {
+        let snap = self.snap();
         let mut out = BTreeMap::new();
         let mut n = block.number;
         while n > 0 && out.len() < 256 {
             n -= 1;
-            if let Ok(e) = self.index.entry(n) {
-                out.insert(n, e.hash);
+            if let Ok(Some(h)) = snap.blocks.hash_at(n) {
+                out.insert(n, h);
             }
         }
         out
@@ -939,11 +1363,12 @@ impl ExportView {
         if block.number == 0 {
             return Err(ViewError::Unavailable("genesis parent".into()));
         }
-        self.index.record(block.number - 1)
+        self.record(block.number - 1)
     }
     pub(crate) fn header_by_hash(&self, hash: &Hash) -> Result<Option<Record>, ViewError> {
-        match self.index.by_hash.get(hash) {
-            Some(h) => self.index.record(*h).map(Some),
+        let snap = self.snap();
+        match snap.blocks.height_of(hash)? {
+            Some(_) => snap.blocks.record_by_hash(hash),
             None => Ok(None),
         }
     }

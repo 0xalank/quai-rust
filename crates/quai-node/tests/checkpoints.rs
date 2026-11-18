@@ -364,3 +364,104 @@ fn checkpoints_without_a_prime_section_resume_before_the_kick_in() {
     std::fs::remove_dir_all(base).unwrap();
     std::fs::remove_dir_all(data).unwrap();
 }
+
+/// The block store after an interrupted run: the store was flushed past the
+/// last checkpoint, the resume rolls it back to the checkpoint and the
+/// continued run leaves the store a straight run leaves.
+#[test]
+fn the_block_store_follows_the_checkpoint_after_a_crash() {
+    use quai_node::blockstore::{self, BlockStore};
+    let export = mainnet_slice();
+    let snapshot = |data: &Path| {
+        let dir = dir_of(&export, data);
+        let s = BlockStore::open(&blockstore::path(&dir), true).unwrap();
+        let r = s.reader().unwrap();
+        let head = r.head().unwrap();
+        let blocks: Vec<_> = (r.base().unwrap()..=head.0)
+            .map(|n| {
+                let h = r.hash_at(n).unwrap().unwrap();
+                let b = r.block(&h).unwrap().unwrap();
+                let txs: Vec<_> = b
+                    .tx_hashes
+                    .iter()
+                    .map(|t| r.transaction(t).unwrap())
+                    .collect();
+                (h, b, r.entropy(&h).unwrap(), r.created(n).unwrap(), txs)
+            })
+            .collect();
+        (head, r.base(), blocks)
+    };
+    let mut o = options(&export, &unique("store-straight"), None, false);
+    o.store = true;
+    let straight = o.datadir.clone().unwrap();
+    run(&o).unwrap();
+    let expected = snapshot(&straight);
+    assert_eq!(expected.0 .0, 8);
+    let data = unique("store-crash");
+    let dir = dir_of(&export, &data);
+    std::fs::create_dir_all(&dir).unwrap();
+    // The run stops while it writes checkpoint 6: the store already holds 6.
+    store::inject_fault(&dir, "checkpoint-before-rename", 6);
+    let mut o = options(&export, &data, None, false);
+    o.store = true;
+    let e = run(&o).unwrap_err();
+    assert!(e.contains("test fault"), "{e}");
+    assert_eq!(checkpoint::list(&dir).unwrap()[0].0, 3);
+    assert_eq!(snapshot(&data).0 .0, 6);
+    // The resume rolls the store back to 3 and continues to 8.
+    o.resume = true;
+    let s = run(&o).unwrap();
+    assert_eq!((s.resumed_from, s.highest_passed), (Some(3), Some(8)));
+    assert_eq!(snapshot(&data), expected);
+    // A store that ends below the checkpoint is refused.
+    let path = blockstore::path(&dir);
+    let mut b = BlockStore::open(&path, true).unwrap();
+    b.rollback_to(5).unwrap();
+    drop(b);
+    let e = run(&o).unwrap_err();
+    assert!(e.contains("below checkpoint 8"), "{e}");
+    // Without a store, the resume starts a new one at the checkpoint block.
+    std::fs::remove_file(&path).unwrap();
+    let s = run(&o).unwrap();
+    assert_eq!(s.resumed_from, Some(8));
+    let fresh = snapshot(&data);
+    assert_eq!((fresh.0, fresh.1), (expected.0, Some(8)));
+    std::fs::remove_dir_all(straight).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+/// A stateless replay continues from a state checkpoint copied into its
+/// headers/ directory, and a state replay refuses a stateless checkpoint.
+#[test]
+fn a_stateless_run_continues_from_a_state_checkpoint() {
+    let export = mainnet_slice();
+    let data = unique("state-to-stateless");
+    run(&options(&export, &data, Some(5), false)).unwrap();
+    let state_dir = dir_of(&export, &data);
+    let env = Manifest::load(&export).unwrap().environment;
+    let headers = checkpoint_dir(&data, &Chain::for_environment(&env).unwrap(), false);
+    std::fs::create_dir_all(&headers).unwrap();
+    let (h, path) = checkpoint::list(&state_dir).unwrap().remove(0);
+    assert_eq!(h, 5);
+    std::fs::copy(&path, checkpoint::path(&headers, 5)).unwrap();
+    let mut o = options(&export, &data, None, true);
+    o.state = false;
+    let s = run(&o).unwrap();
+    assert_eq!(s.failure, None, "{}", s.line());
+    assert_eq!((s.resumed_from, s.highest_passed), (Some(5), Some(8)));
+    assert!(latest_in(&headers).state.is_none());
+    std::fs::remove_dir_all(&state_dir).unwrap();
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::copy(
+        checkpoint::path(&headers, 8),
+        checkpoint::path(&state_dir, 8),
+    )
+    .unwrap();
+    let e = run(&options(&export, &data, None, true)).unwrap_err();
+    assert!(e.contains("state mode differs"), "{e}");
+    std::fs::remove_dir_all(data).unwrap();
+}
+fn latest_in(dir: &Path) -> Checkpoint {
+    let (_, path) = checkpoint::list(dir).unwrap().into_iter().next().unwrap();
+    checkpoint::read(&path).unwrap()
+}

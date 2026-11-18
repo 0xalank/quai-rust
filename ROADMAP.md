@@ -42,8 +42,8 @@ by the coordinator.
 | G0–G2 | Chain spec, wire formats, commitments | Partial |
 | G3 | EVM, Qi and ETX execution | Partial |
 | G4 | PoW, AuxPoW, workshares, fork choice | Partial |
-| G5 | Durable state, reorg, crash recovery | Private chain only |
-| G6–G7 | P2P and sync | Loopback only, peers added by hand |
+| G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; reorg rollback tested on the private fixture |
+| G6–G7 | P2P and sync | Mainnet sync by height from public peers; gossip head choice live without validation |
 | G8 | Mainnet shadow sync | Not started |
 | G9 | Live RPC, tx pool, wallets | Snapshot reads only |
 | G10–G11 | Production tests, mining | Not started |
@@ -256,10 +256,41 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
 Gate: the Rust node follows the live mainnet head for 2 weeks with no
 divergence from Go.
 
-1. [ ] `quai-node` crate: config file, data directory, logs, metrics, and the
+1. [x] `quai-node` crate: config file, data directory, logs, metrics, and the
        `replay` command from Phase 1. Started: the crate, `--datadir`,
-       `--log-level` and `replay` exist (`0e13a64`); config file, metrics and
-       `run` do not.
+       `--log-level` and `replay` (`0e13a64`).
+       One chain processor (`5011fca`, `processor.rs`): the per-height
+       pipeline of `replay` behind a `BlockSource` trait (the QEX1 export;
+       public peers). `replay` keeps its results, logs, report and checkpoint
+       format. Go export 0-27,406 with `--state`: PASS from genesis, and PASS
+       resumed from checkpoint 20,000 with the same counters.
+       Block store (`e642a08`, `blockstore.rs`, redb in the checkpoint
+       directory): validated blocks, receipts (Go export or own execution),
+       order, total entropy, uncle classes, number-to-hash, transaction
+       index, UTXOs created per block and an address index; durable before
+       each state commit and checkpoint, rolled back to the checkpoint on a
+       resume. `ChainView` over it with one snapshot per RPC call
+       (`ChainView::pinned`); `quai-node rpc` serves the store, `--export`
+       keeps the export view. Fixtures: zone 0-8 253/253 equal from the
+       store, receipts of the node's own execution equal to Go's; Go export
+       0-27,406 replayed with `--state --store` by the final binary: PASS,
+       every root equal (2,755 s, 9.9 blocks/s); `quai-node rpc` on that store:
+       fixture zone-0-27406 617/625 equal, 8 documented differences, 0 failed
+       (as the export view); 300 random heights asked from it and the live Go
+       node: 1,320/1,320 equal.
+       `quai-node run` (`39e4862`): sync by height from public peers
+       (`peers.rs`, the logic of `peer-export`), validation and storage
+       through the processor, checkpoints, polling at the peers' head less
+       `--margin` (64); `--stateless`; a TOML configuration file
+       (`--config`); Prometheus metrics (`/metrics`: head, blocks, blocks/s,
+       failures, reorgs, peers, the peers' head, faults); SIGINT/SIGTERM stop
+       `run` and `replay` after the current height with a checkpoint (exit
+       143/130). Live from checkpoint 720,000, stateless, public peers:
+       8,099 heights in 1,203 s (6.7 blocks/s, host load 60-100), 4 peers,
+       0 failures, 0 peer faults; stop and resume from 728,099 (8.4
+       blocks/s); with the fetch limit 150 heights above the node it reached
+       it and followed the peers' head (+87 blocks in 7.5 minutes, node +90).
+       Speed is proof-of-work bound, as in replay.
 2. [x] Public P2P: bootnodes, Kademlia discovery, GossipSub topics, peer scoring.
        Groundwork (`9a25090`): read-only `quai_network::public` and the
        `mainnet-probe` example work with go-quai v0.57.0 (local) and the v0.57.1
@@ -279,6 +310,37 @@ divergence from Go.
        check; Kademlia contacts with only circuit addresses are not dialed.
 3. [ ] Follow the live head. Send gossiped blocks and workshares through the
        same validation path.
+       Done (`43e035d`): go-quai's head choice for slice [0 0]
+       (`forkchoice.rs`: NodeSet, BuildPendingHeaders with its 21 tries and
+       2,000-entry cache, the best-entropy head, SetCurrentHeader's 60-block
+       horizon above zone 3,490,000 and Append's 60-block limit); equal to
+       go-quai's coordinator on the private fixture (24/24 heads and scores,
+       reference/canonical). Tip mode of the processor (`Processor::offer`):
+       a block is checked against its parent's context, the head choice
+       picks the head, and a reorg rolls back the executed state, the block
+       store and its indexes to the common ancestor and executes the new
+       branch; undo data for 240 blocks (4x the horizon). Test: the
+       fixture's two branches with and without state; the head moves at the
+       same block as in Go, 8 blocks are removed, every root of the new
+       branch equals the header, the store and transaction index follow, and
+       a resume starts at the new head. Head events and removed logs for the
+       RPC (`ChainView::head_events`, `removed_logs`). Gossip intake
+       (`tip.rs`, `Config::public`, publish off): zone blocks and workshares,
+       dominant views and missing ancestors fetched by hash; `run` switches
+       to it at the peers' head less the margin.
+       Live, `quai-node observe` (gossip, proof-of-work and go-quai's entropy
+       and head choice, no validation context): 31 minutes on mainnet gossip:
+       433 zone blocks and 4,032 workshares that go-quai's validators accept,
+       none failed proof-of-work or entropy; 47 head changes removed blocks (45
+       of depth 1, one of 2, one of 3; 50 blocks) between zone 11,197,132 and
+       11,197,466; the block 3 below the chosen head equal to the peers'
+       canonical hash 28/28 times.
+       Left: a validating run at the live head. The node needs a checkpoint
+       near it: a stateless sync from zone 730,369 to 11.2M takes about 15-20
+       days at this host's 6-8 blocks/s (about 3 days at 35-50 blocks/s on an
+       idle host). With state, the tip keeps its state overlay until the next
+       checkpoint, and a reorg below the last state commit stops the node
+       (restart from an older checkpoint).
 4. [ ] Run next to a Go node and compare heads and roots.
 
 ## Phase 3: product
@@ -444,3 +506,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 1.4, 1.6 | Prime controllers after ControllerKickInBlock ported (`4bf54f9`); Go oracle prime-transition (`bb66950`): 73 linked blocks, 584 + 124 Go-rejected changes, 146 Go-accepted, all equal. Mainnet replay of the branch binary `d207b70` from checkpoint 686,009: PASS to zone 1,250,000 (end of `peer-export-1250k`; kick-in at zone 1,223,601, first conversions at 1,223,711, first feedback rate at prime 266,001), every root equal, 38.8 blocks/s. Merge `c466449`; coordinator rerun on merged main: 361/361 workspace in 68 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1 | Two runs with the merged binary `c466449` (sha256 `db24ef65…`): `scripts/mainnet/rolling_replay.sh` continues from checkpoint 1,250,000 toward the head (`replay-public`, log `logs/rolling.log`); a single-binary replay from genesis on a clone of `peer-export-1250k` (`replay-genesis-c466449`) checks today's execution changes on zone 0–1,250,000 |
 | 2026-11-18 | Phase 3.1 | Calls in go-quai's debug mode (`9e6f953`, `a1c55f3`, `4d918e1`, `b6a8e10`, `8d9bba4`, and the commit of this row): no access-list checks, Go's access-list tracer and error texts; `quai_estimateGas` builds the access list of contract calls; new `quai_createAccessList` and `quai_gasPrice`. Go oracle (production quaiapi handlers): 392/404 equal, 12 documented (another zone's precompile). Live, checkpoint 27,406: call fixture 111/111, existing fixture 617/625 with 8 documented (as before), 300 random heights 1,320/1,320; `calc_base_fee` of 27,406 real blocks equal to the next header's base fee. Replay 0-27,406 with `--state` from genesis PASS (4,722 s). 367/367 tests in 69 suites (`cargo test --release --locked --workspace` 366/366, 56 min; the new offline gas-price test 1/1 in a release rerun of its suite), fmt clean, clippy without errors. Found two consensus differences (step 1.4 note). Merge `355c004`; coordinator rerun on merged main: 367/367 workspace in 69 suites, 45/45 `quai-network --features native-transport`, fmt clean |
+| 2026-11-18 | Phase 2.1, 2.3 | Node shell (`5011fca`, `e642a08`, `39e4862`, `43e035d`): one chain processor with a block source trait; block store with RPC view (zone 0-8 fixture 253/253 from the store; Go export 0-27,406 with `--state --store` PASS, its store's RPC 617/625 equal + 8 documented, 1,320/1,320 live sample); `quai-node run` from public peers (stateless from checkpoint 720,000: 6.7-8.4 blocks/s, 0 failures, stop and resume, following the peers' head); config file, metrics, signals; go-quai head choice (fixture 24/24) and reorgs with state rollback (fixture branches); live gossip observer (31 min: 433 blocks, 4,032 workshares, 47 reorgs of depth 1-3, 3-deep agreement with peers 28/28). Go export replay 0-27,406 with `--state` PASS from genesis (4,123 s) and resumed from checkpoint 20,000 (1,141 s). 417/417 workspace tests in 70 suites, 45/45 `quai-network --features native-transport`, fmt clean, clippy without errors |

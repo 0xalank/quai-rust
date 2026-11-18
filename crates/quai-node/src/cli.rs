@@ -1,8 +1,10 @@
-//! Command line: global options, the `replay` and `rpc` commands and room
-//! for `run`.
+//! Command line: global options, the `replay`, `rpc` and `run` commands, and
+//! the configuration file (`config.rs`), which command line options override.
+use crate::config::Config;
 use crate::log::{Level, Log};
 use crate::replay::{self, End};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,13 +14,20 @@ Usage: quai-node [GLOBAL OPTIONS] <COMMAND> [OPTIONS]
 Commands:
   replay    Check go-quai blocks exported in the QEX1 format with the Rust
             consensus code; with --state, also execute them
-  rpc       Serve JSON-RPC from an export and the latest replay checkpoint
-            of the data directory (blocks, receipts, logs, state, calls)
-  run       Run a node (not available yet)
+  rpc       Serve JSON-RPC from the block store and the latest checkpoint of
+            the data directory, or from an export (--export): blocks,
+            receipts, logs, state, calls
+  run       Sync zone [0 0] from go-quai peers, validate and store every
+            block, follow the peers' head, and serve RPC and metrics
+  observe   Apply go-quai's head choice to the live gossip of slice [0 0]
+            without validating (proof-of-work and entropy only); count reorgs
   help      Print this help
 
 Global options:
+  --config <FILE>       Configuration file (TOML; see below). Command line
+                        options override it
   --datadir <DIR>       Data directory (default: $HOME/.quai-node)
+  --network <NAME>      Chain environment: colosseum (mainnet, default) or local
   --log-level <LEVEL>   error, warn, info or debug (default: info)
 
 Replay options:
@@ -32,33 +41,71 @@ Replay options:
   --resume              Continue from the latest checkpoint, after checking it
   --checkpoint-every <N>  Zone heights between checkpoints (default: 10000)
   --commit-every <N>    Zone heights between state commits (default: 1000)
+  --store               Keep the accepted blocks in the block store
+                        (<checkpoint dir>/blocks.redb) for `rpc`
   --no-report           Do not write <datadir>/replay/last.json
 
 RPC options:
-  --export <DIR>        The export the replay checked (required)
+  --export <DIR>        Serve this export (the one the replay checked)
+                        instead of the block store
   --listen <ADDR>       Listen address (default: 127.0.0.1:8547)
 
-The RPC serves zone blocks from genesis to the latest state checkpoint in
-<datadir>/replay/<chain>/state/, with go-quai v0.57.0's JSON. The tag latest
-is the checkpoint block. It keeps only that state, as a pruned go-quai node would.
+Run options:
+  --stateless           Every check except execution (no state); follows the
+                        head while a replay with state is still behind
+  --rpc-listen <ADDR>   RPC address, or off (default: 127.0.0.1:8547)
+  --metrics-listen <ADDR>  Prometheus metrics address, or off
+                        (default: 127.0.0.1:9101)
+  --peer <MULTIADDR>    A peer to dial, with /p2p/<id> (repeatable)
+  --no-public           Do not use the colosseum boot peers and the DHT
+  --margin <N>          Stay N zone blocks below the peers' head (default: 64)
+  --max-peers <N>       Peers to fetch from (default: 8)
+  --no-gossip           At the peers' head, poll by number instead of
+                        following the head through gossip
+  --jobs, --to, --progress, --checkpoint-every, --commit-every as for replay
+
+Observe options:
+  --seconds <N>         Stop after N seconds (default: 1800)
+
+`run` starts from the latest checkpoint of the data directory (or the
+genesis), keeps checkpoints and the block store in
+<datadir>/replay/<chain>/{state,headers}/, and polls the peers at their head.
+It refuses public peers when the default gateway is an iPhone hotspot
+(172.20.10.x) unless ALLOW_METERED=1.
+
+The RPC serves zone blocks to the latest state checkpoint in
+<datadir>/replay/<chain>/state/ (the block store of `run` or `replay --store`,
+or the export), with go-quai v0.57.0's JSON. The tag latest is the checkpoint
+block. It keeps only that state, as a pruned go-quai node would. A block
+store without state (headers/) is served to its head, without state.
 
 Checkpoints go to <datadir>/replay/<chain>/{state,headers}/ every
---checkpoint-every heights and at the end. A run without --resume refuses a
-directory that already holds checkpoints.
+--checkpoint-every heights and when the command stops. A replay without
+--resume refuses a directory that already holds state checkpoints.
 
-Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error.
+SIGINT or SIGTERM stops `replay` and `run` after the current height with a
+checkpoint (a second signal stops at once).
+
+Configuration file keys: datadir, network, log_level, rpc.listen,
+metrics.listen, sync.stateless, sync.jobs, sync.margin, sync.max_peers,
+sync.public, sync.peers, sync.checkpoint_every, sync.commit_every.
+
+Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error,
+130 or 143 stopped by SIGINT or SIGTERM.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Help,
-    Run,
+    /// `observe` for this many seconds.
+    Observe(u64),
+    Run(crate::node::Options),
     Replay(ReplayArgs),
     Rpc(RpcArgs),
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct RpcArgs {
-    pub export: PathBuf,
+    pub export: Option<PathBuf>,
     pub listen: String,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -72,10 +119,12 @@ pub struct ReplayArgs {
     pub resume: bool,
     pub checkpoint_every: u64,
     pub commit_every: u64,
+    pub store: bool,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
     pub datadir: PathBuf,
+    pub network: String,
     pub level: Level,
     pub command: Command,
 }
@@ -90,21 +139,64 @@ fn number<T: std::str::FromStr>(flag: &str, value: &str) -> Result<T, String> {
         .parse()
         .map_err(|_| format!("{flag}: not a number: {value:?}"))
 }
+fn off(v: String) -> Option<String> {
+    (v != "off" && !v.is_empty()).then_some(v)
+}
+
+/// Flags as given, before the configuration file fills the gaps.
+#[derive(Default)]
+struct Flags {
+    config: Option<PathBuf>,
+    datadir: Option<PathBuf>,
+    network: Option<String>,
+    level: Option<Level>,
+    command: Option<String>,
+    export: Option<PathBuf>,
+    to: Option<u64>,
+    jobs: Option<usize>,
+    progress: Option<u64>,
+    report: bool,
+    state: bool,
+    store: bool,
+    resume: bool,
+    checkpoint_every: Option<u64>,
+    commit_every: Option<u64>,
+    listen: Option<String>,
+    stateless: bool,
+    rpc_listen: Option<String>,
+    metrics_listen: Option<String>,
+    peers: Vec<String>,
+    no_public: bool,
+    no_gossip: bool,
+    seconds: Option<u64>,
+    margin: Option<u64>,
+    max_peers: Option<usize>,
+}
+const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report"];
+const RUN_ONLY: &[&str] = &[
+    "--stateless",
+    "--rpc-listen",
+    "--metrics-listen",
+    "--peer",
+    "--no-public",
+    "--no-gossip",
+    "--margin",
+    "--max-peers",
+];
+const SYNC: &[&str] = &[
+    "--to",
+    "--jobs",
+    "--progress",
+    "--checkpoint-every",
+    "--commit-every",
+];
 
 pub fn parse(args: &[String]) -> Result<Args, String> {
-    let mut datadir = None;
-    let mut level = Level::Info;
-    let mut command: Option<String> = None;
-    let mut export = None;
-    let mut to = None;
-    let mut jobs = None;
-    let mut progress = 10u64;
-    let mut report = true;
-    let mut state = false;
-    let mut resume = false;
-    let mut checkpoint_every = None;
-    let mut commit_every = None;
-    let mut listen = None;
+    let mut f = Flags {
+        report: true,
+        ..Default::default()
+    };
+    let mut seen: Vec<String> = vec![];
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -114,7 +206,9 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         };
         let takes_value = matches!(
             flag.as_str(),
-            "--datadir"
+            "--config"
+                | "--datadir"
+                | "--network"
                 | "--log-level"
                 | "--export"
                 | "--to"
@@ -123,6 +217,12 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--checkpoint-every"
                 | "--commit-every"
                 | "--listen"
+                | "--rpc-listen"
+                | "--metrics-listen"
+                | "--peer"
+                | "--margin"
+                | "--max-peers"
+                | "--seconds"
         );
         let value = if takes_value {
             match inline {
@@ -142,101 +242,205 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             None
         };
+        if flag.starts_with("--") {
+            seen.push(flag.clone());
+        }
+        let v = value.unwrap_or_default();
         match flag.as_str() {
-            "--datadir" => datadir = Some(PathBuf::from(value.unwrap())),
+            "--config" => f.config = Some(PathBuf::from(v)),
+            "--datadir" => f.datadir = Some(PathBuf::from(v)),
+            "--network" => f.network = Some(v),
             "--log-level" => {
-                let v = value.unwrap();
-                level =
-                    Level::parse(&v).ok_or_else(|| format!("--log-level: unknown level {v:?}"))?;
+                f.level = Some(
+                    Level::parse(&v).ok_or_else(|| format!("--log-level: unknown level {v:?}"))?,
+                )
             }
-            "--export" => export = Some(PathBuf::from(value.unwrap())),
-            "--listen" => listen = value,
-            "--to" => to = Some(number("--to", &value.unwrap())?),
+            "--export" => f.export = Some(PathBuf::from(v)),
+            "--listen" => f.listen = Some(v),
+            "--rpc-listen" => f.rpc_listen = Some(v),
+            "--metrics-listen" => f.metrics_listen = Some(v),
+            "--peer" => f.peers.push(v),
+            "--to" => f.to = Some(number("--to", &v)?),
+            "--margin" => f.margin = Some(number("--margin", &v)?),
+            "--max-peers" => {
+                let n: usize = number("--max-peers", &v)?;
+                if n == 0 || n > 8 {
+                    return Err("--max-peers must be between 1 and 8".into());
+                }
+                f.max_peers = Some(n);
+            }
             "--jobs" => {
-                let n: usize = number("--jobs", &value.unwrap())?;
+                let n: usize = number("--jobs", &v)?;
                 if n == 0 || n > 256 {
                     return Err("--jobs must be between 1 and 256".into());
                 }
-                jobs = Some(n);
+                f.jobs = Some(n);
             }
             "--progress" => {
-                progress = number("--progress", &value.unwrap())?;
-                if progress == 0 {
+                let n: u64 = number("--progress", &v)?;
+                if n == 0 {
                     return Err("--progress must be at least 1".into());
                 }
+                f.progress = Some(n);
             }
-            "--no-report" => report = false,
-            "--state" => state = true,
-            "--resume" => resume = true,
+            "--no-report" => f.report = false,
+            "--state" => f.state = true,
+            "--store" => f.store = true,
+            "--resume" => f.resume = true,
+            "--stateless" => f.stateless = true,
+            "--no-public" => f.no_public = true,
+            "--no-gossip" => f.no_gossip = true,
+            "--seconds" => f.seconds = Some(number("--seconds", &v)?),
             "--checkpoint-every" | "--commit-every" => {
-                let n: u64 = number(&flag, &value.unwrap())?;
+                let n: u64 = number(&flag, &v)?;
                 if n == 0 {
                     return Err(format!("{flag} must be at least 1"));
                 }
                 if flag == "--checkpoint-every" {
-                    checkpoint_every = Some(n);
+                    f.checkpoint_every = Some(n);
                 } else {
-                    commit_every = Some(n);
+                    f.commit_every = Some(n);
                 }
             }
-            "-h" | "--help" => command = Some("help".into()),
-            f if f.starts_with('-') => return Err(format!("unknown option {f}")),
+            "-h" | "--help" => f.command = Some("help".into()),
+            other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             c => {
-                if command.is_some() {
+                if f.command.is_some() {
                     return Err(format!("unexpected argument {c:?}"));
                 }
-                command = Some(c.to_string());
+                f.command = Some(c.to_string());
             }
         }
         i += 1;
     }
-    let datadir = match datadir {
+    let config = match &f.config {
+        Some(path) => Config::load(path)?,
+        None => Config::default(),
+    };
+    let datadir = match f.datadir.or(config.path("datadir")?) {
         Some(d) => d,
         None => std::env::var_os("HOME")
             .map(|h| PathBuf::from(h).join(".quai-node"))
             .ok_or("--datadir is required when HOME is not set")?,
     };
-    let replay_only = to.is_some()
-        || jobs.is_some()
-        || !report
-        || state
-        || resume
-        || checkpoint_every.is_some()
-        || commit_every.is_some();
-    let command = match command.as_deref() {
-        None | Some("help") => Command::Help,
-        Some("run") => Command::Run,
-        Some("replay") => Command::Replay(ReplayArgs {
-            export: export.take().ok_or("replay needs --export <DIR>")?,
-            to,
-            jobs: jobs.unwrap_or_else(default_jobs),
-            progress,
-            report,
-            state,
-            resume,
-            checkpoint_every: checkpoint_every.unwrap_or(10_000),
-            commit_every: commit_every.unwrap_or(1_000),
-        }),
-        Some("rpc") => Command::Rpc(RpcArgs {
-            export: export.take().ok_or("rpc needs --export <DIR>")?,
-            listen: listen.take().unwrap_or_else(|| "127.0.0.1:8547".into()),
-        }),
-        Some(c) => return Err(format!("unknown command {c:?}")),
+    let network = f
+        .network
+        .or(config.text("network")?)
+        .unwrap_or_else(|| "colosseum".into());
+    let level = match f.level {
+        Some(l) => l,
+        None => match config.text("log_level")? {
+            Some(v) => Level::parse(&v).ok_or_else(|| format!("log_level: unknown level {v:?}"))?,
+            None => Level::Info,
+        },
     };
-    if replay_only && !matches!(command, Command::Replay(_)) {
-        return Err("--to, --jobs, --state, --resume, --checkpoint-every, --commit-every and --no-report belong to replay".into());
-    }
-    if export.is_some() && !matches!(command, Command::Replay(_)) {
-        return Err("--export belongs to replay and rpc".into());
-    }
-    if listen.is_some() {
-        return Err("--listen belongs to rpc".into());
-    }
+    let command_name = f.command.clone().unwrap_or_else(|| "help".into());
+    let belongs = |list: &[&str], to: &[&str]| -> Result<(), String> {
+        for flag in &seen {
+            if list.contains(&flag.as_str()) && !to.contains(&command_name.as_str()) {
+                return Err(format!("{flag} belongs to {}", to.join(" and ")));
+            }
+        }
+        Ok(())
+    };
+    belongs(&["--export"], &["replay", "rpc"])?;
+    belongs(REPLAY_ONLY, &["replay"])?;
+    belongs(RUN_ONLY, &["run"])?;
+    belongs(SYNC, &["replay", "run"])?;
+    belongs(&["--listen"], &["rpc"])?;
+    belongs(&["--seconds"], &["observe"])?;
+    let command = match command_name.as_str() {
+        "help" => Command::Help,
+        "observe" => Command::Observe(f.seconds.unwrap_or(1800)),
+        "replay" => Command::Replay(ReplayArgs {
+            export: f.export.take().ok_or("replay needs --export <DIR>")?,
+            to: f.to,
+            jobs: f.jobs.unwrap_or_else(default_jobs),
+            progress: f.progress.unwrap_or(10),
+            report: f.report,
+            state: f.state,
+            resume: f.resume,
+            checkpoint_every: f.checkpoint_every.unwrap_or(10_000),
+            commit_every: f.commit_every.unwrap_or(1_000),
+            store: f.store,
+        }),
+        "rpc" => Command::Rpc(RpcArgs {
+            export: f.export.take(),
+            listen: f
+                .listen
+                .or(config.text("rpc.listen")?.and_then(off))
+                .unwrap_or_else(|| "127.0.0.1:8547".into()),
+        }),
+        "run" => {
+            let jobs = match f.jobs {
+                Some(j) => j,
+                None => config
+                    .number("sync.jobs")?
+                    .map_or_else(default_jobs, |n| n as usize),
+            };
+            Command::Run(crate::node::Options {
+                datadir: datadir.clone(),
+                network: network.clone(),
+                stateless: f.stateless || config.flag("sync.stateless")?.unwrap_or(false),
+                jobs,
+                progress: Duration::from_secs(f.progress.unwrap_or(10)),
+                rpc_listen: match f.rpc_listen.or(config.text("rpc.listen")?) {
+                    Some(v) => off(v),
+                    None => Some("127.0.0.1:8547".into()),
+                },
+                metrics_listen: match f.metrics_listen.or(config.text("metrics.listen")?) {
+                    Some(v) => off(v),
+                    None => Some("127.0.0.1:9101".into()),
+                },
+                peers: if f.peers.is_empty() {
+                    config.list("sync.peers")?.unwrap_or_default()
+                } else {
+                    f.peers
+                },
+                public: !f.no_public && config.flag("sync.public")?.unwrap_or(true),
+                margin: match f.margin {
+                    Some(m) => m,
+                    None => config.number("sync.margin")?.unwrap_or(64),
+                },
+                max_peers: match f.max_peers {
+                    Some(m) => m,
+                    None => config.number("sync.max_peers")?.unwrap_or(8).clamp(1, 8) as usize,
+                },
+                to: f.to,
+                checkpoint_every: match f.checkpoint_every {
+                    Some(n) => n,
+                    None => config.number("sync.checkpoint_every")?.unwrap_or(10_000),
+                },
+                commit_every: match f.commit_every {
+                    Some(n) => n,
+                    None => config.number("sync.commit_every")?.unwrap_or(1_000),
+                },
+                gossip: !f.no_gossip,
+            })
+        }
+        c => return Err(format!("unknown command {c:?}")),
+    };
     Ok(Args {
         datadir,
+        network,
         level,
         command,
     })
+}
+
+type Signals = (tokio::runtime::Runtime, Arc<AtomicBool>, Arc<AtomicI32>);
+/// SIGINT or SIGTERM set the stop flag of a replay; the runtime that
+/// listens must outlive the run.
+fn replay_signals(log: Log) -> Option<Signals> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("quai-node-signal")
+        .enable_all()
+        .build()
+        .ok()?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let code = crate::node::install_signals(&runtime, stop.clone(), log);
+    Some((runtime, stop, code))
 }
 
 /// Runs the command line and returns the process exit status.
@@ -254,12 +458,27 @@ pub fn main_with(args: &[String]) -> i32 {
             print!("{USAGE}");
             0
         }
-        Command::Run => {
-            log.error("run is not available yet: the node has no network or live head. Use replay, then rpc.");
-            2
-        }
+        Command::Observe(seconds) => match crate::tip::observe(seconds, &log) {
+            Ok(code) => code,
+            Err(e) => {
+                log.error(&format!("observe: {e}"));
+                2
+            }
+        },
+        Command::Run(o) => match crate::node::run(&o, &log) {
+            Ok(code) => code,
+            Err(e) => {
+                log.error(&format!("run: {e}"));
+                println!("run ERROR: {e}");
+                2
+            }
+        },
         Command::Rpc(r) => {
-            let view = match crate::rpc_view::ExportView::open(&r.export, &args.datadir, &log) {
+            let opened = match &r.export {
+                Some(export) => crate::rpc_view::ExportView::open(export, &args.datadir, &log),
+                None => crate::rpc_view::ExportView::open_store(&args.datadir, &args.network, &log),
+            };
+            let view = match opened {
                 Ok(v) => v,
                 Err(e) => {
                     log.error(&format!("rpc setup: {e}"));
@@ -291,8 +510,11 @@ pub fn main_with(args: &[String]) -> i32 {
                 resume: r.resume,
                 checkpoint_every: r.checkpoint_every,
                 commit_every: r.commit_every,
+                store: r.store,
             };
-            let summary = match replay::run(&opts, &log) {
+            let signals = replay_signals(log);
+            let stop = signals.as_ref().map(|s| s.1.clone());
+            let summary = match replay::run_until(&opts, &log, None, stop) {
                 Ok(s) => s,
                 Err(e) => {
                     log.error(&format!("replay setup: {e}"));
@@ -321,10 +543,13 @@ pub fn main_with(args: &[String]) -> i32 {
                 }
             }
             println!("{}", summary.line());
-            if summary.end == End::Failed {
-                1
-            } else {
-                0
+            match summary.end {
+                End::Failed => 1,
+                End::Stopped => signals
+                    .map(|s| s.2.load(Ordering::Relaxed))
+                    .filter(|c| *c != 0)
+                    .unwrap_or(130),
+                _ => 0,
             }
         }
     }
@@ -352,6 +577,7 @@ mod tests {
         .unwrap();
         assert_eq!(a.level, Level::Debug);
         assert_eq!(a.datadir, PathBuf::from("/d"));
+        assert_eq!(a.network, "colosseum");
         assert_eq!(
             a.command,
             Command::Replay(ReplayArgs {
@@ -364,10 +590,10 @@ mod tests {
                 resume: false,
                 checkpoint_every: 10_000,
                 commit_every: 1_000,
+                store: false,
             })
         );
         assert_eq!(parse(&args(&[])).unwrap().command, Command::Help);
-        assert_eq!(parse(&args(&["run"])).unwrap().command, Command::Run);
         assert!(parse(&args(&["replay"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--jobs", "0"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--bogus"])).is_err());
@@ -377,7 +603,7 @@ mod tests {
                 .unwrap()
                 .command,
             Command::Rpc(RpcArgs {
-                export: "/x".into(),
+                export: Some("/x".into()),
                 listen: "127.0.0.1:8547".into(),
             })
         );
@@ -386,14 +612,83 @@ mod tests {
                 .unwrap()
                 .command,
             Command::Rpc(RpcArgs {
-                export: "/x".into(),
+                export: Some("/x".into()),
                 listen: "0.0.0.0:1".into(),
             })
         );
-        assert!(parse(&args(&["rpc"])).is_err());
+        assert_eq!(
+            parse(&args(&["rpc"])).unwrap().command,
+            Command::Rpc(RpcArgs {
+                export: None,
+                listen: "127.0.0.1:8547".into(),
+            })
+        );
+        assert!(parse(&args(&["rpc", "--store"])).is_err());
         assert!(parse(&args(&["rpc", "--export", "/x", "--state"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--listen", "a"])).is_err());
+        assert!(parse(&args(&["replay", "--export", "/x", "--stateless"])).is_err());
         assert!(parse(&args(&["--log-level", "loud", "run"])).is_err());
         assert!(parse(&args(&["sync"])).is_err());
+    }
+    #[test]
+    fn run_options_come_from_flags_then_the_config_file() {
+        let dir = std::env::temp_dir().join(format!("quai-node-cli-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("node.toml");
+        std::fs::write(
+            &file,
+            "datadir = \"/cfg\"\nlog_level = \"warn\"\n[rpc]\nlisten = \"off\"\n[sync]\nstateless = true\njobs = 2\nmargin = 100\npeers = [\"/ip4/127.0.0.1/tcp/4002\"]\npublic = false\n",
+        )
+        .unwrap();
+        let config = format!("--config={}", file.display());
+        let a = parse(&args(&[&config, "run"])).unwrap();
+        assert_eq!(a.datadir, PathBuf::from("/cfg"));
+        assert_eq!(a.level, Level::Warn);
+        let Command::Run(o) = a.command else {
+            panic!("not run")
+        };
+        assert!(o.stateless);
+        assert_eq!((o.jobs, o.margin, o.public), (2, 100, false));
+        assert_eq!(o.rpc_listen, None);
+        assert_eq!(o.metrics_listen.as_deref(), Some("127.0.0.1:9101"));
+        assert_eq!(o.peers, vec!["/ip4/127.0.0.1/tcp/4002".to_string()]);
+        // Flags win over the file.
+        let a = parse(&args(&[
+            &config,
+            "--datadir",
+            "/flag",
+            "run",
+            "--jobs",
+            "4",
+            "--rpc-listen",
+            "127.0.0.1:1",
+            "--peer",
+            "/ip4/10.0.0.1/tcp/1",
+            "--metrics-listen",
+            "off",
+            "--to",
+            "9",
+        ]))
+        .unwrap();
+        assert_eq!(a.datadir, PathBuf::from("/flag"));
+        let Command::Run(o) = a.command else {
+            panic!("not run")
+        };
+        assert_eq!(o.jobs, 4);
+        assert_eq!(o.rpc_listen.as_deref(), Some("127.0.0.1:1"));
+        assert_eq!(o.metrics_listen, None);
+        assert_eq!(o.peers, vec!["/ip4/10.0.0.1/tcp/1".to_string()]);
+        assert_eq!(o.to, Some(9));
+        // Defaults without a file.
+        let Command::Run(o) = parse(&args(&["run"])).unwrap().command else {
+            panic!("not run")
+        };
+        assert!(!o.stateless && o.public);
+        assert_eq!((o.margin, o.max_peers), (64, 8));
+        assert_eq!(o.rpc_listen.as_deref(), Some("127.0.0.1:8547"));
+        // A bad file is an error.
+        std::fs::write(&file, "bogus = 1\n").unwrap();
+        assert!(parse(&args(&[&config, "run"])).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

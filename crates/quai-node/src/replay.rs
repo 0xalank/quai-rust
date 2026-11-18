@@ -13,7 +13,7 @@ use crate::log::Log;
 use crate::processor::{BlockSource, Next, Processor, Settings, SourceError};
 use crate::qex::{self, ExportError, ExportReader, Manifest};
 use crate::spec::Chain;
-use quai_consensus::pow::SharedCaches;
+use quai_consensus::pow::{DagListener, DagMode, SharedCaches};
 use quai_primitives::encode_hex;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -40,6 +40,8 @@ pub struct Options {
     pub commit_every: u64,
     /// Keep the accepted blocks in the block store (`--store`).
     pub store: bool,
+    /// Where the proof-of-work kernel takes its dataset items (`--pow-dag`).
+    pub pow_dag: DagMode,
 }
 impl Options {
     pub fn new(export: PathBuf) -> Self {
@@ -54,6 +56,7 @@ impl Options {
             checkpoint_every: 10_000,
             commit_every: 1_000,
             store: false,
+            pow_dag: DagMode::Light,
         }
     }
 }
@@ -146,6 +149,22 @@ pub fn run_until(
         checkpoint_every: opts.checkpoint_every,
         commit_every: opts.commit_every,
         store: opts.store,
+    };
+    let caches = match caches {
+        Some(c) => Some(c),
+        None if opts.pow_dag != DagMode::Light => {
+            // Full datasets are built on every core; the light cache serves
+            // the proof-of-work threads until a dataset is complete.
+            let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+            let dag_log = *log;
+            let listener: DagListener =
+                Arc::new(move |m: &str| dag_log.info(&format!("proof-of-work dataset: {m}")));
+            Some(Arc::new(
+                SharedCaches::with_dag(4, opts.pow_dag, threads, Some(listener))
+                    .map_err(|e| describe(&e))?,
+            ))
+        }
+        None => None,
     };
     let mut processor = Processor::open(spec, settings, caches, started)?;
     if let Some(stop) = stop {

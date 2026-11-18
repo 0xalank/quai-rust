@@ -14,6 +14,17 @@ use std::collections::HashMap;
 
 #[path = "fuzz_support/mod.rs"]
 mod fuzz;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+/// Accepted inputs whose re-encoding equals the input byte for byte. Protobuf
+/// accepts non-canonical forms (unknown fields, field order), so the test
+/// asserts a fixed point and only reports how many inputs were identical.
+static IDENTICAL: AtomicUsize = AtomicUsize::new(0);
+fn same(_name: &str, input: &[u8], enc: &[u8]) {
+    if input == enc {
+        IDENTICAL.fetch_add(1, Relaxed);
+    }
+}
 
 const ITER: usize = 60_000;
 /// Peak live bytes in one decode, re-encode and re-decode. Fixed 1 MiB plus a
@@ -48,6 +59,7 @@ fn fuzz_transaction_decode() {
             return false;
         };
         // Accepted input: the decoder re-decodes its own encoding to the same value.
+        same("tx", b, &tx.encode());
         let again = Transaction::decode(&tx.encode()).expect("own encoding decodes");
         assert_eq!(tx, again);
         assert_eq!(tx.encode(), again.encode());
@@ -57,6 +69,7 @@ fn fuzz_transaction_decode() {
         true
     });
     assert!(s.accepted > 100);
+    eprintln!("Transaction::decode identical re-encodings so far: {}", IDENTICAL.load(Relaxed));
 }
 
 #[test]
@@ -68,6 +81,7 @@ fn fuzz_body_header_decode() {
             return false;
         };
         let enc = h.encode();
+        same("body", b, &enc);
         let h2 = BodyHeader::decode(&enc).expect("own encoding decodes");
         assert_eq!(h2.encode(), enc);
         assert_eq!(h.hash(), h2.hash());
@@ -95,6 +109,7 @@ fn fuzz_work_object_decode() {
                 return false;
             };
             let enc = w.encode();
+            same("work", b, &enc);
             let w2 = dec(&enc).expect("own encoding decodes");
             assert_eq!(w2.encode(), enc);
             let _ = (w.header().hash(), w.outbound_root(), w.transactions().len());
@@ -127,6 +142,7 @@ fn fuzz_header_decode() {
                 return false;
             };
             let enc = h.encode();
+            same("header", b, &enc);
             let h2 = dec(&enc).expect("own encoding decodes");
             assert_eq!(h2.encode(), enc);
             assert_eq!(h.seal_bytes(), h2.seal_bytes());

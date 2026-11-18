@@ -3589,6 +3589,54 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x8ebdca88ef843f142505142184030e60eadb86f9129767a82160459d9f53c4e0",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x8ebdca88ef843f142505142184030e60eadb86f9129767a82160459d9f53c4e0"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xb1f1dacccfb5934965250a117f0519dd3273fa9da1d410fead3d3c7c853c6624",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xb1f1dacccfb5934965250a117f0519dd3273fa9da1d410fead3d3c7c853c6624"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0xcb515fd789826a5248cac3c5f0a61c4d7c484a7d95742cdbcfb46405d9a50c7b",
      "header": {
@@ -5060,6 +5108,30 @@
    "params": [
     "0xcb515fd789826a5248cac3c5f0a61c4d7c484a7d95742cdbcfb46405d9a50c7b",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x39e91d2bb9585de656e7d454a2cb4c87154054f8bf183591f3b03c81ecc569c2",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x39e91d2bb9585de656e7d454a2cb4c87154054f8bf183591f3b03c81ecc569c2"
    ]
   },
   {
@@ -8944,6 +9016,30 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xdca793147a6aacdeeb225e4a59db6db804e6670ac53007235a6bfb0f42cf363f",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xdca793147a6aacdeeb225e4a59db6db804e6670ac53007235a6bfb0f42cf363f"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0x17763b0e876972b4ab00cdfcd31c355883de2f05ffa10ccea9fab60ffd6dc377",
      "header": {
@@ -11111,6 +11207,54 @@
    "params": [
     "0x17763b0e876972b4ab00cdfcd31c355883de2f05ffa10ccea9fab60ffd6dc377",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xd02882d19f80a98891bbb71effe8a3b54bd5d438c02b1823434fd8e17849e657",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xd02882d19f80a98891bbb71effe8a3b54bd5d438c02b1823434fd8e17849e657"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x36d0818691d5d807d9d327837bd1ca6ff1e6bba285d7a9edb79527e9ea9fb687",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x36d0818691d5d807d9d327837bd1ca6ff1e6bba285d7a9edb79527e9ea9fb687"
    ]
   },
   {
@@ -14720,6 +14864,30 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x76bcc655496249b351ecf68c86079ea6f6463e63eb82faef85e1d0a1ce3584f4",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x76bcc655496249b351ecf68c86079ea6f6463e63eb82faef85e1d0a1ce3584f4"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0x4642751fb050b720d6f28fa6a491948fc5264bd831e4f27fe5bae1fb7ab74f22",
      "header": {
@@ -15763,6 +15931,30 @@
    "params": [
     "0x4642751fb050b720d6f28fa6a491948fc5264bd831e4f27fe5bae1fb7ab74f22",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xcf2f25b710ab929271cab8687d16fb517187a05a87fda0509606788953de887b",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xcf2f25b710ab929271cab8687d16fb517187a05a87fda0509606788953de887b"
    ]
   },
   {
@@ -19079,6 +19271,30 @@
    "params": [
     "0x74abbb923dd6849e4a1b4453be62f4a1e188a54758114487d46f3addf805dcc4",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xdef576020ef2295519e58bc5a92db8136a04b37979865baf433de1a3049ef79b",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xdef576020ef2295519e58bc5a92db8136a04b37979865baf433de1a3049ef79b"
    ]
   },
   {
@@ -22776,6 +22992,30 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xe6582de9a0e3378701089184ddf74be56112df247563f1a769402390ad5823d2",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xe6582de9a0e3378701089184ddf74be56112df247563f1a769402390ad5823d2"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0xd5dd730ad2a662f0fa389dbf6f34ce7b371493e388d88277669d9879192b8180",
      "header": {
@@ -25007,6 +25247,30 @@
    "params": [
     "0xd5dd730ad2a662f0fa389dbf6f34ce7b371493e388d88277669d9879192b8180",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x6f704600cac6f712c0d72b28360f3a964158c241f1678c58681ed1c365943ef6",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x6f704600cac6f712c0d72b28360f3a964158c241f1678c58681ed1c365943ef6"
    ]
   },
   {
@@ -27496,6 +27760,30 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x88214e2e913e3e6fa9d60abf1e90ccdfa3f089200be72fd0e7a0e867a96c621e",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x88214e2e913e3e6fa9d60abf1e90ccdfa3f089200be72fd0e7a0e867a96c621e"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0x6e87d748297016a0ef6259aeaaba510e57c16eeb32fe610b9fb5eb1d51e1ff96",
      "header": {
@@ -28743,6 +29031,30 @@
    "params": [
     "0x6e87d748297016a0ef6259aeaaba510e57c16eeb32fe610b9fb5eb1d51e1ff96",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xd5e1f4e6f2afa6d266d919db7e6cd81a0288a388f5887047ff4d9c2619e49b97",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xd5e1f4e6f2afa6d266d919db7e6cd81a0288a388f5887047ff4d9c2619e49b97"
    ]
   },
   {
@@ -30656,6 +30968,54 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x5dc84e976da2b941dc50f8a8badd055a1c03adc22dd9be231690ed9603e0cca9",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x5dc84e976da2b941dc50f8a8badd055a1c03adc22dd9be231690ed9603e0cca9"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x85498a74e4bb1cdfb7405d028089e8b908c789ea4fe0b5a42cfa28c35f4b3340",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x85498a74e4bb1cdfb7405d028089e8b908c789ea4fe0b5a42cfa28c35f4b3340"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0x0239a83462787ddc589209a6e0d22ada5d6e17e674f84bfba22726ab5a0014f8",
      "header": {
@@ -31647,6 +32007,30 @@
    "params": [
     "0x0239a83462787ddc589209a6e0d22ada5d6e17e674f84bfba22726ab5a0014f8",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x9f00acdb62ef6c2d3cf1f0379dc55e53be465b5a7b02e3dcb2dd26dad5722c0e",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x9f00acdb62ef6c2d3cf1f0379dc55e53be465b5a7b02e3dcb2dd26dad5722c0e"
    ]
   },
   {
@@ -32895,6 +33279,30 @@
    "params": [
     "0x48728c951782b66f23032b0e995385b25c1b84f10ebf94baea15b88fafffe60b",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xa7f1daeff2a37b2fd1181f19b33fe771a7d09f0843ab7d145279df4bccd6b3c3",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xa7f1daeff2a37b2fd1181f19b33fe771a7d09f0843ab7d145279df4bccd6b3c3"
    ]
   },
   {
@@ -34863,6 +35271,54 @@
    "params": [
     "0xf9709fb747d977e3cd7521ef238d217ed4cf45e882eeec4758c37368848c30c0",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x0367d37a4281e16b10f5fe486e8305ca2dc125874cedc4677ae375abda218dea",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x0367d37a4281e16b10f5fe486e8305ca2dc125874cedc4677ae375abda218dea"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x3cc7b0527927175063f4678b7b0e982bb4182278f8ac8af2e6af7bab54bc3055",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x3cc7b0527927175063f4678b7b0e982bb4182278f8ac8af2e6af7bab54bc3055"
    ]
   },
   {
@@ -37622,6 +38078,30 @@
   {
    "compare": "equal",
    "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0x65ff67cb6f8aa929e335c70b99a3e485fc70a5e5e7ba0b2fa68e7f5fd8989931",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0x65ff67cb6f8aa929e335c70b99a3e485fc70a5e5e7ba0b2fa68e7f5fd8989931"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
     "result": {
      "hash": "0x3aa71a91c9f9ff5e8d616f3467a54a0da7a0a478ba768cfcb4efb4d3e613bf26",
      "header": {
@@ -38897,6 +39377,30 @@
    "params": [
     "0x3aa71a91c9f9ff5e8d616f3467a54a0da7a0a478ba768cfcb4efb4d3e613bf26",
     "0x1"
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "error": {
+     "code": -32000,
+     "message": "block not found"
+    }
+   },
+   "method": "quai_getBlockByHash",
+   "params": [
+    "0xc5134c119e0d3569c0f6945f21d796d999139338c713918e614614e90b3c0c40",
+    false
+   ]
+  },
+  {
+   "compare": "equal",
+   "go": {
+    "result": null
+   },
+   "method": "quai_getHeaderByHash",
+   "params": [
+    "0xc5134c119e0d3569c0f6945f21d796d999139338c713918e614614e90b3c0c40"
    ]
   },
   {
@@ -44561,7 +45065,7 @@
   {
    "compare": "difference",
    "go": {
-    "result": "0x18985"
+    "result": "0x18e28"
    },
    "method": "quai_blockNumber",
    "note": "quai_blockNumber is the head of each node",

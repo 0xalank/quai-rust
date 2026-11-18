@@ -144,6 +144,10 @@ def build(go, head):
         add('quai_getUncleCountByBlockHash', [h])
         add('quai_getUncleByBlockNumberAndIndex', [hx(n), '0x0'])
         add('quai_getUncleByBlockHashAndIndex', [h, '0x1'])
+        # Uncle and workshare hashes: go-quai stores no block for them.
+        for u in (b['uncles'][:1] + b['workshares'][:1]):
+            add('quai_getBlockByHash', [u['hash'], False])
+            add('quai_getHeaderByHash', [u['hash']])
         for i, tx in enumerate(b['transactions'][:3]):
             txs.append((n, h, i, tx['hash']))
         if b['transactions']:

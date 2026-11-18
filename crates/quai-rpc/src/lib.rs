@@ -222,7 +222,10 @@ fn encode(id: &Value, outcome: Outcome) -> Vec<u8> {
 impl App {
     pub fn new(config: Config) -> Result<Arc<Self>, String> {
         if config.mode == "native" {
-            return Err("native mode needs a chain view: use App::native".into());
+            return Err(
+                "native mode needs a chain view: run `quai-node rpc --export DIR` (App::native)"
+                    .into(),
+            );
         }
         Self::build(config, None)
     }

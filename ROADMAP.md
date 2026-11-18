@@ -58,9 +58,15 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        `scripts/mainnet/go_node.sh start|stop|status`. Data:
        `~/quai-data/mainnet-v0.57.0`. UPnP port mapping and telemetry are off.
        A disk guard stops the node below 25 GiB free.
-2. [ ] Go exporter: for each block, the prime, region and zone work objects
+2. [x] Go exporter: for each block, the prime, region and zone work objects
        (protobuf) plus receipts, in order from genesis. The header fields carry
        the expected state, UTXO, ETX and receipt roots.
+       `scripts/mainnet/export.sh` (default: stop node, APFS clone, restart,
+       export from the clone; `--live` clones without a stop). Risk: an export
+       takes about 6.5 KB per zone height, so a full mainnet export does not fit
+       next to the node on this disk. Before that point, stream segments into
+       replay and delete them, compress them (zstd gives 3.8x; needs QEX2), or
+       move the data to another volume.
 3. [ ] Rust `replay` command: start at mainnet genesis with the official
        allocations and compare every root. Stop at the first mismatch and print
        it.
@@ -129,3 +135,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-17 | Phase 1.1 | go-quai v0.57.0 mainnet node started for slice `[0 0]` |
 | 2026-11-17 | Phase 1.1 | Node guard also stops the node on an iPhone hotspot (`daec049`) |
 | 2026-11-17 | Phase 0.4 | Reports moved to `docs/history/`; porting map counts fixed (`3d73836`) |
+| 2026-11-17 | Phase 1.2 | QEX1 exporter (`59a928c`); live-clone export of zone 0–11,682: 20,408 records, 75.9 MB; every self-check and `-verify` pass |

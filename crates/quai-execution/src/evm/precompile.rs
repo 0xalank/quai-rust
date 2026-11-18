@@ -7,6 +7,22 @@ use num_bigint::BigUint;
 use quai_primitives::transaction::{keccak, Address};
 use sha2::{Digest, Sha256};
 use substrate_bn::{AffineG1, AffineG2, Fq, Fq2, Fr, Group, Gt, G1, G2};
+/// go-quai `vm.ActivePrecompiles` (core/vm/contracts.go:58-81): `0x…01` to
+/// `0x…09` with the zone prefix and with 0x00 as the first byte.
+/// `StateDB.PrepareAccessList` (core/state/statedb.go:1295) puts them in the
+/// access list of every message: calls, creations and ETXs
+/// (core/state_transition.go:380).
+pub fn active(location: [u8; 2]) -> Vec<Address> {
+    let mut out = vec![];
+    for id in 1..=9u8 {
+        let mut a = [0; 20];
+        a[19] = id;
+        out.push(a);
+        a[0] = location[0] << 4 | location[1];
+        out.push(a);
+    }
+    out
+}
 pub fn translate(a: Address, loc: [u8; 2]) -> Option<(u8, Address)> {
     if a[1..19].iter().any(|b| *b != 0)
         || !(1..=9).contains(&a[19])

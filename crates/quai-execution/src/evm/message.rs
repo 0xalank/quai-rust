@@ -102,15 +102,7 @@ pub enum Applied {
 /// The precompiles of `location` (`vm.ActivePrecompiles`): `0x…01` to
 /// `0x…09`, with and without the location prefix.
 pub fn precompiles(location: [u8; 2]) -> Vec<Address> {
-    let mut out = vec![];
-    for id in 1..=9u8 {
-        let mut a = [0; 20];
-        a[19] = id;
-        out.push(a);
-        a[0] = location[0] << 4 | location[1];
-        out.push(a);
-    }
-    out
+    super::precompile::active(location)
 }
 
 /// EIP-55 hex, as `common.Address.Hex` and `%v` print an address.

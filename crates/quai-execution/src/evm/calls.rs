@@ -214,13 +214,11 @@ fn call_with_env(
     state.transaction_hash = environment.transaction_hash;
     state.eligible_slices = environment.eligible_slices;
     state.access_list = access.to_vec();
-    for id in 1..=9 {
-        let mut a = [0; 20];
-        a[19] = id;
-        state.addresses.insert(a);
-        a[0] = context.location[0] << 4 | context.location[1];
-        state.addresses.insert(a);
-    }
+    // go-quai `StateDB.PrepareAccessList`: sender, recipient, precompiles and
+    // the transaction's list.
+    state
+        .addresses
+        .extend(super::precompile::active(context.location));
     state.addresses.insert(context.caller);
     state.addresses.insert(context.address);
     for a in access {
@@ -465,6 +463,14 @@ fn creation_with_env(
     state.transaction_hash = environment.transaction_hash;
     state.eligible_slices = environment.eligible_slices;
     state.access_list = access.to_vec();
+    // go-quai `StateDB.PrepareAccessList` adds the precompiles to a creation
+    // too (core/state_transition.go:380, core/state/statedb.go:1302); only
+    // the new contract's address must be in the transaction's list
+    // (`EVM.create`, core/vm/evm.go:533). An ETX creation sends from the
+    // zone's zero address to itself, so the sender is also the recipient.
+    state
+        .addresses
+        .extend(super::precompile::active(context.location));
     state.addresses.insert(context.caller);
     for a in access {
         state.addresses.insert(a.address);

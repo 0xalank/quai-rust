@@ -187,3 +187,22 @@ fn outside_points_are_on_the_twist_but_not_in_the_subgroup() {
     }
     assert_eq!(checked, 4);
 }
+
+/// ecrecover (0x01): v, r, s and hash at and around their bounds (s above
+/// n/2 is refused, as go-quai's ValidateSignatureValues does), a recovered
+/// key at infinity, small r without a curve point, short and long input,
+/// random signatures. sha256, ripemd160 and identity (0x02-0x04) at word
+/// boundaries. modexp (0x05): EIP-198 lengths that do not fit 64 bits,
+/// zero lengths with a huge exponent length, truncated input, modulus 0
+/// and 1, exponent 0, even moduli, exponent heads above 32 bytes, 64
+/// random inputs, the largest input under 50,000,000 gas. bn256 add and
+/// mul (0x06, 0x07): infinity, the generator, coordinates at and above the
+/// modulus, points off the curve, (0, sqrt(3)), scalars 0, 1, 2, r - 1, r,
+/// r + 1, 3r, 5r - 1, p, 2^255, 2^256 - 1 and 24 random ones, short and long
+/// input. blake2f (0x09): EIP-152 vector 5, lengths 0, 212 and 214, final
+/// flags 0, 2 and 0xff, 0, 1 and 2^32 - 1 rounds, 16 random inputs. Gas at
+/// and one below the required amount for 60 of the inputs.
+#[test]
+fn precompile_inputs_match_go() {
+    assert_eq!(check_runs(&[1, 2, 3, 4, 5, 6, 7, 9]), 582);
+}

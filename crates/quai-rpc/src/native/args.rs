@@ -102,7 +102,7 @@ fn check_text(s: &str) -> Result<&str, &'static str> {
         return Err(MISSING_PREFIX);
     }
     let s = &s[2..];
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(ODD_LENGTH);
     }
     Ok(s)
@@ -349,9 +349,10 @@ pub fn block_ref(v: &Value) -> Result<BlockRef, String> {
                     canonical: false,
                 })
             }
-            s => match block_number_text(s, "blocknumber too high")? {
-                n => Ok(BlockRef::Number(n)),
-            },
+            s => Ok(BlockRef::Number(block_number_text(
+                s,
+                "blocknumber too high",
+            )?)),
         },
         other => Err(type_error(kind(other), "string")),
     }

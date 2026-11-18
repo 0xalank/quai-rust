@@ -235,10 +235,14 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
         "quai_getRawTransactionByHash" => {
             let a = Args::new(params, 1)?;
             let hash = a.get(0, args::hash)?;
-            // `tx.MarshalBinary()`: the typed RLP form.
-            Ok(locate(view, &hash)?.map_or(Value::Null, |(b, i)| {
-                json::bytes_hex(&b.object.transactions()[i as usize].typed_rlp())
-            }))
+            // `tx.MarshalBinary()`: the typed RLP form. Unlike the other
+            // transaction reads, an unknown hash is an error here.
+            match locate(view, &hash)? {
+                Some((b, i)) => Ok(json::bytes_hex(
+                    &b.object.transactions()[i as usize].typed_rlp(),
+                )),
+                None => Err(RpcError::go("transaction not found")),
+            }
         }
         "quai_getTransactionReceipt" => {
             let a = Args::new(params, 1)?;
@@ -573,11 +577,10 @@ fn quai_internal(view: &dyn ChainView, address: &Address) -> R<()> {
 
 // --- state -----------------------------------------------------------------
 
+/// A block and the account state after it.
+type BlockState = (Arc<BlockData>, Arc<dyn crate::view::AccountState>);
 /// `StateAndHeaderByNumberOrHash`. `Ok(None)` is Go's (nil, nil).
-fn state_at(
-    view: &dyn ChainView,
-    at: BlockRef,
-) -> R<Option<(Arc<BlockData>, Arc<dyn crate::view::AccountState>)>> {
+fn state_at(view: &dyn ChainView, at: BlockRef) -> R<Option<BlockState>> {
     let block = resolve(view, at)?;
     let state = view.state(&block)?;
     Ok(Some((block, state)))
@@ -657,7 +660,7 @@ fn decode_fixed(s: &str, want: usize, what: &str) -> Result<Vec<u8>, String> {
         return Err("hex string without 0x prefix".into());
     }
     let raw = &s[2..];
-    if raw.len() % 2 != 0 {
+    if !raw.len().is_multiple_of(2) {
         return Err("hex string of odd length".into());
     }
     let b = quai_primitives::decode_hex(&format!("0x{raw}")).map_err(|_| "invalid hex string")?;
@@ -745,7 +748,8 @@ fn filter(v: &Value) -> Result<Filter, String> {
                 });
             }
         }
-        Some(other) => return Err(format!(
+        Some(other) => {
+            return Err(format!(
             "json: cannot unmarshal {} into Go struct field input.topics of type []interface {{}}",
             match other {
                 Value::String(_) => "string",
@@ -753,7 +757,8 @@ fn filter(v: &Value) -> Result<Filter, String> {
                 Value::Bool(_) => "bool",
                 _ => "object",
             }
-        )),
+        ))
+        }
     }
     Ok(Filter {
         block_hash,

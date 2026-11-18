@@ -48,7 +48,7 @@ pub fn address20(bytes: &[u8]) -> [u8; 20] {
 /// `Address.Hex()`: EIP-55 mixed case.
 pub fn checksum(address: &[u8; 20]) -> String {
     let lower = quai_primitives::encode_hex(address);
-    let digest = keccak(lower[2..].as_bytes());
+    let digest = keccak(&lower.as_bytes()[2..]);
     let mut out = String::with_capacity(42);
     out.push_str("0x");
     for (i, c) in lower[2..].chars().enumerate() {

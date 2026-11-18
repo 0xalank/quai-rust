@@ -136,10 +136,12 @@ pub struct ExportView {
     head: u64,
     checkpointed: Checkpointed,
     caches: Arc<SharedCaches>,
-    blocks: Mutex<(HashMap<u64, Arc<BlockData>>, VecDeque<u64>)>,
-    kinds: Mutex<(HashMap<u64, Arc<Vec<UncleKind>>>, VecDeque<u64>)>,
+    blocks: Mutex<Lru<Arc<BlockData>>>,
+    kinds: Mutex<Lru<Arc<Vec<UncleKind>>>>,
     head_entropy: OnceLock<Result<U256, String>>,
 }
+/// A small cache by zone height, oldest entry out first.
+type Lru<T> = (HashMap<u64, T>, VecDeque<u64>);
 
 fn unavailable(e: impl std::fmt::Display) -> ViewError {
     ViewError::Unavailable(e.to_string())
@@ -883,7 +885,8 @@ impl ChainView for ExportView {
             .lock()
             .map_err(|_| unavailable("past.redb lock"))?;
         let mut out = vec![];
-        for height in start as u64..=(end as u64).min(self.head) {
+        // The genesis creates no UTXOs; the replay records heights from 1.
+        for height in (start as u64).max(1)..=(end as u64).min(self.head) {
             let created = past
                 .created_at(height)
                 .map_err(|e| ViewError::Unavailable(format!("UTXOs created at {height}: {e:?}")))?;

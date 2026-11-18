@@ -272,9 +272,7 @@ pub fn main_with(args: &[String]) -> i32 {
                 timeout_ms: 30_000,
                 ..quai_rpc::Config::default()
             };
-            match quai_rpc::App::native(config, Arc::new(view))
-                .and_then(|app| quai_rpc::serve_blocking(app))
-            {
+            match quai_rpc::App::native(config, Arc::new(view)).and_then(quai_rpc::serve_blocking) {
                 Ok(()) => 0,
                 Err(e) => {
                     log.error(&format!("rpc: {e}"));

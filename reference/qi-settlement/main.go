@@ -201,6 +201,17 @@ func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 		out[0].Address = addr(loc, 1, false)
 	case "empty-output":
 		out = nil
+	case "bounds-many":
+		// 4,097 inputs and 4,097 outputs: one more than the former native
+		// decode cap for each. Gas needs the 50,000,000 mainnet block limit.
+		out = types.TxOuts{}
+		for j := 0; j < 4097; j++ {
+			a := addr(loc, 0, true)
+			a[2] = byte(j >> 8)
+			a[3] = byte(j)
+			out = append(out, types.TxOut{Denomination: 0, Address: a, Lock: u(0)})
+		}
+		pool = 50000000
 	}
 	txi := &types.QiTx{ChainID: u(1337), TxIn: types.TxIns{{PreviousOutPoint: point, PubKey: k.PubKey().SerializeUncompressed()}}, TxOut: out, Data: data, Signature: new(schnorr.Signature)}
 	keys := []*btcec.PrivateKey{k}
@@ -215,6 +226,14 @@ func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 	if kind == "duplicate-input" {
 		txi.TxIn = append(txi.TxIn, txi.TxIn[0])
 		keys = append(keys, k)
+	}
+	if kind == "bounds-many" {
+		for j := 1; j < 4097; j++ {
+			q := point
+			q.Index += uint16(j)
+			txi.TxIn = append(txi.TxIn, types.TxIn{PreviousOutPoint: q, PubKey: k.PubKey().SerializeUncompressed()})
+			keys = append(keys, k)
+		}
 	}
 	signingKey := aggregatePrivate(keys)
 	signer := types.NewSigner(u(1337), loc)
@@ -235,7 +254,11 @@ func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 	header.WorkObjectHeader().SetLocation(loc)
 	header.WorkObjectHeader().SetPrimeTerminusNumber(u(p))
 	header.WorkObjectHeader().SetDifficulty(u(1000000000000))
-	header.Header().SetGasLimit(30000000)
+	gasLimit := uint64(30000000)
+	if kind == "bounds-many" {
+		gasLimit = 50000000
+	}
+	header.Header().SetGasLimit(gasLimit)
 	header.Header().SetBaseFee(u(base))
 	header.Header().SetAvgTxFees(u(197))
 	header.Header().SetTotalFees(u(317))
@@ -275,6 +298,9 @@ func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 		}
 		return factor
 	}(), "first_qi": first, "base_fee": hx(u(base).FillBytes(make([]byte, 32))), "quai_reward": hx(misc.CalculateQuaiConversionReward(header, prime.ExchangeRate(), header.Difficulty()).FillBytes(make([]byte, 32))), "qi_reward": hx(misc.CalculateQiReward(header.WorkObjectHeader(), header.Difficulty()).FillBytes(make([]byte, 32))), "eligible_slices": eligible.Hex(), "gas_pool_initial": pool, "region_initial": r, "prime_initial": pbudget, "used_initial": used, "utxos": entries, "before_root": before.Hash().Hex(), "before_accumulator": hx(before.Serialize())}
+	if gasLimit != 30000000 {
+		row["block_gas_limit"] = gasLimit
+	}
 	fee, etxs, receipt, err, _ := core.ProcessQiTx(tx, chain{prime}, true, first, header, batch, db, gp, &used, signer, loc, *u(1337), factor, &r, &pbudget, delta, added, removed, false)
 	row["accepted"] = err == nil
 	var message interface{}
@@ -348,5 +374,6 @@ func main() {
 			}
 		}
 	}
+	rows = append(rows, run("bounds-many", common.Location{0, 0}, 2444574))
 	must(json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"reference_revision": referenceRevision, "vectors": rows, "scope": "Actual ProcessQiTx with signature verification, real rawdb batch UTXO deltas and MuHash commitments. Rejected transactions roll back the block view; no full block admission or public network. The only normalized diagnostic bytes are process-local Go pointer values in the two ETX budget error messages; raw diagnostics remain in oracle stderr."}))
 }

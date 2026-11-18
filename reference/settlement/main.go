@@ -39,6 +39,14 @@ func addr(loc common.Location, n byte) common.Address {
 	b[19] = n
 	return common.BytesToAddress(b, loc)
 }
+func boundsAddress(loc common.Location, i int) common.Address {
+	b := make([]byte, 20)
+	b[0] = loc.BytePrefix()
+	b[1] = 0x33
+	b[2] = byte(i >> 8)
+	b[3] = byte(i)
+	return common.BytesToAddress(b, loc)
+}
 func key(loc common.Location) *ecdsa.PrivateKey {
 	for i := uint64(1); ; i++ {
 		k, e := crypto.ToECDSA(u(i).FillBytes(make([]byte, 32)))
@@ -165,6 +173,29 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 	case "suicide-lowercase":
 		recipient = sender
 		data = append([]byte("suicide"), sender.Bytes()...)
+	case "bounds-data-log":
+		// 140,000 bytes of call data, copied to memory and logged once.
+		code = []byte{0x36, 0x60, 0, 0x60, 0, 0x37, 0x36, 0x60, 0, 0xa0, 0x00}
+		data = make([]byte, 140000)
+		for i := range data {
+			data[i] = byte(i*7 + i/251)
+		}
+		gas = 5000000
+	case "bounds-wire":
+		// 1,048,577 zero bytes of call data: the signed transaction exceeds 1 MiB.
+		code = []byte{0x36, 0x60, 0, 0x52, 0x60, 32, 0x60, 0, 0xf3}
+		data = make([]byte, 1048577)
+		gas = 5000000
+	case "bounds-logs":
+		// 4,100 LOG0 entries of one byte each.
+		code = []byte{0x61, 0x10, 0x04, 0x5b, 0x80, 0x60, 0, 0x53, 0x60, 1, 0x60, 0, 0xa0, 0x60, 1, 0x90, 0x03, 0x80, 0x60, 3, 0x57, 0x00}
+		gas = 3000000
+	case "bounds-access":
+		// 4,098 access-list tuples and 4,097 keys; the last tuple and key are read.
+		code = append([]byte{0x61, 0x10, 0x00, 0x54, 0x50, 0x73}, boundsAddress(loc, 4096).Bytes()...)
+		code = append(code, 0x31, 0x50, 0x00)
+		gas = 20000000
+		pool = 30000000
 	}
 	addresses := []common.Address{sender, child}
 	codes := [][]byte{nil, nil}
@@ -221,6 +252,16 @@ func run(kind string, loc common.Location, prime uint64, finalized bool) map[str
 	list := types.AccessList{{Address: recipient, StorageKeys: []common.Hash{{}, {31: 1}}}}
 	if kind == "transfer" || kind == "self" {
 		list = nil
+	}
+	if kind == "bounds-access" {
+		keys := []common.Hash{}
+		for i := 0; i < 4097; i++ {
+			keys = append(keys, common.BigToHash(u(uint64(i))))
+		}
+		list = types.AccessList{{Address: recipient, StorageKeys: keys}}
+		for i := 0; i < 4097; i++ {
+			list = append(list, types.AccessTuple{Address: boundsAddress(loc, i)})
+		}
 	}
 	if kind == "static-empty" || kind == "static-empty-revert" {
 		list = append(list, types.AccessTuple{Address: child})
@@ -334,6 +375,12 @@ func main() {
 				}
 			}
 		}
+	}
+	// Gas-only bounds: call data and log data above 128 KiB, a transaction
+	// above 1 MiB, more than 4,096 access-list tuples and keys, and more than
+	// 4,096 logs in one receipt.
+	for _, kind := range []string{"bounds-data-log", "bounds-access", "bounds-logs", "bounds-wire"} {
+		v = append(v, run(kind, common.Location{0, 0}, 2444574, true))
 	}
 	must(json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"reference_revision": referenceRevision, "vectors": v, "scope": "Actual signed Quai transactions through core.ApplyMessage and actual applyTransaction finalization on identical committed private pre-state; consensus errors are rolled back as rejected block transactions. No full block admission or public network."}))
 }

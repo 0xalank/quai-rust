@@ -17,6 +17,7 @@ import (
 	"github.com/dominant-strategies/go-quai/crypto/bn256"
 	"github.com/dominant-strategies/go-quai/log"
 	"github.com/dominant-strategies/go-quai/params"
+	"github.com/dominant-strategies/go-quai/rlp"
 	"google.golang.org/protobuf/proto"
 	"math/big"
 	"os"
@@ -118,6 +119,7 @@ type testcase struct {
 	ineligible         bool
 	lockup             string
 	reset              *common.Address
+	keys               int
 }
 
 func run(c testcase, loc common.Location) map[string]interface{} {
@@ -232,6 +234,11 @@ func run(c testcase, loc common.Location) map[string]interface{} {
 			keys := []common.Hash{}
 			if c.warm {
 				keys = append(keys, common.Hash{}, common.Hash{31: 1}, common.Hash{31: 2})
+			}
+			if a.Equal(root) {
+				for i := 0; i < c.keys; i++ {
+					keys = append(keys, common.BigToHash(u(uint64(i))))
+				}
 			}
 			list = append(list, types.AccessTuple{Address: a, StorageKeys: keys})
 			encoded := []string{}
@@ -612,6 +619,63 @@ func main() {
 		}
 		code = join(code, p(uint64(len(init))), p(0), p(0), []byte{0xf0}, done())
 		vectors = append(vectors, run(testcase{id: "create-reset-storage", root: code, listed: true, extra: []common.Address{created}, reset: &created, gas: 1000000}, loc))
+	}
+
+	// Gas-only bounds on the call path. Each case passes a cap that the native
+	// code had and go-quai never had: 131,072 bytes of call input, 4,096
+	// access-list tuples or keys, 4,096 opETX access-list entries, 20-byte
+	// opETX access-list addresses, 1 MiB of precompile input and 1 MiB of
+	// modexp operands, and 64-bit modexp lengths.
+	{
+		loc := common.Location{0, 0}
+		remote := addr(common.Location{0, 1}, 8)
+		precompile := func(id byte) common.Address {
+			b := make([]byte, 20)
+			b[0] = loc.BytePrefix()
+			b[19] = id
+			return common.BytesToAddress(b, loc)
+		}
+		input := make([]byte, 140000)
+		for i := range input {
+			input[i] = byte(i*7 + i/251)
+		}
+		hashInput := join([]byte{0x36}, p(0), p(0), []byte{0x37, 0x36}, p(0), []byte{0x20}, p(0), []byte{0x52}, p(139968), []byte{0x35}, p(32), []byte{0x52, 0x36}, p(64), []byte{0x52}, p(96), p(0), []byte{0xf3})
+		vectors = append(vectors, run(testcase{id: "bounds-call-input-140000", root: hashInput, input: input, listed: true, gas: 1000000}, loc))
+		gasLeft := join([]byte{0x5a}, p(0), []byte{0x52}, p(32), p(0), []byte{0xf3})
+		vectors = append(vectors, run(testcase{id: "bounds-access-keys-4097", root: join(p(4096), []byte{0x54, 0x50}, gasLeft), listed: true, keys: 4097, gas: 1000000}, loc))
+		extra := []common.Address{}
+		for i := 0; i < 4097; i++ {
+			b := make([]byte, 20)
+			b[0] = loc.BytePrefix()
+			b[1] = 0x33
+			b[2] = byte(i >> 8)
+			b[3] = byte(i)
+			extra = append(extra, common.BytesToAddress(b, loc))
+		}
+		vectors = append(vectors, run(testcase{id: "bounds-access-tuples-4100", root: join(pushAddr(extra[4096]), []byte{0x31, 0x50}, gasLeft), listed: true, extra: extra, gas: 1000000}, loc))
+		// opETX reads its access list from calldata: no fee, value 13.
+		etx := func(limit uint64) []byte {
+			return join([]byte{0x36}, p(0), p(0), []byte{0x37, 0x36}, p(0), p(0), p(0), p(0), p(0), p(limit), p(13), pushAddr(remote), p(0), []byte{0xf6}, p(0), []byte{0x52}, p(32), p(0), []byte{0xf3})
+		}
+		keys := []common.Hash{}
+		for i := 0; i < 4097; i++ {
+			keys = append(keys, common.BigToHash(u(uint64(i))))
+		}
+		list, e := rlp.EncodeToBytes(types.AccessList{{Address: addr(loc, 2), StorageKeys: keys}})
+		must(e)
+		vectors = append(vectors, run(testcase{id: "bounds-etx-access-keys-4097", root: etx(8000000), input: list, listed: true, gas: 1000000}, loc))
+		short := addr(loc, 2).Bytes()[1:]
+		long := append([]byte{0x77}, addr(loc, 3).Bytes()...)
+		odd, e := rlp.EncodeToBytes([]interface{}{[]interface{}{short, []common.Hash{}}, []interface{}{long, []common.Hash{{31: 5}}}, []interface{}{[]byte{}, []common.Hash{}}})
+		must(e)
+		vectors = append(vectors, run(testcase{id: "bounds-etx-access-address-lengths", root: etx(100000), input: odd, listed: true, gas: 1000000}, loc))
+		identity := join(p(0xabcdef), p(0x10ffe0), []byte{0x52}, p(0), p(0), p(0x110000), p(0), p(0), pushAddr(precompile(4)), []byte{0x5a, 0xf1, 0x50, 0x3d}, p(0), p(0), []byte{0x3e, 0x3d}, p(0), []byte{0x20}, p(0), []byte{0x52, 0x3d}, p(32), []byte{0x52}, p(64), p(0), []byte{0xf3})
+		vectors = append(vectors, run(testcase{id: "bounds-identity-input-1114112", root: identity, listed: true, gas: 5000000}, loc))
+		modexp := join(p(1), p(0), []byte{0x52}, p(1048577), p(32), []byte{0x52}, p(1), p(64), []byte{0x52}, p(3), p(96), []byte{0x53}, p(1), p(97), []byte{0x53}, p(11), p(1048674), []byte{0x53}, p(1), p(0), p(1048675), p(0), pushAddr(precompile(5)), []byte{0x5a, 0xfa}, p(32), []byte{0x52}, p(64), p(0), []byte{0xf3})
+		vectors = append(vectors, run(testcase{id: "bounds-modexp-exponent-1048577", root: modexp, listed: true, gas: 8000000}, loc))
+		huge := join(make([]byte, 32), new(big.Int).Lsh(u(1), 70).FillBytes(make([]byte, 32)), make([]byte, 32))
+		target := precompile(5)
+		vectors = append(vectors, run(testcase{id: "bounds-modexp-zero-lengths-huge-exponent", target: &target, input: huge, listed: true, precompile: true, gas: 1000000}, loc))
 	}
 
 	chain := *params.TestChainConfig

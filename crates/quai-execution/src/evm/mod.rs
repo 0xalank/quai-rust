@@ -1,6 +1,30 @@
-//! Bounded Quai interpreter with shared transaction state, nested calls,
-//! creation, precompiles and outbound ETX components. Unsupported domains return
+//! Quai interpreter with shared transaction state, nested calls, creation,
+//! precompiles and outbound ETX components. Unsupported domains return
 //! capability errors; complete economic and block admission remain separate.
+//!
+//! Gas is the only execution bound, as in go-quai v0.57.0. The interpreter has
+//! no step, memory, log, call-input or access-list cap of its own:
+//!
+//! - Block gas: `core.CalcGasLimit` (core/block_validator.go) returns at most
+//!   `params.GasCeil` = 50,000,000 on every network, and `verifyHeader`
+//!   (core/headerchain_validation.go) requires the header gas limit to equal
+//!   it. A transaction cannot use more gas than the block gas pool.
+//! - Memory: Go charges `3w + w²/512` gas for `w` words (core/vm/gas_table.go
+//!   `memoryGasCost`). Its only other check, `size > 0x1FFFFFFFE0`, is out of
+//!   gas here too. One frame with 50,000,000 gas reaches at most 159,233 words
+//!   (5,095,456 bytes). Live frames share the gas of one transaction and the
+//!   cost is convex, so all 1,025 possible frames together hold at most
+//!   1,025 × 4,288 words (140,646,400 bytes).
+//! - Steps: Go counts steps only to poll `evm.abort` (core/vm/interpreter.go).
+//!   Between two taken jumps the program counter only moves forward, so a
+//!   frame runs at most `code.len() + 1` steps per segment, and each taken
+//!   JUMP/JUMPI costs at least 8 gas. Every frame therefore halts after at most
+//!   `(gas / 8 + 1) * (code.len() + 1)` steps.
+//! - Logs: Go has no count or size cap (core/vm/instructions.go `makeLog`).
+//!   Gas allows at most 133,333 logs and 6,250,000 data bytes per transaction.
+//!
+//! `MAX_TRACE_BYTES` applies only when `Context::trace` is set. Consensus
+//! callers always clear it, so it cannot change a block result.
 pub mod calls;
 pub mod etx;
 pub mod journal;
@@ -19,8 +43,8 @@ use state::World;
 use std::collections::BTreeSet;
 use word::{boolean, bytes, from_bytes, uint, Word};
 pub const NEW_OPS_HEIGHT: u64 = 3_490_000;
-pub const MAX_MEMORY: usize = 1 << 20;
-pub const MAX_STEPS: usize = 200_000;
+/// Diagnostic trace budget. Only `Context::trace` frames use it; consensus
+/// execution never sets that flag.
 pub const MAX_TRACE_BYTES: usize = 64 << 20;
 #[derive(Clone, Debug)]
 pub struct Context {
@@ -631,9 +655,6 @@ impl Machine<'_> {
             self.memory_paid = 3 * words + words * words / 512;
         }
         self.state_gas += state_cost;
-        if size > MAX_MEMORY as u64 {
-            return Err(CapabilityError::Limit("memory").into());
-        }
         if size > self.memory.len() as u64 {
             self.memory.resize(size as usize, 0);
         }
@@ -900,14 +921,6 @@ impl Machine<'_> {
                 let off = self.pop();
                 let len = self.pop();
                 let (o, n) = self.range(off, len);
-                self.state.log_bytes = self
-                    .state
-                    .log_bytes
-                    .checked_add(n + 128)
-                    .ok_or(CapabilityError::Limit("logs"))?;
-                if self.state.log_bytes > 4 << 20 || self.state.logs.len() == 4096 {
-                    return Err(CapabilityError::Limit("logs").into());
-                }
                 let mut topics = Vec::new();
                 for _ in 0..op - 0xa0 {
                     topics.push(bytes(self.pop()));
@@ -1121,9 +1134,6 @@ pub fn execute_frame(
     {
         return Err(CapabilityError::Context("local Quai contract required"));
     }
-    if input.len() > 131_072 || context.warm_slots.len() > 4096 {
-        return Err(CapabilityError::Limit("input/access-list"));
-    }
     world
         .validate()
         .map_err(|error| CapabilityError::state(error, CapabilityError::Limit("world snapshot")))?;
@@ -1193,24 +1203,16 @@ pub(crate) fn run_code(
 
         jumps,
     };
-    let mut result: Result<(), Stop> = Err(Stop::Capability(CapabilityError::Limit("steps")));
-    if machine.code.is_empty() {
-        result = Err(Stop::Success(vec![]));
-    }
-    for _ in 0..if machine.code.is_empty() {
-        0
+    // Gas bounds the loop: see the module documentation for the halting argument.
+    let stop = if machine.code.is_empty() {
+        Stop::Success(vec![])
     } else {
-        MAX_STEPS
-    } {
-        match machine.step() {
-            Ok(()) => {}
-            Err(stop) => {
-                result = Err(stop);
-                break;
+        loop {
+            if let Err(stop) = machine.step() {
+                break stop;
             }
         }
-    }
-    let stop = result.unwrap_err();
+    };
     let (error, reverted, output, success) = match stop {
         Stop::Success(data) => (None, false, data, true),
         Stop::Revert(data) => (None, true, data, false),

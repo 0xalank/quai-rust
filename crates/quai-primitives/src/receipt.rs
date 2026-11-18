@@ -46,41 +46,22 @@ pub struct Receipt {
     pub outbound_etxs: Vec<Transaction>,
 }
 impl Receipt {
+    /// Receipts come from local execution, not from peers, and go-quai encodes
+    /// them without any log, data or size cap (core/types/receipt.go). Gas
+    /// bounds a transaction to at most 133,333 logs and 6,250,000 log data
+    /// bytes at the 50,000,000 block gas limit.
     pub fn typed_rlp(&self) -> Result<Vec<u8>, String> {
         if self.transaction_type > 2 || self.bloom.len() != BLOOM_BYTES {
             return Err("unsupported receipt type/bloom length".into());
         }
-        if self.logs.len() > 4096 || self.outbound_etxs.len() > 4096 || self.post_state.len() > 32 {
-            return Err("receipt exceeds supported bounds".into());
+        if self.post_state.len() > 32 {
+            return Err("receipt post-state exceeds a root".into());
         }
-        if self
-            .logs
+        let outbound = self
+            .outbound_etxs
             .iter()
-            .any(|l| l.topics.len() > 4096 || l.data.len() > 131_072)
-        {
-            return Err("receipt log exceeds supported bounds".into());
-        }
-        let mut budget = self.bloom.len() + 256;
-        for log in &self.logs {
-            budget = budget
-                .checked_add(log.data.len())
-                .and_then(|n| n.checked_add(log.topics.len() * 33 + 64))
-                .ok_or("receipt size overflow")?;
-        }
-        if budget > crate::schema::MAX_MESSAGE_BYTES {
-            return Err("receipt exceeds bounded byte budget".into());
-        }
-        let mut outbound = Vec::with_capacity(self.outbound_etxs.len());
-        for tx in &self.outbound_etxs {
-            let encoded = tx.rlp_envelope();
-            budget = budget
-                .checked_add(encoded.len())
-                .ok_or("receipt size overflow")?;
-            if budget > crate::schema::MAX_MESSAGE_BYTES {
-                return Err("receipt exceeds bounded byte budget".into());
-            }
-            outbound.push(encoded);
-        }
+            .map(Transaction::rlp_envelope)
+            .collect::<Vec<_>>();
         let status = if !self.post_state.is_empty() {
             self.post_state.clone()
         } else if self.status == 0 {
@@ -100,21 +81,54 @@ impl Receipt {
         Ok(bytes)
     }
 }
+/// No byte budget: every receipt carries a 10,240-byte bloom, and a block may
+/// hold up to 13,157 transactions (3,800 intrinsic gas per minimal Qi
+/// transaction at 50,000,000 gas), which is more than 64 MiB of receipts.
 pub fn receipts_root(receipts: &[Receipt]) -> Result<Hash, String> {
-    if receipts.len() > trie::MAX_LIST_ITEMS {
-        return Err("receipt count limit exceeded".into());
-    }
-    let mut values = Vec::with_capacity(receipts.len());
-    let mut bytes = 0usize;
-    for receipt in receipts {
-        let value = receipt.typed_rlp()?;
-        bytes = bytes
-            .checked_add(value.len())
-            .ok_or("receipt-list size overflow")?;
-        if bytes > trie::MAX_VALUE_BYTES {
-            return Err("receipt-list byte budget exceeded".into());
-        }
-        values.push(value);
-    }
+    let values = receipts
+        .iter()
+        .map(Receipt::typed_rlp)
+        .collect::<Result<Vec<_>, _>>()?;
     trie::ordered_root(&values)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn receipts_have_no_log_count_or_size_cap() {
+        // More than the former 4,096 logs, 128 KiB per log and 3 MiB per receipt.
+        let mut logs = vec![
+            Log {
+                address: [1; 20],
+                topics: vec![],
+                data: vec![2; 1],
+            };
+            5_000
+        ];
+        logs.push(Log {
+            address: [1; 20],
+            topics: vec![[3; 32]],
+            data: vec![4; 3 << 20],
+        });
+        let receipt = Receipt {
+            transaction_type: 0,
+            post_state: vec![],
+            status: 1,
+            cumulative_gas_used: 21_000,
+            bloom: logs_bloom(&logs),
+            logs: logs.clone(),
+            outbound_etxs: vec![],
+        };
+        let encoded = receipt.typed_rlp().unwrap();
+        let body = trie::list([
+            trie::bytes(&[1]),
+            trie::uint(21_000),
+            trie::bytes(&receipt.bloom),
+            trie::list(logs.iter().map(Log::rlp)),
+            trie::list([]),
+        ]);
+        assert_eq!(encoded, [vec![0], body].concat());
+        assert!(encoded.len() > crate::schema::MAX_MESSAGE_BYTES);
+        assert!(receipts_root(&[receipt]).is_ok());
+    }
 }

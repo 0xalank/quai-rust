@@ -68,6 +68,13 @@ pub struct EtxState {
     buffer_bytes: usize,
     auxiliary: Arc<BTreeMap<Vec<u8>, Vec<u8>>>,
     root_cache: Arc<OnceLock<Trie>>,
+    // Derived only, excluded from equality (as World's commitment base): the
+    // trie of the last root computed for a lazy queue, and the slots and
+    // auxiliary keys changed since. The next root updates only those keys
+    // instead of replaying every change since the base.
+    trie_base: Option<Arc<Trie>>,
+    dirty_slots: Arc<BTreeSet<u64>>,
+    dirty_auxiliary: Arc<BTreeSet<Vec<u8>>>,
 }
 impl PartialEq for EtxState {
     fn eq(&self, other: &Self) -> bool {
@@ -277,7 +284,7 @@ impl EtxState {
         if image && buffers > MAX_IMAGE_BUFFERS {
             return Err("ETX image buffer bound".into());
         }
-        self.root_cache = Default::default();
+        self.invalidate(&[], Some(&key));
         if value.is_empty() && self.base.is_none() {
             Arc::make_mut(&mut self.auxiliary).remove(&key);
         } else {
@@ -335,7 +342,8 @@ impl EtxState {
             }));
         }
         if !entries.is_empty() {
-            self.root_cache = Default::default();
+            let touched: Vec<u64> = (0..entries.len() as u64).map(|i| self.newest + i).collect();
+            self.invalidate(&touched, None);
         }
         for (offset, entry) in entries.into_iter().enumerate() {
             Arc::make_mut(&mut self.slots).insert(self.newest + offset as u64, entry);
@@ -389,7 +397,7 @@ impl EtxState {
         if self.base.is_some() {
             Arc::make_mut(&mut self.deleted).insert(self.oldest);
         }
-        self.root_cache = Default::default();
+        self.invalidate(&[self.oldest], None);
         self.oldest = next;
         Ok(Some(entry.transaction.as_ref().clone()))
     }
@@ -421,6 +429,24 @@ impl EtxState {
             .cloned()
             .collect())
     }
+    /// Drop the cached root before a change to `slots` and `auxiliary`; keep
+    /// the trie it held as the base of the next root, with the changed keys.
+    fn invalidate(&mut self, slots: &[u64], auxiliary: Option<&[u8]>) {
+        let previous = std::mem::take(&mut self.root_cache);
+        if let Some(trie) = previous.get() {
+            self.trie_base = Some(Arc::new(trie.clone()));
+            self.dirty_slots = Default::default();
+            self.dirty_auxiliary = Default::default();
+        }
+        if self.trie_base.is_some() {
+            if !slots.is_empty() {
+                Arc::make_mut(&mut self.dirty_slots).extend(slots.iter().copied());
+            }
+            if let Some(key) = auxiliary {
+                Arc::make_mut(&mut self.dirty_auxiliary).insert(key.to_vec());
+            }
+        }
+    }
     pub fn root(&self) -> Result<Hash, ReadError> {
         Ok(self.trie()?.root())
     }
@@ -444,15 +470,45 @@ impl EtxState {
             let _ = self.root_cache.set(trie.clone());
             return Ok(trie);
         }
-        let mut trie = if let Some(base) = &self.base {
-            Trie::from_root(base.root)
-        } else {
-            Trie::default()
-        };
         let nodes: &dyn ReadNodes = if let Some(base) = &self.base {
             base.reader.as_ref()
         } else {
             &mpt::NoNodes
+        };
+        if let Some(previous) = &self.trie_base {
+            // The trie of an earlier root of this queue: every key outside the
+            // dirty sets and the two index keys already has its current value.
+            let mut trie = previous.as_ref().clone();
+            for index in self.dirty_slots.iter() {
+                let value = self
+                    .slots
+                    .get(index)
+                    .map(|entry| entry.envelope.as_slice())
+                    .unwrap_or_default();
+                trie.update(nodes, &magnitude(*index), value)
+                    .map_err(unavailable)?;
+            }
+            for key in self.dirty_auxiliary.iter() {
+                let value = self
+                    .auxiliary
+                    .get(key)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                trie.update(nodes, key, value).map_err(unavailable)?;
+            }
+            for (key, value) in [
+                (index_key(false), magnitude(self.oldest)),
+                (index_key(true), magnitude(self.newest)),
+            ] {
+                trie.update(nodes, &key, &value).map_err(unavailable)?;
+            }
+            let _ = self.root_cache.set(trie.clone());
+            return Ok(trie);
+        }
+        let mut trie = if let Some(base) = &self.base {
+            Trie::from_root(base.root)
+        } else {
+            Trie::default()
         };
         for (index, entry) in self.slots.iter() {
             trie.update(nodes, &magnitude(*index), &entry.envelope)

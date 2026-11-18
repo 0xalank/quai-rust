@@ -1,4 +1,5 @@
 //! Exact bounded consensus rule arithmetic. These projections are not block validity.
+use crate::bigdiv::Quotient as _;
 use crate::Error;
 use crypto_bigint::{Encoding, U256, U512};
 use quai_primitives::{
@@ -32,7 +33,7 @@ pub fn intrinsic(hash: Hash) -> Result<Uint, Error> {
             "zero hash has undefined reference entropy",
         ));
     }
-    let d = U512::ONE.shl_vartime(256).wrapping_div(&wide(n));
+    let d = U512::ONE.shl_vartime(256).quotient(&wide(n));
     if d == U512::ONE.shl_vartime(256) {
         return Ok(Uint::from_u64(256).shl_vartime(64));
     }
@@ -80,7 +81,7 @@ pub fn adjust_difficulty(
     let denominator = U512::from_u64(duration).wrapping_mul(&U512::from_u64(
         spec::DIFFICULTY_ADJUSTMENT_FACTOR * spec::DIFFICULTY_ADJUSTMENT_PERIOD,
     ));
-    let quotient = value.wrapping_div(&denominator);
+    let quotient = value.quotient(&denominator);
     let next = if change >= 0 {
         wide(parent).wrapping_add(&quotient)
     } else {
@@ -137,9 +138,7 @@ pub fn entropy(input: &EntropyInput) -> Result<Entropy, Error> {
         return Err(Error::Invalid("proof target"));
     }
     let intrinsic = intrinsic(input.hash)?;
-    let target = U512::ONE
-        .shl_vartime(256)
-        .wrapping_div(&wide(input.difficulty));
+    let target = U512::ONE.shl_vartime(256).quotient(&wide(input.difficulty));
     let threshold = intrinsic_of_target(target)?;
     let (prime_target, region_target) = entropy_targets(input.expansion);
     let prime_limit = mul(Uint::from_u64(prime_target), threshold)?.shr_vartime(1);
@@ -253,7 +252,7 @@ pub fn share_target(difficulty: Uint, shift: u16) -> Result<U512, Error> {
     }
     Ok(U512::ONE
         .shl_vartime(256)
-        .wrapping_div(&wide(difficulty))
+        .quotient(&wide(difficulty))
         .shl_vartime(shift as usize))
 }
 

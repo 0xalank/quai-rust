@@ -18,6 +18,7 @@ quai-rpc = { path = "../quai-rpc" }
 quai-network = { path = "../quai-network", features = ["native-transport"] }
 libp2p = { version = "=0.56.0", default-features = false, features = ["tokio", "tcp", "dns", "noise", "yamux", "request-response", "gossipsub", "identify", "kad", "macros", "ed25519", "relay", "dcutr", "autonat"] }
 crypto-bigint = { version = "=0.5.5", default-features = false }
+k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa", "schnorr", "std"] }
 prost = "=0.14.4"
 redb = "=4.5.0"
 serde = { version = "=1.0.229", features = ["derive"] }

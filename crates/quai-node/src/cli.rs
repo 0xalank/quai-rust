@@ -23,8 +23,16 @@ Replay options:
   --jobs <N>            Proof-of-work threads (default: available cores minus one)
   --progress <SECONDS>  Seconds between progress lines (default: 10)
   --state               Also execute zone blocks from genesis and compare the
-                        state, ETX, UTXO and receipt roots (state in memory)
+                        state, ETX, UTXO and receipt roots. The state lives
+                        in <datadir>/replay/<chain>/state/
+  --resume              Continue from the latest checkpoint, after checking it
+  --checkpoint-every <N>  Zone heights between checkpoints (default: 10000)
+  --commit-every <N>    Zone heights between state commits (default: 1000)
   --no-report           Do not write <datadir>/replay/last.json
+
+Checkpoints go to <datadir>/replay/<chain>/{state,headers}/ every
+--checkpoint-every heights and at the end. A run without --resume refuses a
+directory that already holds checkpoints.
 
 Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error.
 ";
@@ -43,6 +51,9 @@ pub struct ReplayArgs {
     pub progress: u64,
     pub report: bool,
     pub state: bool,
+    pub resume: bool,
+    pub checkpoint_every: u64,
+    pub commit_every: u64,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -72,6 +83,9 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     let mut progress = 10u64;
     let mut report = true;
     let mut state = false;
+    let mut resume = false;
+    let mut checkpoint_every = None;
+    let mut commit_every = None;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -81,7 +95,14 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         };
         let takes_value = matches!(
             flag.as_str(),
-            "--datadir" | "--log-level" | "--export" | "--to" | "--jobs" | "--progress"
+            "--datadir"
+                | "--log-level"
+                | "--export"
+                | "--to"
+                | "--jobs"
+                | "--progress"
+                | "--checkpoint-every"
+                | "--commit-every"
         );
         let value = if takes_value {
             match inline {
@@ -125,6 +146,18 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--no-report" => report = false,
             "--state" => state = true,
+            "--resume" => resume = true,
+            "--checkpoint-every" | "--commit-every" => {
+                let n: u64 = number(&flag, &value.unwrap())?;
+                if n == 0 {
+                    return Err(format!("{flag} must be at least 1"));
+                }
+                if flag == "--checkpoint-every" {
+                    checkpoint_every = Some(n);
+                } else {
+                    commit_every = Some(n);
+                }
+            }
             "-h" | "--help" => command = Some("help".into()),
             f if f.starts_with('-') => return Err(format!("unknown option {f}")),
             c => {
@@ -142,7 +175,14 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             .map(|h| PathBuf::from(h).join(".quai-node"))
             .ok_or("--datadir is required when HOME is not set")?,
     };
-    let replay_only = export.is_some() || to.is_some() || jobs.is_some() || !report || state;
+    let replay_only = export.is_some()
+        || to.is_some()
+        || jobs.is_some()
+        || !report
+        || state
+        || resume
+        || checkpoint_every.is_some()
+        || commit_every.is_some();
     let command = match command.as_deref() {
         None | Some("help") => Command::Help,
         Some("run") => Command::Run,
@@ -153,11 +193,14 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             progress,
             report,
             state,
+            resume,
+            checkpoint_every: checkpoint_every.unwrap_or(10_000),
+            commit_every: commit_every.unwrap_or(1_000),
         }),
         Some(c) => return Err(format!("unknown command {c:?}")),
     };
     if replay_only && !matches!(command, Command::Replay(_)) {
-        return Err("--export, --to, --jobs, --state and --no-report belong to replay".into());
+        return Err("--export, --to, --jobs, --state, --resume, --checkpoint-every, --commit-every and --no-report belong to replay".into());
     }
     Ok(Args {
         datadir,
@@ -192,6 +235,10 @@ pub fn main_with(args: &[String]) -> i32 {
                 jobs: r.jobs,
                 progress: Duration::from_secs(r.progress),
                 state: r.state,
+                datadir: Some(args.datadir.clone()),
+                resume: r.resume,
+                checkpoint_every: r.checkpoint_every,
+                commit_every: r.commit_every,
             };
             let summary = match replay::run(&opts, &log) {
                 Ok(s) => s,
@@ -261,7 +308,10 @@ mod tests {
                 jobs: 3,
                 progress: 10,
                 report: true,
-                state: false
+                state: false,
+                resume: false,
+                checkpoint_every: 10_000,
+                commit_every: 1_000,
             })
         );
         assert_eq!(parse(&args(&[])).unwrap().command, Command::Help);

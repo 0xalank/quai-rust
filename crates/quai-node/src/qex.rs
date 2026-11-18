@@ -343,18 +343,39 @@ pub struct ExportReader {
     records_in_segment: u64,
     next_height: u64,
     stop_after: Option<u64>,
+    skip_below: u64,
     on_segment: Option<SegmentHook>,
 }
 impl ExportReader {
     pub fn new(dir: &Path, manifest: Manifest, stop_after: Option<u64>) -> Self {
+        Self::starting_at(dir, manifest, 0, stop_after)
+    }
+    /// Start at zone height `start`. Segments that end below it are not
+    /// read; the segment that holds it is checked and read from its start.
+    pub fn starting_at(
+        dir: &Path,
+        manifest: Manifest,
+        start: u64,
+        stop_after: Option<u64>,
+    ) -> Self {
+        let segment = manifest
+            .segments
+            .iter()
+            .position(|s| s.last_zone >= start)
+            .unwrap_or(manifest.segments.len());
+        let next_height = manifest
+            .segments
+            .get(segment)
+            .map_or(manifest.last_zone + 1, |s| s.first_zone);
         Self {
             dir: dir.to_path_buf(),
             manifest,
-            segment: 0,
+            segment,
             reader: None,
             records_in_segment: 0,
-            next_height: 0,
+            next_height,
             stop_after,
+            skip_below: start,
             on_segment: None,
         }
     }
@@ -423,6 +444,14 @@ impl ExportReader {
     }
     /// Next zone height, or None at the end of the export or after `stop_after`.
     pub fn next_height(&mut self) -> Result<Option<Height>, ExportError> {
+        loop {
+            match self.read_height()? {
+                Some(h) if h.zone_height < self.skip_below => continue,
+                other => return Ok(other),
+            }
+        }
+    }
+    fn read_height(&mut self) -> Result<Option<Height>, ExportError> {
         if self.stop_after.is_some_and(|to| self.next_height > to) {
             return Ok(None);
         }

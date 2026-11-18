@@ -773,6 +773,114 @@ impl StateDatabase {
         self.check_file()?;
         write.commit().map_err(bad)
     }
+    /// Write a new database at `dest` that selects version `id` and keeps only
+    /// what that version needs: the version headers (small; later commits read
+    /// ancestors through their jump lists), the block index, this version's
+    /// metadata payload, and the trie nodes reachable from its roots and from
+    /// `extra_roots`. Extra roots are child tries whose roots the caller keeps
+    /// inside leaf values, such as account storage. Other versions keep their
+    /// headers in the copy but not their nodes, so the copy prunes them.
+    /// `dest` must not exist. The copy is durable when this returns.
+    pub fn copy_version(
+        &self,
+        id: Hash,
+        extra_roots: &[Hash],
+        dest: &Path,
+    ) -> io::Result<CopyStats> {
+        self.check_file()?;
+        match fs::symlink_metadata(dest) {
+            Ok(_) => return Err(bad("copy destination exists")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        let read = self.db.begin_read().map_err(bad)?;
+        let versions = read.open_table(VERSIONS).map_err(bad)?;
+        let version = table_version(&versions, self.profile, id)?;
+        let payloads = read.open_table(PAYLOADS).map_err(bad)?;
+        check_payload(&payloads, version.metadata_digest)?;
+        let blocks = read.open_table(BLOCKS).map_err(bad)?;
+        let source = read.open_table(NODES).map_err(bad)?;
+        let target = Database::builder().create(dest).map_err(bad)?;
+        let mut write = target.begin_write().map_err(bad)?;
+        write.set_durability(Durability::Immediate).map_err(bad)?;
+        let mut stats = CopyStats::default();
+        {
+            let mut meta = write.open_table(META).map_err(bad)?;
+            meta.insert(b"schema".as_slice(), SCHEMA).map_err(bad)?;
+            meta.insert(b"profile".as_slice(), self.profile.as_slice())
+                .map_err(bad)?;
+            meta.insert(b"head".as_slice(), id.as_slice())
+                .map_err(bad)?;
+            let mut out = write.open_table(VERSIONS).map_err(bad)?;
+            for entry in versions.iter().map_err(bad)? {
+                let (k, v) = entry.map_err(bad)?;
+                out.insert(k.value(), v.value()).map_err(bad)?;
+                stats.versions += 1;
+            }
+            let mut out = write.open_table(BLOCKS).map_err(bad)?;
+            for entry in blocks.iter().map_err(bad)? {
+                let (k, v) = entry.map_err(bad)?;
+                out.insert(k.value(), v.value()).map_err(bad)?;
+            }
+            let payload = payloads
+                .get(version.metadata_digest.as_slice())
+                .map_err(bad)?
+                .ok_or_else(|| bad("missing metadata payload"))?;
+            write
+                .open_table(PAYLOADS)
+                .map_err(bad)?
+                .insert(version.metadata_digest.as_slice(), payload.value())
+                .map_err(bad)?;
+            let nodes = std::cell::RefCell::new(write.open_table(NODES).map_err(bad)?);
+            let copier = Copier {
+                source: Nodes(&source),
+                target: &nodes,
+                nodes: std::cell::Cell::new(0),
+                bytes: std::cell::Cell::new(0),
+            };
+            for root in version.roots.values().chain(extra_roots) {
+                // Visiting every leaf loads every node of the trie once.
+                Trie::from_root(*root)
+                    .visit_leaves(&copier, usize::MAX, usize::MAX, &mut |_, _| Ok(()))
+                    .map_err(bad)?;
+            }
+            stats.nodes = copier.nodes.get();
+            stats.bytes = copier.bytes.get();
+        }
+        write.commit().map_err(bad)?;
+        Ok(stats)
+    }
+}
+/// What `StateDatabase::copy_version` wrote.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CopyStats {
+    pub versions: u64,
+    pub nodes: u64,
+    pub bytes: u64,
+}
+struct Copier<'r, 'txn, S> {
+    source: Nodes<'r, S>,
+    target: &'r std::cell::RefCell<Table<'txn, &'static [u8], &'static [u8]>>,
+    nodes: std::cell::Cell<u64>,
+    bytes: std::cell::Cell<u64>,
+}
+impl<S: ReadableTable<&'static [u8], &'static [u8]>> ReadNodes for Copier<'_, '_, S> {
+    fn get_node(&self, hash: &Hash) -> Result<Option<Vec<u8>>, mpt::Error> {
+        let raw = self
+            .source
+            .get_node(hash)?
+            .ok_or(mpt::Error::Missing(*hash))?;
+        let mut target = self
+            .target
+            .try_borrow_mut()
+            .map_err(|_| mpt::Error::Invalid("node copy reentry"))?;
+        // write_node checks the node hash before it writes.
+        if write_node(&mut target, *hash, &raw)? {
+            self.nodes.set(self.nodes.get() + 1);
+            self.bytes.set(self.bytes.get() + raw.len() as u64);
+        }
+        Ok(Some(raw))
+    }
 }
 impl Snapshot {
     /// Verified version headers are shared only inside this immutable read
@@ -1036,6 +1144,76 @@ mod tests {
         drop(fresh);
         drop(pinned);
         drop(db);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn copy_version_keeps_one_version_and_prunes_the_nodes_others_alone_reach() {
+        let dir = dir();
+        let db = StateDatabase::open(&dir.join("state.redb"), id(77)).unwrap();
+        let g = genesis(&db);
+        let mut child_root = [0; 32];
+        let first = db
+            .commit(Some(g), Some(g), id(1), b"first", true, |w| {
+                // A child trie referenced from a leaf value, like storage.
+                let mut child = Trie::default();
+                w.update_trie(&mut child, b"slot", b"one")?;
+                child_root = w.persist_trie(&child)?;
+                w.put(b"accounts", b"alice", &child_root)?;
+                w.put(b"accounts", b"bob", b"old")
+            })
+            .unwrap()
+            .version;
+        let second = db
+            .commit(
+                Some(first.id),
+                Some(first.id),
+                id(2),
+                b"second",
+                true,
+                |w| {
+                    w.put(b"accounts", b"bob", b"new")?;
+                    w.put(b"etx", b"queue", b"x")
+                },
+            )
+            .unwrap()
+            .version;
+        let dest = dir.join("copy.redb");
+        let stats = db.copy_version(second.id, &[child_root], &dest).unwrap();
+        assert!(stats.nodes >= 3 && stats.versions == 3);
+        assert!(db.copy_version(second.id, &[], &dest).is_err());
+        drop(db);
+        let copy = StateDatabase::open(&dest, id(77)).unwrap();
+        assert!(StateDatabase::open(&dir.join("copy.redb"), id(78)).is_err());
+        assert_eq!(copy.head().unwrap(), Some(second.id));
+        let s = copy.snapshot(None).unwrap();
+        assert_eq!(s.get(b"accounts", b"bob").unwrap(), Some(b"new".to_vec()));
+        assert_eq!(s.get(b"etx", b"queue").unwrap(), Some(b"x".to_vec()));
+        assert_eq!(
+            s.get_at(child_root, b"slot").unwrap(),
+            Some(b"one".to_vec())
+        );
+        assert_eq!(s.metadata().unwrap(), b"second");
+        // The first version keeps its header, but its own nodes are gone.
+        let old = copy.snapshot(Some(first.id)).unwrap();
+        assert!(old.get(b"accounts", b"bob").is_err());
+        drop((s, old));
+        // Commits continue on top of the copy: jumps read version headers.
+        let third = copy
+            .commit(
+                Some(second.id),
+                Some(second.id),
+                id(3),
+                b"third",
+                true,
+                |w| w.put(b"accounts", b"carol", b"c"),
+            )
+            .unwrap()
+            .version;
+        assert_eq!(third.height, 3);
+        let s = copy.snapshot(None).unwrap();
+        assert_eq!(s.get(b"accounts", b"bob").unwrap(), Some(b"new".to_vec()));
+        drop(s);
+        drop(copy);
         fs::remove_dir_all(dir).unwrap();
     }
     #[cfg(unix)]

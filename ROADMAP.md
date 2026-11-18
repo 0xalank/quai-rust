@@ -166,12 +166,27 @@ Gate: Quais.js and Pelagus work against the Rust node.
 2. [ ] Tx pool and `sendRawTransaction`.
 3. [ ] Fuzz every decoder. Remove `.unwrap()` from code that reads peer data
        (457 calls in non-test code on 2026-11-17).
+       Started (`5df7277`): deterministic fuzz-style tests on stable Rust for
+       the primitives, network, consensus and execution decoders (no panic,
+       bounded allocation, re-encoding fixed point; `QUAI_FUZZ_SCALE=N` for
+       longer runs). Found and fixed: frame reads that reserved the declared
+       length (up to 3 MiB) before data arrived, and a hierarchy-delta
+       reservation of about 2.2 MB from a few input bytes. Non-test
+       `.unwrap()`: 466 to 354 in the old crates (`quai-node` adds 57). Left:
+       about 150 unwraps of proto fields that `Header::decode` guarantees
+       (needs API changes), `evm/*`, `quai-rpc`. Open question: `Lockup::decode`
+       accepts a 58-byte record with a zero delegate that `encode` writes as
+       38 bytes; check Go's behaviour.
 
 ## Phase 4: speed
 
 Gate: mainnet replay is at least as fast as Go and uses less memory.
 
-1. [ ] libsecp256k1 (the `secp256k1` crate) for ECDSA sender recovery.
+1. [x] libsecp256k1 (the `secp256k1` crate) for ECDSA sender recovery
+       (`secp256k1 =0.33.1`, `crates/quai-primitives/src/recover.rs`,
+       `5df7277`). Equal to k256 on 165,445 raw cases and 30,000 mutated
+       transactions, and on every Go vector. Speed against Go is not measured
+       yet: the host load stayed between 20 and 160.
 2. [ ] Benchmark mainnet replay against Go: blocks per second, peak memory,
        disk growth.
 
@@ -207,3 +222,5 @@ Mining, block templates and Stratum come last.
 | 2026-11-17 | Phase 2.2 groundwork | Rust libp2p talks to go-quai mainnet peers, read-only (`9a25090`): `/quai/1.0.0` requests 57/57 local and 153/153 public, hashes equal to Go RPC; gossip decoded |
 | 2026-11-17 | Phase 1.3, 1.7, 2.1 | `quai-node replay` (`0e13a64`): mainnet zone 0–11,682 passes all stateless checks; all 11,682 executed zone blocks have every root equal to go-quai. Rerun independently by the coordinator: PASS, 751 s under load 20 |
 | 2026-11-17 | Phase 1.5 | Gas is the only EVM and tx-path bound, as in Go (`130b106`); +19 Go oracle vectors; 246/246 release tests in execution, primitives, consensus |
+| 2026-11-17 | Phase 1 | Regression on merged main: mainnet replay 0–11,682 with `--state` still passes, every root equal |
+| 2026-11-17 | Phase 3.3, 4.1 | libsecp256k1 sender recovery, decoder fuzz tests, 112 fewer unwraps (`5df7277`) |

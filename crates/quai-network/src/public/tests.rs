@@ -479,12 +479,13 @@ async fn public_node_relays_only_gossip_that_passes_go_validation() {
     let (topic, data) = sample("/0,0/blocks");
     subscribe_all(&s, &topic).await;
     // A mainnet block passes and goes on to the other peer. The first copy
-    // can wait for the KAWPOW cache, so send up to three.
+    // can wait for the KAWPOW cache, which takes about 30 s on a loaded host,
+    // so send up to three and give each copy 30 s.
     let mut forwarded = None;
     for _ in 0..3 {
         s.good.publish(topic.clone(), data.clone()).await.unwrap();
         if let Ok(Some(d)) =
-            tokio::time::timeout(Duration::from_secs(10), s.other_gossip.recv()).await
+            tokio::time::timeout(Duration::from_secs(30), s.other_gossip.recv()).await
         {
             forwarded = Some(d);
             break;

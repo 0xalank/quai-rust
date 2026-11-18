@@ -23,11 +23,16 @@ pub fn active(location: [u8; 2]) -> Vec<Address> {
     }
     out
 }
+/// go-quai `EVM.precompile` (core/vm/evm.go:55-68). An address that is not
+/// one of the zone's precompiles gets the zone prefix as its first byte and
+/// is looked up again, so `XX 00…00 0N` (N 1 to 9) is precompile N of this
+/// zone for every first byte XX, also another zone's prefix. `EVM.Call`,
+/// `CallCode`, `DelegateCall` and `StaticCall` then run it at the zone's form
+/// of the address. The checks before the lookup see the address as written:
+/// the access list, and the address scope of CALL's gas function
+/// (core/vm/gas_table.go:197), which fails for another zone first.
 pub fn translate(a: Address, loc: [u8; 2]) -> Option<(u8, Address)> {
-    if a[1..19].iter().any(|b| *b != 0)
-        || !(1..=9).contains(&a[19])
-        || a[0] != 0 && a[0] != (loc[0] << 4 | loc[1])
-    {
+    if a[1..19].iter().any(|b| *b != 0) || !(1..=9).contains(&a[19]) {
         return None;
     }
     let mut local = a;

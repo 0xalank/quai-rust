@@ -60,3 +60,13 @@ fn check_group(group: &str, cases: usize) {
 fn creation_access_list_matches_go() {
     check_group("creation", 98);
 }
+
+/// A transaction to `XX 00…00 0N` for six first bytes XX in three zones, with
+/// and without value, the other addresses of that form (zero address,
+/// lockup, 0x0b), CALL, CALLCODE, DELEGATECALL and STATICCALL on the forms,
+/// listed and not listed, and BALANCE, EXTCODESIZE, EXTCODECOPY and
+/// EXTCODEHASH of them.
+#[test]
+fn precompile_address_of_every_zone_matches_go() {
+    check_group("translation", 531);
+}

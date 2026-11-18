@@ -1,0 +1,40 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "08169ea5c922c7fba97d8016293eacbe12f814e13a11bfdaa7f266d805a61a36",
+  "driver_sha256": "1c44d595b87d5c2da624c54d7109a122739fd94928b88a67f6abb5d86cd6b10c",
+  "oracle_sources": {
+    "reference/rpc-calls/main.go": "cede706e34d4806935cbcb70e29f2cd5d649ba1c63c8a37301fcfa66e2f04584",
+    "reference/rpc-calls/core-export.go": "17b21dbe9d224ae03c14f3d7d0da6b5fdd5b92f52018ae7f6592c2c0b89829d4"
+  },
+  "go_sources": {
+    "internal/quaiapi/api.go": "c6f3b8d53ac0204f8ccd5ef849f23456c02c3dec4f480bae46d39f40268d5e3b",
+    "internal/quaiapi/quai_api.go": "033048c2e5d698224bd7a7d0b7bcc79dc802e0d9a8e79069fb7c9994d0d3d97c",
+    "internal/quaiapi/transaction_args.go": "12d1e238f569d707cbd64afc4f36ae0bf8b0aa9a45f1afb9c0f06c8ddf186454",
+    "internal/quaiapi/backend.go": "36b1acb0c9f9627faf9f919d7f682c90b686137a6baf2416c69910d6a0b76e11",
+    "core/state_transition.go": "80286ee1ae796f6ab8d0d9a874ecf369cf656adf4382dcb9d2bb54c7ab0fbdfc",
+    "core/evm.go": "157aada56069cfd339ae5044959cf2fec43607a028a71784f8bccc9516ebbdc0",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "core/state/statedb.go": "84bece787e5207237c612a7d2659a3692e4c6a1686f7e89343642444b5427f3e",
+    "core/state/access_list.go": "81f92871845093c75f6b465aa6f4e7a7fcee430913e0f88e890aa600c6348e72",
+    "core/vm/access_list_tracer.go": "60acf58687b3b915d8c2a67aedbfe8d70cfbc2c1210ff64ef158b3c75ba18f67",
+    "core/vm/interpreter.go": "ac397b3fbd53e6bed58a35a67cb3190b63ca311651c64e0e783c253327b36e8e",
+    "core/vm/evm.go": "77629a1e77b36ae14ba6c66e7146bdba45b1e96603fd28984f38cd03bf886e54",
+    "core/vm/instructions.go": "a1079bec5ba3e1896de866ffa25e695f0852ae9f78f1d703a62e6a736a4e0b09",
+    "core/vm/operations_acl.go": "3e7ca23b011b7faebf7e5ec3c034517d717fe47e758269e02486263904df862a",
+    "core/vm/errors.go": "d0c95f8ce62ace0c35f382784b532af256a308607d889c176761a6d8a72173c9",
+    "core/vm/opcodes.go": "90b9ecb367499bf2f154d24e11662bd36ebd346eda490d3548b5f8dd67e698a6",
+    "core/vm/contracts.go": "4854f9498dda1d7c8368874b82383fc7e6cd138e78520f8e268c2310519fd1ea",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "rpc/server.go": "2c172af24180ac34f97d4ec9fad277b690b8e4e7f23457b9b12847a2482ef48c",
+    "rpc/handler.go": "de80c856ea23bce4b3187144400d441f8c0e755bb8b929750392a40ea769c88a",
+    "rpc/http.go": "c52c1ab14f9a2e22e6964dafa3753a7812a269c27cd857f9d467f1c13ce32c32",
+    "common/address.go": "5b1a3ab95391b2e6d50ef7bfcc3eba3f9eb2419ac125ee67e6d75c24c886965e",
+    "common/internal_address.go": "ad97528f81ea189fd68541376e307884848e425f99f88ac9d79cdcccc384753d",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "Production quaiapi handlers (DoCall, DoEstimateGas, AccessList, CreateAccessList, GasPrice) and rpc.Server over controlled committed state and headers; block context from core.NewEVMBlockContext, base fee from HeaderChain.CalcBaseFee. Access lists sorted and message pointers masked for determinism. No network, keys or proof-of-work."
+}

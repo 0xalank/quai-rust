@@ -557,8 +557,11 @@ fn g1_error(b: &[u8]) -> Option<String> {
         .err()
         .map(|_| "bn256: malformed point".into())
 }
-/// `G2.Unmarshal` of 128 bytes. Go checks only that the point is on the
-/// curve; a point outside the subgroup passes there.
+/// `G2.Unmarshal` of 128 bytes (github.com/dominant-strategies/bn256
+/// bn256.go:265-308). Its `twistPoint.IsOnCurve` (twist.go:47-63) checks the
+/// twist equation and then that the point times the group order is the
+/// point at infinity, so a twist point outside the order-r subgroup is a
+/// "malformed point" too, as in substrate-bn.
 fn g2_error(b: &[u8]) -> Option<String> {
     let mut c = vec![];
     for i in 0..4 {
@@ -572,14 +575,13 @@ fn g2_error(b: &[u8]) -> Option<String> {
     }
     let x = substrate_bn::Fq2::new(c[1], c[0]);
     let y = substrate_bn::Fq2::new(c[3], c[2]);
-    match substrate_bn::AffineG2::new(x, y) {
-        Err(substrate_bn::GroupError::NotOnCurve) => Some("bn256: malformed point".into()),
-        _ => None,
-    }
+    substrate_bn::AffineG2::new(x, y)
+        .err()
+        .map(|_| "bn256: malformed point".into())
 }
 /// The error of a precompile run (core/vm/contracts.go) on `input`, for a
 /// top-level call that failed in Rust. None where Go would not fail.
-fn precompile_error(id: u8, input: &[u8]) -> Option<String> {
+pub fn precompile_error(id: u8, input: &[u8]) -> Option<String> {
     let padded = |n: usize| {
         let mut b = input.to_vec();
         b.resize(b.len().max(n), 0);

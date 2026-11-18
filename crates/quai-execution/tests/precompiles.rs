@@ -5,6 +5,8 @@
 #[allow(dead_code)]
 #[path = "../examples/check-settlement.rs"]
 mod settlement;
+use quai_execution::evm::{message, precompile, Fault};
+use quai_primitives::{decode_hex, encode_hex};
 use serde_json::Value;
 
 fn corpus() -> Value {
@@ -95,4 +97,93 @@ fn external_address_errors_reach_the_caller_as_in_go() {
 #[test]
 fn lockup_contract_address_errors_match_go() {
     check_group("lockup", 88);
+}
+
+/// `vm.RunPrecompiledContract` on the runs of the precompiles `ids`: required
+/// gas, output and gas left, out of gas versus a precompile error, and the
+/// error text that the RPC reports for a failed top-level call.
+fn check_runs(ids: &[u8]) -> usize {
+    let corpus = corpus();
+    let mut failures = vec![];
+    let mut checked = 0;
+    for r in corpus["runs"].as_array().unwrap() {
+        let n = r["precompile"].as_u64().unwrap() as u8;
+        if !ids.contains(&n) {
+            continue;
+        }
+        checked += 1;
+        let id = r["id"].as_str().unwrap();
+        let input = decode_hex(r["input"].as_str().unwrap()).unwrap();
+        let required = precompile::required_gas(n, &input);
+        if required != r["required_gas"].as_u64().unwrap() {
+            failures.push(format!(
+                "{id} required gas {required} go {}",
+                r["required_gas"]
+            ));
+        }
+        let got = precompile::run(n, &input, r["gas"].as_u64().unwrap()).unwrap();
+        match (&got, r["error"].as_str()) {
+            (Ok((output, left)), None) => {
+                if encode_hex(output) != r["output"].as_str().unwrap()
+                    || *left != r["gas_left"].as_u64().unwrap()
+                {
+                    failures.push(format!(
+                        "{id} output {} left {left} go {} {}",
+                        encode_hex(output),
+                        r["output"],
+                        r["gas_left"]
+                    ));
+                }
+            }
+            (Err(Fault::OutOfGas), Some(_)) if r["out_of_gas"] == true => {}
+            (Err(Fault::Precompile), Some(text)) if r["out_of_gas"] == false => {
+                let rpc = message::precompile_error(n, &input);
+                if rpc.as_deref() != Some(text) {
+                    failures.push(format!("{id} RPC error {rpc:?} go {text}"));
+                }
+            }
+            (got, go) => failures.push(format!("{id} rust {got:?} go {go:?}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {checked} runs differ:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    println!("PRECOMPILE_RUNS ids={ids:?} cases={checked}");
+    checked
+}
+
+/// bn256 pairing (0x08): G2 points on the twist curve outside the order-r
+/// subgroup, at infinity, off the curve, with coordinates at and above the
+/// field modulus and with swapped halves; G1 edge points; empty input,
+/// lengths that are not a multiple of 192 and gas edges.
+#[test]
+fn bn256_pairing_inputs_match_go() {
+    assert_eq!(check_runs(&[8]), 86);
+}
+
+/// The pairing inputs named `outside-N` hold points on the twist curve
+/// y² = x³ + 3/(9+i) that are not in the order-r subgroup: substrate-bn
+/// rejects them for the subgroup, not for the curve equation, and Go
+/// rejects them as "bn256: malformed point".
+#[test]
+fn outside_points_are_on_the_twist_but_not_in_the_subgroup() {
+    use substrate_bn::{AffineG2, Fq, Fq2, GroupError};
+    let corpus = corpus();
+    let mut checked = 0;
+    for r in corpus["runs"].as_array().unwrap() {
+        let id = r["id"].as_str().unwrap();
+        if !id.starts_with("pairing-g-outside-") {
+            continue;
+        }
+        let input = decode_hex(r["input"].as_str().unwrap()).unwrap();
+        let q = |o: usize| Fq::from_slice(&input[64 + o..96 + o]).unwrap();
+        let point = AffineG2::new(Fq2::new(q(32), q(0)), Fq2::new(q(96), q(64)));
+        assert!(matches!(point, Err(GroupError::NotInSubgroup)), "{id}");
+        assert_eq!(r["error"], "bn256: malformed point", "{id}");
+        checked += 1;
+    }
+    assert_eq!(checked, 4);
 }

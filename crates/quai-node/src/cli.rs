@@ -59,6 +59,18 @@ RPC options:
                         instead of the block store
   --listen <ADDR>       Listen address (default: 127.0.0.1:8547)
 
+Transaction pool options (rpc, and run with state):
+  --no-txpool           No transaction pool: quai_sendRawTransaction and
+                        txpool_* refuse, the pending nonce is the head's
+  --txpool-sharing-clients <URLS>
+                        Comma-separated http:// endpoints that receive each
+                        submitted transaction (go-quai's
+                        --txpool.sharing-clients; default: none)
+  --txpool-sync-tx-with-return <BOOL>
+                        With sharing clients: forward to the first one,
+                        return its answer and skip the local pool (go-quai's
+                        default true); false: add locally, then forward
+
 Run options:
   --stateless           Every check except execution (no state); follows the
                         head while a replay with state is still behind
@@ -97,7 +109,8 @@ checkpoint (a second signal stops at once).
 
 Configuration file keys: datadir, network, log_level, rpc.listen,
 metrics.listen, sync.stateless, sync.jobs, sync.margin, sync.max_peers,
-sync.public, sync.peers, sync.checkpoint_every, sync.commit_every.
+sync.public, sync.peers, sync.checkpoint_every, sync.commit_every,
+txpool.enabled, txpool.sharing_clients, txpool.sync_tx_with_return.
 
 Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error,
 130 or 143 stopped by SIGINT or SIGTERM.
@@ -116,6 +129,23 @@ pub enum Command {
 pub struct RpcArgs {
     pub export: Option<PathBuf>,
     pub listen: String,
+    pub txpool: TxpoolOptions,
+}
+/// The transaction pool's options.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TxpoolOptions {
+    pub enabled: bool,
+    pub sharing_clients: Vec<String>,
+    pub sync_tx_with_return: bool,
+}
+impl Default for TxpoolOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            sharing_clients: vec![],
+            sync_tx_with_return: true,
+        }
+    }
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReplayArgs {
@@ -182,6 +212,9 @@ struct Flags {
     margin: Option<u64>,
     max_peers: Option<usize>,
     pow_dag: Option<DagMode>,
+    no_txpool: bool,
+    sharing_clients: Option<Vec<String>>,
+    sync_tx_with_return: Option<bool>,
 }
 const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report", "--pow-dag"];
 const RUN_ONLY: &[&str] = &[
@@ -235,6 +268,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--max-peers"
                 | "--seconds"
                 | "--pow-dag"
+                | "--txpool-sharing-clients"
+                | "--txpool-sync-tx-with-return"
         );
         let value = if takes_value {
             match inline {
@@ -304,6 +339,22 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--no-gossip" => f.no_gossip = true,
             "--seconds" => f.seconds = Some(number("--seconds", &v)?),
             "--pow-dag" => f.pow_dag = Some(v.parse().map_err(|e| format!("--pow-dag: {e}"))?),
+            "--no-txpool" => f.no_txpool = true,
+            "--txpool-sharing-clients" => {
+                f.sharing_clients = Some(
+                    v.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect(),
+                )
+            }
+            "--txpool-sync-tx-with-return" => {
+                f.sync_tx_with_return = Some(match v.as_str() {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err(format!("{flag}: true or false, not {v:?}")),
+                })
+            }
             "--checkpoint-every" | "--commit-every" => {
                 let n: u64 = number(&flag, &v)?;
                 if n == 0 {
@@ -362,6 +413,28 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     belongs(SYNC, &["replay", "run"])?;
     belongs(&["--listen"], &["rpc"])?;
     belongs(&["--seconds"], &["observe"])?;
+    belongs(
+        &[
+            "--no-txpool",
+            "--txpool-sharing-clients",
+            "--txpool-sync-tx-with-return",
+        ],
+        &["rpc", "run"],
+    )?;
+    let txpool = TxpoolOptions {
+        enabled: !f.no_txpool && config.flag("txpool.enabled")?.unwrap_or(true),
+        sharing_clients: match f.sharing_clients.take() {
+            Some(c) => c,
+            None => config.list("txpool.sharing_clients")?.unwrap_or_default(),
+        },
+        sync_tx_with_return: match f.sync_tx_with_return {
+            Some(b) => b,
+            None => config.flag("txpool.sync_tx_with_return")?.unwrap_or(true),
+        },
+    };
+    for url in &txpool.sharing_clients {
+        crate::txpool::sharing::Client::new(url)?;
+    }
     let command = match command_name.as_str() {
         "help" => Command::Help,
         "observe" => Command::Observe(f.seconds.unwrap_or(1800)),
@@ -384,6 +457,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 .listen
                 .or(config.text("rpc.listen")?.and_then(off))
                 .unwrap_or_else(|| "127.0.0.1:8547".into()),
+            txpool: txpool.clone(),
         }),
         "run" => {
             let jobs = match f.jobs {
@@ -430,6 +504,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     None => config.number("sync.commit_every")?.unwrap_or(1_000),
                 },
                 gossip: !f.no_gossip,
+                txpool: txpool.clone(),
             })
         }
         c => return Err(format!("unknown command {c:?}")),
@@ -455,6 +530,115 @@ fn replay_signals(log: Log) -> Option<Signals> {
     let stop = Arc::new(AtomicBool::new(false));
     let code = crate::node::install_signals(&runtime, stop.clone(), log);
     Some((runtime, stop, code))
+}
+
+/// The pool's configuration from the options; the journal of local
+/// transactions lives in `<datadir>/txpool/`.
+pub fn pool_config(o: &TxpoolOptions, datadir: &std::path::Path) -> crate::txpool::Config {
+    crate::txpool::Config {
+        sharing_clients: o.sharing_clients.clone(),
+        sync_tx_with_return: o.sync_tx_with_return,
+        journal: Some(datadir.join("txpool").join("transactions.journal")),
+        ..crate::txpool::Config::default()
+    }
+}
+/// The native RPC config of `rpc` and `run`: go-quai's 5 MiB request
+/// limit (`maxRequestContentLength`), so that every transaction go-quai
+/// takes fits.
+pub fn rpc_config(listen: String) -> quai_rpc::Config {
+    quai_rpc::Config {
+        mode: "native".into(),
+        listen,
+        timeout_ms: 30_000,
+        max_body_bytes: 5 * 1024 * 1024,
+        ..quai_rpc::Config::default()
+    }
+}
+/// Start a transaction pool over `view` (which must keep state) and answer
+/// the pool methods from it.
+pub fn start_pool(
+    view: &mut crate::rpc_view::ExportView,
+    o: &TxpoolOptions,
+    datadir: &std::path::Path,
+    runtime: &tokio::runtime::Handle,
+    stop: Arc<AtomicBool>,
+    log: Log,
+) -> Result<Option<Arc<crate::txpool::service::Service>>, String> {
+    use quai_rpc::view::ChainView;
+    if !o.enabled {
+        log.info("txpool: off");
+        return Ok(None);
+    }
+    if view.head_utxo_set_size().is_none() {
+        log.info("txpool: off (the view has no state)");
+        return Ok(None);
+    }
+    let chain = Arc::new(crate::rpc_view::ViewChain::new(view.share())?);
+    let config = pool_config(o, datadir);
+    let frequency = Duration::from_nanos(config.reorg_frequency);
+    let svc = Arc::new(crate::txpool::service::Service::new(
+        config,
+        chain,
+        crate::txpool::service::monotonic(),
+        Some(runtime.clone()),
+        Some(log),
+    )?);
+    svc.start(runtime, view.head_events(), stop, frequency);
+    view.set_pool(svc.clone());
+    log.info(&format!(
+        "txpool: on at zone {}, {} sharing clients{}",
+        view.head(),
+        o.sharing_clients.len(),
+        if o.sharing_clients.is_empty() {
+            String::new()
+        } else {
+            format!(", sync with return {}", o.sync_tx_with_return)
+        }
+    ));
+    Ok(Some(svc))
+}
+/// `quai-node rpc`: serve `view` (and its transaction pool) until SIGINT.
+fn serve_rpc(
+    mut view: crate::rpc_view::ExportView,
+    r: RpcArgs,
+    datadir: &std::path::Path,
+    log: Log,
+) -> Result<(), String> {
+    let config = rpc_config(r.listen);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(config.workers)
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    let stop = Arc::new(AtomicBool::new(false));
+    start_pool(
+        &mut view,
+        &r.txpool,
+        datadir,
+        runtime.handle(),
+        stop.clone(),
+        log,
+    )?;
+    let mode = config.mode.clone();
+    let listen = config.listen.clone();
+    let app = quai_rpc::App::native(config, Arc::new(view))?;
+    let result = runtime.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(&listen)
+            .await
+            .map_err(|e| format!("listen {listen}: {e}"))?;
+        let address = listener.local_addr().map_err(|e| e.to_string())?;
+        println!(
+            "{}",
+            serde_json::json!({"ready":true,"address":address.to_string(),"mode":mode,"version":quai_rpc::VERSION})
+        );
+        quai_rpc::serve_until(app, listener, async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await
+    });
+    stop.store(true, Ordering::Relaxed);
+    runtime.shutdown_timeout(Duration::from_secs(2));
+    result
 }
 
 /// Runs the command line and returns the process exit status.
@@ -499,13 +683,7 @@ pub fn main_with(args: &[String]) -> i32 {
                     return 2;
                 }
             };
-            let config = quai_rpc::Config {
-                mode: "native".into(),
-                listen: r.listen,
-                timeout_ms: 30_000,
-                ..quai_rpc::Config::default()
-            };
-            match quai_rpc::App::native(config, Arc::new(view)).and_then(quai_rpc::serve_blocking) {
+            match serve_rpc(view, r, &args.datadir, log) {
                 Ok(()) => 0,
                 Err(e) => {
                     log.error(&format!("rpc: {e}"));
@@ -636,6 +814,7 @@ mod tests {
             Command::Rpc(RpcArgs {
                 export: Some("/x".into()),
                 listen: "127.0.0.1:8547".into(),
+                txpool: TxpoolOptions::default(),
             })
         );
         assert_eq!(
@@ -645,6 +824,7 @@ mod tests {
             Command::Rpc(RpcArgs {
                 export: Some("/x".into()),
                 listen: "0.0.0.0:1".into(),
+                txpool: TxpoolOptions::default(),
             })
         );
         assert_eq!(
@@ -652,8 +832,35 @@ mod tests {
             Command::Rpc(RpcArgs {
                 export: None,
                 listen: "127.0.0.1:8547".into(),
+                txpool: TxpoolOptions::default(),
             })
         );
+        // Pool options: flags, then the file; only http:// sharing clients.
+        let Command::Rpc(r) = parse(&args(&[
+            "rpc",
+            "--txpool-sharing-clients",
+            "http://127.0.0.1:9,http://10.0.0.1:8",
+            "--txpool-sync-tx-with-return=false",
+        ]))
+        .unwrap()
+        .command
+        else {
+            panic!("not rpc")
+        };
+        assert_eq!(
+            r.txpool,
+            TxpoolOptions {
+                enabled: true,
+                sharing_clients: vec!["http://127.0.0.1:9".into(), "http://10.0.0.1:8".into()],
+                sync_tx_with_return: false,
+            }
+        );
+        assert!(parse(&args(&["rpc", "--txpool-sharing-clients", "ws://a:1"])).is_err());
+        assert!(parse(&args(&["replay", "--export", "/x", "--no-txpool"])).is_err());
+        let Command::Rpc(r) = parse(&args(&["rpc", "--no-txpool"])).unwrap().command else {
+            panic!("not rpc")
+        };
+        assert!(!r.txpool.enabled);
         assert!(parse(&args(&["rpc", "--store"])).is_err());
         assert!(parse(&args(&["rpc", "--export", "/x", "--state"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--listen", "a"])).is_err());

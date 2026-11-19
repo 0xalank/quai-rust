@@ -46,7 +46,7 @@ by the coordinator.
 | G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; reorg rollback tested on the private fixture |
 | G6–G7 | P2P and sync | Mainnet sync by height from public peers; gossip head choice live without validation |
 | G8 | Mainnet shadow sync | Not started |
-| G9 | Live RPC, tx pool, wallets | Snapshot reads only |
+| G9 | Live RPC, tx pool, wallets | Reads on replayed state; tx pool equal to Go (363/363 oracle steps); filters, subscriptions and Qi wallet estimates missing |
 | G10–G11 | Production tests, mining | Not started |
 
 `NETWORK_READINESS.md` keeps the detailed gate definitions.
@@ -424,11 +424,82 @@ Gate: Quais.js and Pelagus work against the Rust node.
        apply transaction" (Rust prints 0xc000000000).
        Left: filters (`newFilter`, `getFilterChanges` and the others) and
        WebSocket subscriptions need the live head (Phase 2.3);
-       `sendRawTransaction` and the pending nonce need step 2. Not served:
+       `sendRawTransaction` and the pending nonce: done in step 2. Not served:
        Qi and conversion estimates, `quai_getLockedBalance`,
        `quai_getProof`, the `eth_` namespace. A peer export has no
        receipts: receipts are `null` and logs an error.
-2. [ ] Tx pool and `sendRawTransaction`.
+2. [x] Tx pool and `sendRawTransaction` (`txpool` branch: `1be8b61`,
+       `da7fc2a`, `6e32bff`, `65effe2`, `f83d499`, `d6e1b0d`, `0f9ddd5` and
+       the commit of this text). `crates/quai-node/src/txpool` ports go-quai
+       v0.57.0's pool (core/tx_pool.go, core/tx_list.go) step for step:
+       validateTx and add with Go's error texts; pending and queued lists per
+       account; the 5% price bump; AccountSlots, GlobalSlots, AccountQueue and
+       GlobalQueue (truncatePending, truncateQueue); eviction of the cheapest
+       remotes when the pool is full (container/heap's order and tie rule);
+       lifetime eviction; the Qi pool (an LRU of 10,024 entries, no in-pool
+       double-spend check, as in Go), Qi expiry, the pool limiter; the reset
+       on a new head (included Quai transactions leave by nonce, the child
+       block's Qi transactions are removed) and, after a reorg of at most 64
+       blocks, reinjection of the dropped branch (Qi ones with a cached fee
+       without validation); the journal of local transactions.
+       ValidateQiTxInputs and ValidateQiTxOutputsAndSignature with Go's texts.
+       Decoding follows protobuf-go's wire rules and ProtoDecode's errors; the
+       hash covers ProtoEncode; the sender is the one `tx.Hash()` caches;
+       `tx.Size()` gives the 128 KB limit and slots. The node runs a pool in
+       `rpc` and in `run` with state (reset on every published head; workshare
+       transactions from gossip join through go-quai's 2-second remote queue).
+       RPC: `quai_sendRawTransaction`, `quai_receiveTxFromPoolSharingClient`,
+       the "pending" nonce, pool transactions in `quai_getTransactionByHash`,
+       `txpool_content`, `txpool_contentFrom`, `txpool_status`,
+       `txpool_inspect` (38 native methods). Sharing clients
+       (`--txpool-sharing-clients`, http:// only, default none;
+       `--txpool-sync-tx-with-return`, default true as in Go) get go-quai's
+       request byte for byte, with its ids, 2-second timeout and error texts.
+       Go oracle (`reference/txpool`, `scripts/gen_txpool_vectors.py`,
+       `fixtures/protocol/txpool.json`): the production TxPool and quaiapi
+       handlers behind rpc.Server over a test chain (state per head, the UTXO
+       set in the database, blocks with transactions), runs at explicit steps
+       instead of the 1-second ticker, local httptest sharing clients; 26
+       scenarios, 363 steps; three runs byte-identical. Rust
+       (`crates/quai-node/tests/txpool.rs`): 363/363 steps equal (answers and
+       error texts, sizes, gossip errors, sharing requests, and after every
+       step the pending and queued lists in order, the Qi LRU order, locals,
+       counts, slots, heartbeats and pending nonces). In the node
+       (`tests/tip.rs`, `tests/txpool_node.rs`): the pool on the live view
+       follows go-quai's reorg of the private fixture (the reset walks back
+       through the dropped branch, which the store no longer holds), and
+       answers from a mainnet checkpoint's state. Live
+       (`scripts/check_txpool_live.py`; `quai-node rpc` on the Go export
+       replayed to zone 27,406, loopback only, no sharing clients, keys that
+       never held funds; go-quai's pool over the same head fields and
+       accounts): 26/26 answers equal: 18 submissions (balance, base fee
+       4,180,298,550, fee cap, size, sender scope, signature, decoding, ETX,
+       Qi inputs, outputs and data) and 8 reads (pending nonces, a pool
+       transaction by hash, `txpool_*`). The head's gas limit is 0, so both
+       pools use go-quai's 12,000,000. Remaining differences from Go: where
+       Go's result depends on its random map order (equal pending counts in
+       truncatePending, equal heartbeats in truncateQueue, equal gas prices in
+       the price heaps after a re-heap, the account order of the pool
+       limiter's last step), Rust breaks the tie by address or insertion
+       order; sharing clients are http:// only (Go also dials ws://), and for
+       an answer body that is not JSON only Go's first-character messages are
+       reproduced; protobuf-go's errors start "proto:" with a regular or a
+       non-breaking space chosen per binary, Rust uses the regular space; the
+       journal is length-prefixed protobuf (Go: an RLP stream); the block
+       store keeps the canonical chain only, so after a reorg the pool walks
+       back through the blocks it remembered: each head it sees with its
+       ancestors (1,024 blocks). A dropped block it never read (the store
+       dropped it before the pool saw its head) stops the reset as Go's stops
+       for an unrooted chain, and the next head resets the state (Go reads
+       such blocks from its database); `txpool_getRollingFeeInfo` (the
+       processor's fee window) is not served. Left for the Phase 3 gate
+       (wallets): a submitted transaction reaches miners only through sharing
+       clients (go-quai v0.57.0 has no transaction gossip, and the node
+       publishes no workshares); filters and WebSocket subscriptions (step 1);
+       the Qi and conversion methods Quais.js calls (`quai_estimateFeeForQi`,
+       `quai_calculateConversionAmount`, `quai_qiToQuai`, `quai_quaiToQi`,
+       `quai_getOutpointDeltasForAddressesInRange`, `quai_getLockedBalance`)
+       and `quai_listRunningChains`, `quai_getPendingHeader`.
 3. [ ] Fuzz every decoder. Remove `.unwrap()` from code that reads peer data
        (457 calls in non-test code on 2026-11-17).
        Started (`5df7277`): deterministic fuzz-style tests on stable Rust for
@@ -514,6 +585,61 @@ Mining, block templates and Stratum come last.
   `WoCustomPowHash` of a nil AuxPow: blake3 of no bytes. Every such header
   has the same hash. Rust copies this (`ce6f8e9`) so that hashes stay equal.
 
+- The transaction pool (core/tx_pool.go), found by the pool oracle
+  (`reference/txpool`):
+  - `addQiTxs` (line 1260) has no in-pool double-spend check: two Qi
+    transactions that spend one UTXO are both accepted and stay until a
+    block includes one or they expire.
+  - `SendTxToSharingClients` (line 1606): with sharing clients and
+    `--txpool.sync-tx-with-return` (default true) a transaction goes to the
+    first client without local validation, the client's answer is the RPC
+    answer, and the local pool never sees it.
+  - `tx.Hash()` (core/types/transaction.go:725) recovers and caches the
+    sender with the transaction's own chain ID, so `addTxs` and
+    `validateTx` use that sender; a valid signature for another chain ID
+    fails only after every validateTx check ("invalid chain id for
+    signer").
+  - `poolLimiterGoroutine` (line 2489) caps each queued account at
+    `len - AccountQueue` transactions: an account with no more than
+    AccountQueue queued transactions loses all of them.
+  - `qiTxExpirationGoroutine` (line 2557) looks at the oldest entry
+    Len/5 times every 10 minutes: with fewer than 5 Qi transactions none
+    expires, and a pass removes at most a fifth of the pool.
+  - `addQiTxs` checks outputs against `common.NewChainsAdded(expansion)`
+    (line 1271), the chains the latest expansion added: at expansion 0
+    the 128 locations {i, 0}, so an output to zone 0 of any region passes
+    (ETX eligibility refuses it later) and an output to zone 1 or above is
+    "emitted to an inactive chain".
+  - `reset` (line 1920) removes the Qi transactions of the new head only
+    when its parent is the old head; after a jump of several blocks or a
+    reorg, Qi transactions that the new blocks include stay in the pool.
+    When the new head is missing from the database, `reset` (line 2013)
+    dereferences a nil block inside `runReorg` while holding the pool lock.
+  - Pending-transaction filters and subscriptions
+    (`quai_newPendingTransactionFilter`, `newPendingTransactions`) never
+    receive anything: quai/filters/filter_system.go:111 reads `txsCh`, and
+    nothing in v0.57.0 sends to it.
+  - protobuf-go (v1.36.6, internal/detrand) starts its errors with
+    "proto:" and a regular or a non-breaking space, chosen per binary:
+    `quai_sendRawTransaction`'s decode error text differs between go-quai
+    builds.
+
+## Findings in macOS libmalloc
+
+- macOS 26.1-26.3 (libmalloc 792.41.1, 792.60.6, 792.80.2),
+  `src/xzone_malloc/xzone_malloc.c`
+  `_xzm_xzone_freelist_chunk_block_is_free_slow`: `free()` of a tiny block
+  whose first word equals its free cookie (zone cookie ^ address) confirms
+  with a freelist walk, and the walk compares the block's byte offset with
+  16-byte granule offsets. A live block at index 2 or later of its chunk
+  then counts as free, and `free()` aborts with "pointer being freed was not
+  allocated". macOS 26.4 (libmalloc 812.100.31) compares granules. A value
+  with padding in its first 8 bytes that is copied into a fresh block can
+  carry the `cookie ^ address` that malloc has just computed for that block:
+  `mpt::Link` did (fixed with `repr(u64)`). `MallocSecureAllocatorNano=0`
+  selects the pre-xzone allocator, which has no such check.
+  `scripts/stress_tests.sh --probe` counts such blocks.
+
 ## Execution log
 
 | Date | Step | Result |
@@ -546,3 +672,8 @@ Mining, block templates and Stratum come last.
 | 2026-11-18 | Phase 2.1, 2.3 | Node shell (`5011fca`, `e642a08`, `39e4862`, `43e035d`): one chain processor with a block source trait; block store with RPC view (zone 0-8 fixture 253/253 from the store; Go export 0-27,406 with `--state --store` PASS, its store's RPC 617/625 equal + 8 documented, 1,320/1,320 live sample); `quai-node run` from public peers (stateless from checkpoint 720,000: 6.7-8.4 blocks/s, 0 failures, stop and resume, following the peers' head); config file, metrics, signals; go-quai head choice (fixture 24/24) and reorgs with state rollback (fixture branches); live gossip observer (31 min: 433 blocks, 4,032 workshares, 47 reorgs of depth 1-3, 3-deep agreement with peers 28/28). Go export replay 0-27,406 with `--state` PASS from genesis (4,123 s) and resumed from checkpoint 20,000 (1,141 s). 417/417 workspace tests in 70 suites, 45/45 `quai-network --features native-transport`, fmt clean, clippy without errors. Merge `cbaf870`; coordinator rerun on merged main: 423/423 workspace in 71 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1.4 | Execution findings of the RPC call work (`db104b7`, `d513c90`, `31e4a98`, `8a83279`, `4f9e5f7`, `5455800`): a creation (also an ETX creation) gets the precompiles in its access list; another zone's `0x…0N` is the zone's precompile; CALL and CALLCODE check the value before the lockup branch and the address scope; `ErrExternalAddress` climbs CALL-family frames as in Go; bn256 G2 subgroup and the other precompiles: no difference (RPC text of a G2 point outside the subgroup fixed). New Go oracle `reference/precompiles`: 915 transactions through `applyTransaction` (failed on the parent commits: 86/98, 179/531, 4/18, 57/268) and 668 precompile runs; incoming oracle +9 ETX creations (9/9 failed before). 375/375 tests in 70 suites (44.6 min), with the 12-line `quai-node/tests/rpc_calls.rs` change from `results/exec-findings/quai-node-rpc-calls.patch` applied for the run (rpc-calls 404/404); fmt clean; clippy (quai-execution) without errors. Replay 0-27,406 with `--state` from genesis in a fresh datadir PASS (2,770 s, binary `5455800`). Merge `6e6ce8f`; coordinator rerun on merged main: 431/431 workspace in 72 suites, 45/45 `quai-network --features native-transport`, fmt clean |
 | 2026-11-18 | Phase 1 | Rolling replay with `c466449`: PASS to zone 1,450,000, every root equal (passes of 100,000 heights, 11–18 blocks/s under load 100–150). Both runs switch to `6e6ce8f` (sha256 `db7810cb…`), which has the node-shell processor and the execution fixes: the rolling replay resumes from its next checkpoint, and a new single-binary run from genesis (`replay-genesis-6e6ce8f`) replaces the `c466449` one, stopped at zone 124,000 |
+| 2026-11-18 | Phase 3.2 | Transaction pool (`1be8b61`, `da7fc2a`, `6e32bff`, `65effe2`, `f83d499`, `d6e1b0d`, `0f9ddd5`, and the commit of this row): go-quai v0.57.0's TxPool and Qi pool ported step for step; `quai_sendRawTransaction`, `quai_receiveTxFromPoolSharingClient`, the pending nonce, pool transactions by hash, `txpool_content`/`contentFrom`/`status`/`inspect` (38 native methods); sharing clients; workshare transactions from gossip; journal of local transactions; protobuf-go's wire rules. Go oracle (production TxPool, quaiapi handlers and rpc.Server over a test chain; 26 scenarios, 363 steps; three runs identical): Rust 363/363 equal. In the node: the pool on the live view follows go-quai's reorg of the private fixture through the dropped branch (fails with the ancestor walk removed); answers from a mainnet checkpoint's state. Live, `quai-node rpc` (binary of `f83d499`) on the Go export replayed to zone 27,406 (loopback only, no sharing clients): 26/26 answers equal to go-quai's pool over the same head fields and accounts (18 submissions, 8 reads). Replay of the Go export 0-27,406 with `--state` from genesis in a fresh datadir: PASS, 27,406 zone blocks executed with all state roots equal (2,816.5 s, 9.7 blocks/s under load 150-200; binary of `da7fc2a`; replay.rs, processor.rs, execution, consensus, primitives and store unchanged since). `cargo test --release --locked --workspace`: 73 suites, 435 passed, 0 failed, 0 ignored; fmt clean; clippy on quai-node and quai-rpc: no errors and no warnings in those crates |
+| 2026-11-18 | Phase 1, 3.2 | Txpool merged (`232c081`): no-fail-fast rerun 442/443; the failure was a loopback relay test that timed out while the KAWPOW cache built at load 106 (27.4 s alone), now 30 s per copy (`184ba2d`). Two release test runs aborted with a malloc "pointer being freed was not allocated" in `Arc::drop_slow` inside `mpt::Trie::update` / `World::root` (replay and precompiles test binaries; crash reports in `results/agents/heap-crash-reports/`); investigation on branch `heap-crash`. Rolling replay with `6e6ce8f`: stopped by the disk floor (29 GiB) after a clean SIGTERM checkpoint at zone 1,594,938, every root equal; restarted after freeing Go logs (log cap now applied), the debug build cache and the redundant `peer-export-public` |
+| 2026-11-19 | Phase 1 | Rolling replay (`6e6ce8f`): stopped by the disk floor again after a clean checkpoint at zone 1,617,447, every root equal; restarted after deleting the coordinator's build cache. Then the replay process aborted with SIGABRT 4 minutes after start, with no crash report and no message (likely the macOS 26.3 libmalloc problem under investigation on `heap-crash`, which hits some processes); restarted from checkpoint 1,617,447 with the same binary until the fix merges |
+| 2026-11-18 | Reliability | Heap crash (`heap-crash`: `8e25fc5` fix, `0ad5b33` tools). The "pointer being freed was not allocated" aborts in `World::root` (replay and precompiles tests today; state_db and mpt_drop_stress on Nov 13 and 16) are a libmalloc bug on macOS 26.1-26.3 (Findings in macOS libmalloc), triggered by the 7 padding bytes after `mpt::Link`'s one-byte tag: the branch clone copied malloc's own `cookie ^ address` into them, and in about 2 of 256 processes a live `Box<[Link; 16]>` had its free cookie as its first word. No data race, FFI, stack or hardware fault. Before: 40 aborts (fresh-process trie pass 24/2,434, precompiles 9/3,548, replay test 1/12, 6/1,166 with thread caching off; pre-xzone allocator 0/2,186); all 38 logged pointers are 640-byte branch boxes at chunk index 1-22; 8 SIGABRT dumps and one live probe run show the cookie in the first word; Guard Malloc (both modes) over 387,072 trie updates and over precompiles (secp256k1 FFI): no fault. Fix: `#[repr(u64)]` on `Link`. After, same host and load: probe near hits 0 (before: trie pass 888/24 runs, precompiles 30/30, replay test 1,423/12 + 1 abort, `quai-node-6e6ce8f replay --state` of mainnet 0-8 143-151 per run; fixed `quai-node` 0); trie pass 0/1,800; replay test 200/200 (8 parallel, load 300-450); precompiles 0/620, interleaved with the pre-fix binary under the same load: before 5/1,500 aborts, after 0/1,500. Production hit: the rolling replay's `quai-node-6e6ce8f` (pid 80093, launched 00:46:53Z) aborted at 00:51:06Z in `Workspace::finish` on 0xcb5ecea80, a 640-byte block at index 17, with the same stack; stderr had no text (libmalloc writes it only to the crash report unless `MallocDebugReport=stderr`), and ReportCrash wrote `quai-node-6e6ce8f-2026-11-18-185142.ips` 7 minutes later (a hidden `.ips` until then). Risk: a pre-fix `--state` process aborts at its first such block, early in its run, in about 1% of starts; a process past that point is safe for its life; stateless runs have no exposure; the rolling replay starts one process per pass and stops on a failure; the abort changes no state. New `scripts/stress_tests.sh` (`--probe` fails on any near hit). On the fixed code: quai-primitives lib 8/8; replay test 11/11 in 329 runs; precompiles 8/8 in 2,150 runs; mpt_drop_stress, state_db, checkpoints 7/7, tip 3/3, etx_runtime 2/2, polaris 3/3 with the probe (0 near hits); fmt clean. `cargo test --release --locked --workspace` did not finish: after 1 h 40 min of building at load 100-450 it was stopped to keep the disk above the replays' 30 GiB guard (32 GiB free at that time); it needs a run on merged main. |
+| 2026-11-19 | Phase 1 | Heap-crash fix merged (`23d29bd`). The rolling replay stopped at the disk floor once more (clean checkpoint at zone 1,618,455, every root equal) and restarted with `quai-node-23d29bd` (sha256 `94c5fc79…`), `REPLAY_JOBS=6`, a 27 GiB floor (the Go node's guard is 25 GiB) and `MallocDebugReport=stderr`. The `6e6ce8f` genesis run was dropped: the next single-binary run from genesis waits for the final binary after the head-follow and perf merges |

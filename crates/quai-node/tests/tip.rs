@@ -6,6 +6,7 @@
 //! same heads; the reorg rolls back the executed state, the block store and
 //! its indexes, then executes the new branch with every state root equal.
 use quai_consensus::pow::SharedCaches;
+use quai_node::cli::{start_pool, TxpoolOptions};
 use quai_node::log::{Level, Log};
 use quai_node::processor::{BlockSource, Next, Offer, Processor, Settings, SourceError};
 use quai_node::qex::{Context, Height, RawRecord};
@@ -13,6 +14,7 @@ use quai_node::spec::Chain;
 use quai_primitives::{decode_hex, Hash};
 use quai_rpc::view::ChainView;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -227,4 +229,80 @@ fn reorgs_follow_go_with_state() {
 #[test]
 fn reorgs_follow_go_without_state() {
     reorg_follows_go(false);
+}
+
+/// The transaction pool on the live view, started as `quai-node run` starts
+/// it, follows the heads through the reorg. It starts at the head of the
+/// first branch and remembers that block with its ancestors. After the
+/// reorg the block store no longer holds the first branch; the pool's reset
+/// walks back through the remembered blocks to the common ancestor (go-quai
+/// reads them from its database) and reaches the new head without stopping.
+#[test]
+fn pool_follows_the_reorg() {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch("pool");
+    let mut p = Processor::open(
+        Chain::for_environment("local").unwrap(),
+        settings(&data, true, false),
+        Some(Arc::new(SharedCaches::new(2).unwrap())),
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    let (mut view, live) = p.live_view().unwrap();
+    p.enable_tip().unwrap();
+    for h in &a[1..] {
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
+    }
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let pool = start_pool(
+        &mut view,
+        &TxpoolOptions::default(),
+        &data,
+        rt.handle(),
+        stop.clone(),
+        log,
+    )
+    .unwrap()
+    .expect("a pool over a view with state");
+    assert_eq!(pool.reset_state(), (Some(ha[16]), 1, 0));
+    let wait = |want: Hash| {
+        for _ in 0..3000 {
+            if pool.reset_state().0 == Some(want) {
+                return pool.reset_state();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "the pool did not reset to {want:?}: {:?}",
+            pool.reset_state()
+        );
+    };
+    // The second branch takes the head at its block 15.
+    for h in &b[9..16] {
+        p.offer(h.clone(), &log).unwrap();
+    }
+    assert_eq!(p.tip().unwrap().head(), (hb[15], 15));
+    assert!(view.block_by_hash(&ha[15]).unwrap().is_none());
+    let (_, _, stops) = wait(hb[15]);
+    assert_eq!(stops, 0, "the reorg reset stopped early");
+    p.offer(b[16].clone(), &log).unwrap();
+    assert_eq!(wait(hb[16]).2, 0);
+    stop.store(true, Ordering::Relaxed);
+    drop(rt);
+    drop((pool, view, live));
+    p.finish(&log).unwrap();
+    std::fs::remove_dir_all(data).unwrap();
 }

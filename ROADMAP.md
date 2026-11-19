@@ -542,8 +542,106 @@ Gate: mainnet replay is at least as fast as Go and uses less memory.
        `5df7277`). Equal to k256 on 165,445 raw cases and 30,000 mutated
        transactions, and on every Go vector. Speed against Go is not measured
        yet: the host load stayed between 20 and 160.
-2. [ ] Benchmark mainnet replay against Go: blocks per second, peak memory,
-       disk growth.
+2. [x] Benchmark mainnet replay against Go (branch `perf`). The Go side is
+       an offline oracle, `reference/replay-bench` (`go build -overlay` into
+       the pinned go-quai; GOPROXY=off, GOTOOLCHAIN=local): the same QEX1
+       blocks through go-quai's own import path from genesis on fresh
+       databases (Core.WriteBlock checks, Core.InsertChain with
+       VerifyHeader and its full proof-of-work check, the coordinator's head
+       update, which runs StateProcessor.Apply; no pending header for
+       miners). `scripts/benchmark_replay.py` measures each run from outside
+       (wait4 CPU, peak RSS and footprint, instructions, logical bytes
+       written from proc_pid_rusage, data directory size) and alternates
+       Rust and Go. Every header's proof-of-work is checked on both sides.
+       Go export zone 0-3,000 (no user transactions), from genesis, every
+       root equal in all runs; Rust `--jobs 4`, Go GOMAXPROCS=4; median
+       (range) of 3 runs each, load 41-319:
+
+       | Per 1,000 blocks | go-quai | Rust main `8e69e41` | Rust `68b8d80` | Rust `c4af194` |
+       |---|---|---|---|---|
+       | CPU seconds | 207 (172-233) | 143 (133-156) | 29.1 (26.0-33.8) | 26.7 (26.5-31.9) |
+       | instructions (G) | 408 (386-426) | 153 (151-153) | 171 (171-172) | 109 (109-112) |
+       | wall blocks/s | 0.8 (0.7-3.6) | 4.3 (3.7-8.6) | 41.6 (12.2-131) | 18.2 (9.4-20.9) |
+       | peak RSS (MiB) | 419 (354-699) | 173 (147-175) | 182 (175-185) | 131 (130-172) |
+       | bytes written per height (KiB) | 62.4 (55.6-63.9) | 20.7 (20.4-20.9) | 20.7 (20.5-20.7) | 20.4 (20.3-20.5) |
+       | data directory per height (KiB) | 33.1 | 19.0 | 19.0 | 19.0 |
+
+       Go/Rust per round: CPU 1.45x (1.29-1.49) against main, 6.6x
+       (6.1-8.0) against `68b8d80`, 7.8x (5.4-8.7) against `c4af194`;
+       instructions 2.7x and 3.7x; peak RSS 2.9x and 3.2x; bytes written
+       3.0x. The `c4af194` runs did not alternate with Go (they ran during
+       Go's second run). Not equal: Go verifies proof-of-work on its one
+       import goroutine and Rust on 4 threads, so wall time favours Rust
+       beyond the CPU ratio; Go uses LevelDB and commits every block's
+       tries, Rust redb with a commit every 1,000 heights; its unsynced
+       LevelDB writes are counted as logical bytes (the kernel charges
+       almost no physical writes to it); Go logs warnings only and builds
+       no pending header, bloom index or coordinator head choice; the
+       host ran two long replays, a go-quai node and other agents. A user
+       transaction range is not compared: go-quai needs about 0.2 CPU s per
+       height with its proof-of-work, about 15 CPU hours to reach zone
+       259,200 from genesis, and no option may skip that work. The go-quai
+       node on this host syncs 2-4 blocks/s because of the same sequential
+       light checks (about 17 per block at zone 163,549, 270-910 ms per
+       append in its log), not only because of its peers.
+3. [x] Faster proof-of-work checks, same results as Go. Light path: the
+       four dataset items of a round run as independent chains, the kernels
+       of a job's block header and workshares run four at a time (16
+       chains), and the KISS99 program of a period is drawn once per kernel
+       instead of once per lane and round. CPU per light verification of the
+       1,658 real block and workshare headers of zone 1-200, one thread,
+       median of 3 alternating runs under load 60-300
+       (`scripts/benchmark_replay.py pow`, CPU at loop markers): main
+       `8e69e41` 16.8 ms (16.7-21.2), go-quai 21.5 ms (18.6-22.5),
+       interleaved items 6.8 ms (6.1-7.3), batched 3.75 ms (3.69-3.92),
+       batched with the program drawn once 2.89 ms (2.72-3.04): 5.8x main,
+       7.4x Go. Every run printed the same lines as Go (sha256 `5ad36c12`).
+       Go vectors 253/253 (ProgPoW epochs 0 and 1, KAWPOW 0, 1 and 396).
+       Rust and Go print identical lines (mix, hash and verdict) for 5,269
+       real block and workshare headers of zone 1-300, 100,000-100,060,
+       259,200-259,300, 600,000-600,050, 720,000-720,050 and
+       1,249,950-1,250,000, each also with the nonce, the seal and the
+       claimed mix mutated and in the later ProgPoW epochs 1-3: 35,936
+       inputs, 679 valid at the block target, 4,590 workshares, every
+       mutation rejected; the batched kernels gave 0 mismatches. The data
+       ends at prime 268,000, before KAWPOW AuxPoW (prime 1,171,500), so
+       no real KAWPOW header was compared; the KAWPOW kernel is covered by
+       the Go vectors. Export replay 0-27,406 from genesis with `c4af194`:
+       PASS, every root equal, 757 CPU s (PoW threads 681 s, 2.87 ms per
+       hash; main thread 76 s), peak RSS 263 MiB (`68b8d80`, `c4af194`)
+4. [ ] Full dataset (`replay --pow-dag light|full|auto`, default light):
+       the epoch's dataset built in memory on all cores, read instead of
+       computing items, dropped when a newer epoch starts; auto only when
+       free memory holds it and 1 GiB more (`68b8d80`). Proven on KAWPOW
+       epoch 0, a real 1.0 GiB dataset that fit in the 1.7-2.3 GiB free
+       (`pow-full-check`, peak footprint 1.09 GB): built on 8 threads in
+       284 s (307 CPU s); full equal to light on 400 inputs, sampled items
+       equal; 0.33 ms CPU per hash against 5.67 ms light. Not done: the
+       ProgPoW epoch-0 dataset is 4.0 GiB, and free memory stayed at
+       1.7-2.4 GiB beside two long replays, a go-quai node and other
+       agents (one sample at 4.4 GiB), so neither its real-header check nor
+       the replay speed-up in full mode was run; `--pow-dag auto` chose
+       light ("needs 4.00 GiB and a 1.00 GiB margin, 2.01 GiB free"). From
+       the measured parts, the 4 GiB build costs about 1,200 CPU s and saves
+       about 2.5 ms CPU per hash, so it pays off after about 50,000 heights
+       (9.6 hashes per height) and saves about 16 CPU hours over the
+       epoch-0 range of the mainnet replay.
+5. [x] Ordered checks (the replay's main thread, `40ec374`). A
+       `/usr/bin/sample` profile on zone 720,000-724,000 (user
+       transactions; `scripts/profile_sample.py`): 71% of the busy time in
+       block execution; the ETX-set root 31.8% (a lazy queue replayed every
+       change since the last commit on every block; now it updates the trie
+       of its previous root, as World does), crypto-bigint division 8.6%
+       self (bit-serial, about 1,000 rounds for a U1024 divided by a small
+       number; now `bigdiv::div`, the same quotient), RLP list flattening
+       7.9% self (now whole-item copies). Same range, 2 alternating runs
+       each: main-thread CPU 40.3-41.0 s -> 26.4-26.6 s (-35%); the
+       checkpoint at 724,000 is byte-identical in all four runs (sha256
+       `71ca22db`). Afterwards the main thread waits for proof-of-work 80%
+       of the time. Left: state reads and commits (redb, about half of the
+       remaining busy time), per-block copies of the ETX-queue and account
+       overlays (they grow until the commit every 1,000 heights), the other
+       wrapping_div call sites (share_rules, about 3%).
 
 Mining, block templates and Stratum come last.
 
@@ -554,8 +652,8 @@ Mining, block templates and Stratum come last.
   default build.
 - A fail-closed limit is only correct when Go has the same limit. A limit that
   Go does not have makes the node stop on a valid block.
-- Do not start new performance tuning before the Phase 1 gate, except the
-  Phase 4 items above.
+- Performance work may run now; every result must stay identical to Go.
+  Every header's proof-of-work is checked; no assume-valid.
 
 ## Findings in go-quai v0.57.0
 
@@ -677,3 +775,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-19 | Phase 1 | Rolling replay (`6e6ce8f`): stopped by the disk floor again after a clean checkpoint at zone 1,617,447, every root equal; restarted after deleting the coordinator's build cache. Then the replay process aborted with SIGABRT 4 minutes after start, with no crash report and no message (likely the macOS 26.3 libmalloc problem under investigation on `heap-crash`, which hits some processes); restarted from checkpoint 1,617,447 with the same binary until the fix merges |
 | 2026-11-18 | Reliability | Heap crash (`heap-crash`: `8e25fc5` fix, `0ad5b33` tools). The "pointer being freed was not allocated" aborts in `World::root` (replay and precompiles tests today; state_db and mpt_drop_stress on Nov 13 and 16) are a libmalloc bug on macOS 26.1-26.3 (Findings in macOS libmalloc), triggered by the 7 padding bytes after `mpt::Link`'s one-byte tag: the branch clone copied malloc's own `cookie ^ address` into them, and in about 2 of 256 processes a live `Box<[Link; 16]>` had its free cookie as its first word. No data race, FFI, stack or hardware fault. Before: 40 aborts (fresh-process trie pass 24/2,434, precompiles 9/3,548, replay test 1/12, 6/1,166 with thread caching off; pre-xzone allocator 0/2,186); all 38 logged pointers are 640-byte branch boxes at chunk index 1-22; 8 SIGABRT dumps and one live probe run show the cookie in the first word; Guard Malloc (both modes) over 387,072 trie updates and over precompiles (secp256k1 FFI): no fault. Fix: `#[repr(u64)]` on `Link`. After, same host and load: probe near hits 0 (before: trie pass 888/24 runs, precompiles 30/30, replay test 1,423/12 + 1 abort, `quai-node-6e6ce8f replay --state` of mainnet 0-8 143-151 per run; fixed `quai-node` 0); trie pass 0/1,800; replay test 200/200 (8 parallel, load 300-450); precompiles 0/620, interleaved with the pre-fix binary under the same load: before 5/1,500 aborts, after 0/1,500. Production hit: the rolling replay's `quai-node-6e6ce8f` (pid 80093, launched 00:46:53Z) aborted at 00:51:06Z in `Workspace::finish` on 0xcb5ecea80, a 640-byte block at index 17, with the same stack; stderr had no text (libmalloc writes it only to the crash report unless `MallocDebugReport=stderr`), and ReportCrash wrote `quai-node-6e6ce8f-2026-11-18-185142.ips` 7 minutes later (a hidden `.ips` until then). Risk: a pre-fix `--state` process aborts at its first such block, early in its run, in about 1% of starts; a process past that point is safe for its life; stateless runs have no exposure; the rolling replay starts one process per pass and stops on a failure; the abort changes no state. New `scripts/stress_tests.sh` (`--probe` fails on any near hit). On the fixed code: quai-primitives lib 8/8; replay test 11/11 in 329 runs; precompiles 8/8 in 2,150 runs; mpt_drop_stress, state_db, checkpoints 7/7, tip 3/3, etx_runtime 2/2, polaris 3/3 with the probe (0 near hits); fmt clean. `cargo test --release --locked --workspace` did not finish: after 1 h 40 min of building at load 100-450 it was stopped to keep the disk above the replays' 30 GiB guard (32 GiB free at that time); it needs a run on merged main. |
 | 2026-11-19 | Phase 1 | Heap-crash fix merged (`23d29bd`). The rolling replay stopped at the disk floor once more (clean checkpoint at zone 1,618,455, every root equal) and restarted with `quai-node-23d29bd` (sha256 `94c5fc79…`), `REPLAY_JOBS=6`, a 27 GiB floor (the Go node's guard is 25 GiB) and `MallocDebugReport=stderr`. The `6e6ce8f` genesis run was dropped: the next single-binary run from genesis waits for the final binary after the head-follow and perf merges |
+| 2026-11-19 | Phase 4.2-4.5 | Branch `perf` (`cc89a28`, `68b8d80`, `40ec374`, `c4af194`, `17d2a40`, `e010158`; main `03f967c` merged as `cf2e2ee`). Go replay benchmark (`reference/replay-bench`, `scripts/benchmark_replay.py`): go-quai's own import path from genesis, every proof-of-work checked on both sides; Go export zone 0-3,000, 3 alternating runs each: CPU per 1,000 blocks go-quai 207 s, Rust main 143 s (Go/Rust 1.45x, 1.29-1.49), Rust `c4af194` 26.7 s (7.8x, 5.4-8.7); peak RSS 419 against 131-173 MiB; 62 against 20 KiB written per height. Light proof-of-work 16.8 -> 2.89 ms CPU per check (go-quai 21.5 ms): items in lockstep, a job's kernels four at a time, the KISS99 program drawn once; identical to Go on 5,269 real headers and 35,936 inputs with mutations and later epochs, and on the 253 Go vectors. `--pow-dag light|full|auto` (default light): full dataset proven on KAWPOW epoch 0 (1.0 GiB, 0.33 ms per check); the 4.0 GiB ProgPoW epoch 0 was not run, free memory stayed at 1.6-2.4 GiB (max 4.4). Ordered checks: incremental ETX-set root, exact fast division, RLP lists: main-thread CPU -35% on zone 720,000-724,000 with a byte-identical checkpoint. Assume-valid dropped by the user; nothing skips a check. On the merge: `cargo test --release --locked --workspace` 455/455 in 74 suites (the run before the merge aborted in the replay suite with the libmalloc SIGABRT that `23d29bd` fixes), fmt clean, clippy without errors on the changed crates; Go export 0-27,406 with `--state` from genesis in a fresh datadir, `--pow-dag auto` (it chose light: 1.84 GiB free): replay PASS, every root equal, 775 CPU s, peak RSS 205 MiB; zone 720,000-724,000 PASS with the same checkpoint (`71ca22db`). Full mode was not run: it needs 4 GiB beside a 1 GiB margin. During the final tests the rolling replay's disk guard stopped it twice (26 and 25 GiB free, 05:56 and 06:35 UTC), each time after a clean checkpoint, and it restarted; this worktree then held 2.4 GB of build output, deleted after the run |

@@ -267,11 +267,44 @@ pub trait ChainView: Send + Sync + 'static {
     fn removed_logs(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<RemovedLogs>>> {
         None
     }
-    /// Accept a signed transaction (`quai_sendRawTransaction`). A view
-    /// without a transaction pool refuses.
-    fn submit_transaction(&self, _tx: Transaction) -> Result<Hash, ViewError> {
+    /// `quai_sendRawTransaction` and `quai_receiveTxFromPoolSharingClient`:
+    /// decode the protobuf transaction and submit it as go-quai's
+    /// `SubmitTransaction` does. The hash, or `ViewError::Go` with go-quai's
+    /// error text. A view without a transaction pool refuses.
+    fn submit_transaction(&self, _raw: &[u8]) -> Result<Hash, ViewError> {
         Err(ViewError::Unavailable(
             "this node has no transaction pool".into(),
         ))
     }
+    /// `TxPool.Nonce`: the next nonce with the pool's pending transactions
+    /// applied. None: no pool (the head state answers).
+    fn pool_nonce(&self, _address: &Address) -> Option<u64> {
+        None
+    }
+    /// `TxPool.Get`: a pending, queued or Qi pool transaction.
+    fn pool_transaction(&self, _hash: &Hash) -> Option<PoolTransaction> {
+        None
+    }
+    /// `TxPool.Content`, or `ContentFrom` an address. None: no pool.
+    fn pool_content(&self, _from: Option<&Address>) -> Option<PoolContent> {
+        None
+    }
+    /// `TxPool.Stats`: pending, queued and Qi transactions. None: no pool.
+    fn pool_stats(&self) -> Option<(u64, u64, u64)> {
+        None
+    }
+}
+
+/// A transaction of the pool and its go-quai hash (`tx.Hash()`).
+#[derive(Clone, Debug)]
+pub struct PoolTransaction {
+    pub hash: Hash,
+    pub tx: Transaction,
+}
+
+/// The pool's Quai transactions by account, each list in nonce order.
+#[derive(Clone, Debug, Default)]
+pub struct PoolContent {
+    pub pending: Vec<(Address, Vec<PoolTransaction>)>,
+    pub queued: Vec<(Address, Vec<PoolTransaction>)>,
 }

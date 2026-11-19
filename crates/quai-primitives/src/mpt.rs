@@ -27,7 +27,23 @@ impl ReadNodes for NoNodes {
         Ok(None)
     }
 }
+/// A child reference. `repr(u64)` gives the tag the whole first word, so a
+/// `Link` has no padding in its first 8 bytes.
+///
+/// macOS 26.1-26.3 (libmalloc 792.x) needs this. xzone malloc takes a tiny
+/// block whose first word equals its free cookie (`zone cookie ^ address`)
+/// for a possibly freed block and confirms with a freelist walk that compares
+/// a byte offset with 16-byte granule offsets. For a block past index 1 of
+/// its chunk the walk answers "free", and `free()` aborts with "pointer being
+/// freed was not allocated". With a one-byte tag, the branch clone filled the
+/// 7 padding bytes after it from stale registers and stack slots that still
+/// held the `cookie ^ address` that malloc had just computed for the same
+/// block. When the tag (2, `Node`) was equal to the low byte of that value,
+/// in about 2 of 256 processes, the first word of a `Box<[Link; 16]>` was its
+/// free cookie, and dropping that live branch aborted. libmalloc 812 (macOS
+/// 26.4) compares granules.
 #[derive(Clone, Debug)]
+#[repr(u64)]
 enum Link {
     Empty,
     Hash(Hash),
@@ -75,19 +91,8 @@ fn make(data: Data) -> Link {
     }))
 }
 
-// macOS 26.0-26.3 on arm64 can corrupt xzone allocator bookkeeping when a
-// heap allocation of a niche-optimized 16-element type is initialized with a
-// repeated/from_fn value. Build the branch incrementally so the same source is
-// safe on affected developer hosts without weakening release optimization.
 fn empty_children() -> Box<[Link; 16]> {
-    let mut children = Vec::with_capacity(16);
-    for _ in 0..16 {
-        children.push(Link::Empty);
-    }
-    children
-        .into_boxed_slice()
-        .try_into()
-        .unwrap_or_else(|_| unreachable!())
+    Box::new([const { Link::Empty }; 16])
 }
 fn compact(path: &[u8], leaf: bool) -> Vec<u8> {
     let flags = if leaf { 2 } else { 0 };

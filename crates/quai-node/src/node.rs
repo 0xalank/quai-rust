@@ -58,6 +58,8 @@ pub struct Options {
     /// Keep the block store (needed by the RPC). Off for a long shadow run
     /// with bounded disk: the store grows about 50 KB per zone block.
     pub store: bool,
+    /// The transaction pool (with state only).
+    pub txpool: crate::cli::TxpoolOptions,
 }
 
 /// SIGINT and SIGTERM set `stop`; the code is 130 or 143. A second signal
@@ -249,13 +251,30 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     ));
     let metrics = Arc::new(Metrics::new(start));
     processor.set_metrics(metrics.clone());
-    // The RPC view follows the processor's published head.
-    let live_view = if o.store {
-        let (view, live) = processor.live_view()?;
-        Some((Arc::new(view), live))
+    // The RPC view follows the processor's published head (with a block
+    // store), and the transaction pool resets on every published head (with
+    // state and a store).
+    let mut live_view = if o.store {
+        Some(processor.live_view()?)
     } else {
         None
     };
+    let pool = match (&mut live_view, o.stateless) {
+        (Some((view, _)), false) => crate::cli::start_pool(
+            view,
+            &o.txpool,
+            &o.datadir,
+            runtime.handle(),
+            stop.clone(),
+            *log,
+        )?,
+        (None, false) if o.txpool.enabled => {
+            log.info("txpool: off (no block store)");
+            None
+        }
+        _ => None,
+    };
+    let live_view = live_view.map(|(view, live)| (Arc::new(view), live));
     let shutdown = {
         let stop = stop.clone();
         move || {
@@ -268,12 +287,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         }
     };
     if let (Some(listen), Some((view, _))) = (&o.rpc_listen, &live_view) {
-        let config = quai_rpc::Config {
-            mode: "native".into(),
-            listen: listen.clone(),
-            timeout_ms: 30_000,
-            ..quai_rpc::Config::default()
-        };
+        let config = crate::cli::rpc_config(listen.clone());
         let app = quai_rpc::App::native(config, view.clone())?;
         let listener = runtime
             .block_on(tokio::net::TcpListener::bind(listen))
@@ -337,6 +351,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             node.clone(),
             stop.clone(),
             stats.clone(),
+            pool.clone(),
             *log,
         ) {
             Ok(gossip) => {

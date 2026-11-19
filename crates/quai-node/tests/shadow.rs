@@ -272,6 +272,7 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
         bootstrap_quorum: 3,
         bootstrap_depth: 1_000,
         store: true,
+        txpool: quai_node::cli::TxpoolOptions::default(),
     };
     let e = quai_node::node::run(&o, &log).err().unwrap();
     assert!(e.contains("shadow run"), "{e}");

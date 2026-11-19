@@ -26,5 +26,6 @@ pub mod spec;
 pub mod state;
 pub mod store;
 pub mod tip;
+pub mod txpool;
 pub mod uncles;
 pub mod window;

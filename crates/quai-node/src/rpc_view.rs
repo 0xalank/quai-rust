@@ -37,6 +37,7 @@ use crate::replay;
 use crate::rpc_call;
 use crate::spec::Chain;
 use crate::store::{self, PastDb, StateStore};
+use crate::txpool::service::Service as TxPoolService;
 use crate::uncles;
 use quai_consensus::{
     history::{self, History, Record},
@@ -435,6 +436,8 @@ pub struct ExportView {
     /// Decoded blocks and uncle classes by block hash.
     blocks: Arc<Mutex<Lru<Arc<BlockData>>>>,
     kinds: Arc<Mutex<Lru<Arc<Vec<UncleKind>>>>>,
+    /// The transaction pool, if the node runs one.
+    pool: Option<Arc<TxPoolService>>,
 }
 /// A small cache by block hash, oldest entry out first.
 type Lru<T> = (HashMap<Hash, T>, VecDeque<Hash>);
@@ -526,7 +529,31 @@ impl ExportView {
             caches: Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?),
             blocks: lru(),
             kinds: lru(),
+            pool: None,
         })
+    }
+    /// Another handle on the same view (blocks, head and caches).
+    pub fn share(&self) -> Self {
+        Self {
+            chain: self.chain.clone(),
+            snap: self.snap.clone(),
+            live: self.live.clone(),
+            caches: self.caches.clone(),
+            blocks: self.blocks.clone(),
+            kinds: self.kinds.clone(),
+            pool: self.pool.clone(),
+        }
+    }
+    /// Answer the pool's RPC methods from `pool`.
+    pub fn set_pool(&mut self, pool: Arc<TxPoolService>) {
+        self.pool = Some(pool);
+    }
+    /// The size of the head's UTXO set (`rawdb.ReadUTXOSetSize` of the
+    /// head), if the view keeps state.
+    pub fn head_utxo_set_size(&self) -> Option<(Hash, u64)> {
+        let snap = self.snap();
+        let state = snap.state.as_ref()?;
+        Some((snap.head_hash, state.state.utxos.consensus_size()))
     }
     /// Index `export` up to the latest checkpoint in `datadir` and open the
     /// checkpoint's state.
@@ -1341,7 +1368,28 @@ impl ChainView for ExportView {
             caches: self.caches.clone(),
             blocks: self.blocks.clone(),
             kinds: self.kinds.clone(),
+            pool: self.pool.clone(),
         }))
+    }
+    fn submit_transaction(&self, raw: &[u8]) -> Result<Hash, ViewError> {
+        match &self.pool {
+            Some(p) => p.submit(raw).map_err(ViewError::Go),
+            None => Err(ViewError::Unavailable(
+                "this node has no transaction pool".into(),
+            )),
+        }
+    }
+    fn pool_nonce(&self, address: &Address) -> Option<u64> {
+        Some(self.pool.as_ref()?.rpc_nonce(address))
+    }
+    fn pool_transaction(&self, hash: &Hash) -> Option<quai_rpc::view::PoolTransaction> {
+        self.pool.as_ref()?.rpc_transaction(hash)
+    }
+    fn pool_content(&self, from: Option<&Address>) -> Option<quai_rpc::view::PoolContent> {
+        Some(self.pool.as_ref()?.rpc_content(from))
+    }
+    fn pool_stats(&self) -> Option<(u64, u64, u64)> {
+        Some(self.pool.as_ref()?.rpc_stats())
     }
 }
 
@@ -1371,5 +1419,126 @@ impl ExportView {
             Some(_) => snap.blocks.record_by_hash(hash),
             None => Ok(None),
         }
+    }
+}
+
+/// The transaction pool's chain (`txpool::PoolChain`) over a view: the
+/// head of a checkpoint, or the published head of a running node. go-quai
+/// reads side-chain blocks from its database when a reorg walks back; the
+/// block store keeps only the canonical chain, so the pool remembers the
+/// heads it sees and their ancestors (1,024 blocks; at most 128 for one
+/// head, back to a remembered block).
+pub struct ViewChain {
+    view: ExportView,
+    seen: Mutex<Lru<Arc<BlockData>>>,
+    last: Mutex<Option<Arc<BlockData>>>,
+}
+const SEEN_HEADS: usize = 1024;
+impl ViewChain {
+    pub fn new(view: ExportView) -> Result<Self, String> {
+        let chain = Self {
+            view,
+            seen: Mutex::new((HashMap::new(), VecDeque::new())),
+            last: Mutex::new(None),
+        };
+        chain
+            .head()
+            .map_err(|e| format!("transaction pool: head block: {e}"))?;
+        Ok(chain)
+    }
+    fn head(&self) -> Result<Arc<BlockData>, ViewError> {
+        let pinned = self.view.pinned();
+        let view: &dyn ChainView = pinned.as_deref().unwrap_or(&self.view);
+        let block = view
+            .block_by_number(view.head())?
+            .ok_or_else(|| ViewError::Unavailable("head block".into()))?;
+        self.remember_chain(&block);
+        if let Ok(mut last) = self.last.lock() {
+            *last = Some(block.clone());
+        }
+        Ok(block)
+    }
+    /// Remembers a block and its ancestors up to a remembered one (at most
+    /// 128), so that every remembered block has its ancestors too.
+    fn remember_chain(&self, block: &Arc<BlockData>) {
+        remember(&self.seen, block.hash, block, SEEN_HEADS);
+        let mut b = block.clone();
+        for _ in 0..128 {
+            if b.number == 0 {
+                break;
+            }
+            let parent = crate::txpool::block::parent(&b);
+            let known = self
+                .seen
+                .lock()
+                .map(|s| s.0.contains_key(&parent))
+                .unwrap_or(true);
+            if known {
+                break;
+            }
+            match self.view.block_by_hash(&parent) {
+                Ok(Some(p)) if p.number + 1 == b.number => {
+                    remember(&self.seen, p.hash, &p, SEEN_HEADS);
+                    b = p;
+                }
+                _ => break,
+            }
+        }
+    }
+}
+impl crate::txpool::PoolChain for ViewChain {
+    fn chain_id(&self) -> u64 {
+        self.view.chain_id()
+    }
+    fn location(&self) -> [u8; 2] {
+        self.view.location()
+    }
+    fn current_block(&self) -> Arc<BlockData> {
+        match self.head() {
+            Ok(b) => b,
+            // The last head read (set by `new`).
+            Err(_) => self
+                .last
+                .lock()
+                .ok()
+                .and_then(|l| l.clone())
+                .expect("a head was read when the pool started"),
+        }
+    }
+    fn get_block(&self, hash: &Hash, number: u64) -> Option<Arc<BlockData>> {
+        if let Ok(Some(b)) = self.view.block_by_hash(hash) {
+            if b.number == number {
+                return Some(b);
+            }
+        }
+        let seen = self.seen.lock().ok()?;
+        seen.0.get(hash).filter(|b| b.number == number).cloned()
+    }
+    fn header_by_hash(&self, hash: &Hash) -> Option<Arc<BlockData>> {
+        if let Ok(Some(b)) = self.view.block_by_hash(hash) {
+            return Some(b);
+        }
+        let seen = self.seen.lock().ok()?;
+        seen.0.get(hash).cloned()
+    }
+    fn state_at(&self, block: &BlockData) -> Result<Arc<dyn AccountState>, String> {
+        self.view.state(block).map_err(|e| e.to_string())
+    }
+    fn utxo(&self, hash: &Hash, index: u16) -> Option<UtxoData> {
+        self.view.utxo(hash, index).ok().flatten()
+    }
+    fn utxo_set_size(&self, block: &Hash) -> u64 {
+        match self.view.head_utxo_set_size() {
+            Some((head, size)) if head == *block => size,
+            _ => 0,
+        }
+    }
+    /// The block of a head event, remembered with its ancestors, so that a
+    /// later reorg can walk back through them after the store has dropped
+    /// them.
+    fn head_block(&self, hash: &Hash) -> Option<Arc<BlockData>> {
+        let block = self.view.block_by_hash(hash).ok().flatten()?;
+        self.remember_chain(&block);
+        Some(block)
     }
 }

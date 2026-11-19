@@ -486,12 +486,82 @@ impl LightCache {
 }
 /// Kernel results that [`LightCache::prefetch`] keeps for later `compute`s.
 const PREFETCH_ENTRIES: usize = 256;
+/// The random program of one ProgPoW period. Every lane in every round
+/// starts KISS99 from `init(period)` and draws the same values in the same
+/// order, independent of the data; go-quai draws them again per lane and
+/// round (progpowLoop). Drawn once, in that order, the program applies the
+/// same merges and math to the same registers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Program {
+    /// Per step i < 11: source register, destination register, merge value.
+    cache: [(u8, u8, u32); 11],
+    /// Per step: two source registers, math value, destination, merge value.
+    math: [(u8, u8, u32, u8, u32); 18],
+    /// The merge value of the first DAG word into register 0.
+    dag_first: u32,
+    /// Destination and merge value of the other three DAG words.
+    dag_rest: [(u8, u32); 3],
+}
+impl Program {
+    fn new(period: u64) -> Self {
+        let (mut rng, dest, src) = init(period);
+        let (mut sc, mut dc) = (0usize, 0usize);
+        let mut cache = [(0, 0, 0); 11];
+        let mut math = [(0, 0, 0, 0, 0); 18];
+        for (i, step) in math.iter_mut().enumerate() {
+            if i < 11 {
+                let source = src[sc % 32] as u8;
+                sc += 1;
+                let d = dest[dc % 32] as u8;
+                dc += 1;
+                cache[i] = (source, d, rng.next());
+            }
+            let r = rng.next() % (32 * 31);
+            let s1 = r % 32;
+            let mut s2 = r / 32;
+            if s2 >= s1 {
+                s2 += 1;
+            }
+            let value = rng.next();
+            let d = dest[dc % 32] as u8;
+            dc += 1;
+            *step = (s1 as u8, s2 as u8, value, d, rng.next());
+        }
+        let dag_first = rng.next();
+        let dag_rest = std::array::from_fn(|_| {
+            let d = dest[dc % 32] as u8;
+            dc += 1;
+            (d, rng.next())
+        });
+        Self {
+            cache,
+            math,
+            dag_first,
+            dag_rest,
+        }
+    }
+    /// One lane of one round (the body of go-quai's progpowLoop lane loop).
+    fn run(&self, registers: &mut [u32; 32], cdag: &[u32; 4096], dag: &[u32; 64], index: usize) {
+        for (i, &(s1, s2, value, d, r)) in self.math.iter().enumerate() {
+            if let Some(&(source, cd, cr)) = self.cache.get(i) {
+                let word = cdag[registers[source as usize] as usize % 4096];
+                merge(&mut registers[cd as usize], word, cr);
+            }
+            let m = math(registers[s1 as usize], registers[s2 as usize], value);
+            merge(&mut registers[d as usize], m, r);
+        }
+        merge(&mut registers[0], dag[index], self.dag_first);
+        for (k, &(d, r)) in self.dag_rest.iter().enumerate() {
+            merge(&mut registers[d as usize], dag[index + 1 + k], r);
+        }
+    }
+}
 /// One kernel run between its rounds.
 struct Kernel {
     input: [u32; 8],
     start: [u32; 25],
     seed: u64,
-    period: u64,
+    program: Program,
     mix: [[u32; 32]; 16],
 }
 impl Kernel {
@@ -507,7 +577,7 @@ impl Kernel {
             input,
             start,
             seed,
-            period,
+            program: Program::new(period),
             mix: std::array::from_fn(|lane| fill(seed, lane as u32)),
         }
     }
@@ -520,41 +590,13 @@ impl Kernel {
         std::array::from_fn(|i| base.wrapping_add(i as u32 * 16) / 16)
     }
     fn round(&mut self, cache: &LightCache, round: u32, items: &[[u32; 16]; 4]) {
-        let seed = self.period;
         let mut dag = [0u32; 64];
         for (i, item) in items.iter().enumerate() {
             dag[i * 16..i * 16 + 16].copy_from_slice(item);
         }
         for (lane, registers) in self.mix.iter_mut().enumerate() {
-            let (mut rng, dest, src) = init(seed);
-            let (mut sc, mut dc) = (0usize, 0usize);
-            for i in 0..18 {
-                if i < 11 {
-                    let source = src[sc % 32] as usize;
-                    sc += 1;
-                    let value = cache.cdag[registers[source] as usize % 4096];
-                    let d = dest[dc % 32] as usize;
-                    dc += 1;
-                    merge(&mut registers[d], value, rng.next());
-                }
-                let r = rng.next() % (32 * 31);
-                let s1 = r % 32;
-                let mut s2 = r / 32;
-                if s2 >= s1 {
-                    s2 += 1;
-                }
-                let value = math(registers[s1 as usize], registers[s2 as usize], rng.next());
-                let d = dest[dc % 32] as usize;
-                dc += 1;
-                merge(&mut registers[d], value, rng.next());
-            }
             let index = ((lane as u32 ^ round) % 16) as usize * 4;
-            merge(&mut registers[0], dag[index], rng.next());
-            for value in &dag[index + 1..index + 4] {
-                let d = dest[dc % 32] as usize;
-                dc += 1;
-                merge(&mut registers[d], *value, rng.next());
-            }
+            self.program.run(registers, &cache.cdag, &dag, index);
         }
     }
     fn finish(&self, cache: &LightCache) -> (Hash, Hash) {
@@ -1202,6 +1244,69 @@ mod tests {
             // Inputs of another epoch are left out.
             c.prefetch(&[([1u8; 32], 1, 400_000)]);
             assert!(c.prefetched.lock().unwrap().is_empty());
+        }
+    }
+    /// The lane loop as go-quai's progpowLoop writes it: KISS99 drawn again
+    /// for every lane of every round.
+    fn reference_lane(
+        period: u64,
+        registers: &mut [u32; 32],
+        cdag: &[u32; 4096],
+        dag: &[u32; 64],
+        index: usize,
+    ) {
+        let (mut rng, dest, src) = init(period);
+        let (mut sc, mut dc) = (0usize, 0usize);
+        for i in 0..18 {
+            if i < 11 {
+                let source = src[sc % 32] as usize;
+                sc += 1;
+                let value = cdag[registers[source] as usize % 4096];
+                let d = dest[dc % 32] as usize;
+                dc += 1;
+                merge(&mut registers[d], value, rng.next());
+            }
+            let r = rng.next() % (32 * 31);
+            let s1 = r % 32;
+            let mut s2 = r / 32;
+            if s2 >= s1 {
+                s2 += 1;
+            }
+            let value = math(registers[s1 as usize], registers[s2 as usize], rng.next());
+            let d = dest[dc % 32] as usize;
+            dc += 1;
+            merge(&mut registers[d], value, rng.next());
+        }
+        merge(&mut registers[0], dag[index], rng.next());
+        for value in &dag[index + 1..index + 4] {
+            let d = dest[dc % 32] as usize;
+            dc += 1;
+            merge(&mut registers[d], *value, rng.next());
+        }
+    }
+    #[test]
+    fn period_program_equals_the_per_lane_draws() {
+        let mut x = 0x0123_4567_89ab_cdefu64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let cdag: [u32; 4096] = std::array::from_fn(|_| next() as u32);
+        for period in [0u64, 1, 7, 130_109, 1_000_003, u64::MAX, next(), next()] {
+            let program = Program::new(period);
+            for round in 0..64u32 {
+                let dag: [u32; 64] = std::array::from_fn(|_| next() as u32);
+                for lane in 0..16u32 {
+                    let start: [u32; 32] = std::array::from_fn(|_| next() as u32);
+                    let index = ((lane ^ round) % 16) as usize * 4;
+                    let (mut a, mut b) = (start, start);
+                    program.run(&mut a, &cdag, &dag, index);
+                    reference_lane(period, &mut b, &cdag, &dag, index);
+                    assert_eq!(a, b, "period {period} round {round} lane {lane}");
+                }
+            }
         }
     }
     #[test]

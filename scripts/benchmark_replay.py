@@ -71,6 +71,29 @@ def rusage_info(pid):
     return {f: getattr(ri, f) for f in FIELDS}
 
 
+class ThreadInfo(ctypes.Structure):
+    _fields_ = [('user_time', ctypes.c_uint64), ('system_time', ctypes.c_uint64),
+                ('cpu_usage', ctypes.c_int32), ('policy', ctypes.c_int32), ('run_state', ctypes.c_int32),
+                ('flags', ctypes.c_int32), ('sleep_time', ctypes.c_int32), ('curpri', ctypes.c_int32),
+                ('priority', ctypes.c_int32), ('maxpriority', ctypes.c_int32), ('name', ctypes.c_char * 64)]
+
+
+def thread_cpu(pid):
+    """CPU seconds of each live thread of pid, by name (proc_pidinfo)."""
+    ids = (ctypes.c_uint64 * 4096)()
+    n = _libproc.proc_pidinfo(pid, 6, 0, ids, ctypes.sizeof(ids))  # PROC_PIDLISTTHREADS
+    out = {}
+    for i in range(max(n, 0) // 8):
+        info = ThreadInfo()
+        if _libproc.proc_pidinfo(pid, 5, ctypes.c_uint64(ids[i]), ctypes.byref(info), ctypes.sizeof(info)) <= 0:
+            continue
+        name = info.name.decode(errors='replace') or f'thread-{i}'
+        if i == 0:
+            name = 'main'
+        out[name] = out.get(name, 0) + (info.user_time + info.system_time) / 1e9
+    return out
+
+
 def cpu_of(ri):
     return (ri['user_time'] + ri['system_time']) * TICK_SECONDS
 
@@ -123,7 +146,25 @@ def measure(cmd, *, cwd=None, env=None, log=None):
 
     t = threading.Thread(target=reader, daemon=True)
     t.start()
+    threads = {}
+    finished = threading.Event()
+
+    def sampler():
+        # Per-thread CPU while the process runs; the last sample is kept
+        # (threads that exit earlier keep their last value). It never waits
+        # for the process: the measurement below must find it unreaped.
+        while not finished.is_set():
+            try:
+                for k, v in thread_cpu(proc.pid).items():
+                    threads[k] = max(threads.get(k, 0), v)
+            except OSError:
+                pass
+            time.sleep(1)
+
+    ts = threading.Thread(target=sampler, daemon=True)
+    ts.start()
     os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOWAIT)
+    finished.set()
     ri = rusage_info(proc.pid)
     _, status, ru = os.wait4(proc.pid, 0)
     wall = time.time() - started
@@ -146,6 +187,7 @@ def measure(cmd, *, cwd=None, env=None, log=None):
         'instructions': ri and ri['instructions'],
         'cycles': ri and ri['cycles'],
         'markers': markers,
+        'thread_cpu_seconds': dict(threads),
         'load_start': load0,
         'load_end': os.getloadavg(),
         'free_memory_start': mem0,

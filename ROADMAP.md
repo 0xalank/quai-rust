@@ -47,7 +47,7 @@ by the coordinator.
 | G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; tip mode: a state version per canonical block, reorgs across commits and a compaction and crashes in a reorg tested on the private fixture |
 | G6–G7 | P2P and sync | Mainnet sync by height from public peers; stateless head-follow live with every check and go-quai's head choice |
 | G8 | Mainnet shadow sync | Shadow run (test tool) and divergence detector; 2 h 20 min live, 0 divergences; the 2-week run not started |
-| G9 | Live RPC, tx pool, wallets | Reads on replayed state; tx pool equal to Go (363/363 oracle steps); filters, subscriptions and Qi wallet estimates missing |
+| G9 | Live RPC, tx pool, wallets | Reads on replayed state; tx pool equal to Go (363/363 oracle steps); filters and WebSocket subscriptions (311/311 oracle steps) and the Qi and conversion methods (385/385 oracle calls) equal to Go; Quais.js alpha.57 and alpha.58 run against the node; a submitted transaction reaches miners only through sharing clients |
 | G10–G11 | Production tests, mining | Not started |
 
 `NETWORK_READINESS.md` keeps the detailed gate definitions.
@@ -514,12 +514,98 @@ Gate: Quais.js and Pelagus work against the Rust node.
        Remaining differences: lockup-contract errors ("lockup error" where
        Go names the reason); the pointers that Go prints in "failed to
        apply transaction" (Rust prints 0xc000000000).
-       Left: filters (`newFilter`, `getFilterChanges` and the others) and
-       WebSocket subscriptions need the live head (Phase 2.3);
-       `sendRawTransaction` and the pending nonce: done in step 2. Not served:
-       Qi and conversion estimates, `quai_getLockedBalance`,
-       `quai_getProof`, the `eth_` namespace. A peer export has no
-       receipts: receipts are `null` and logs an error.
+       `sendRawTransaction` and the pending nonce: done in step 2. A peer
+       export has no receipts: receipts are `null` and logs an error.
+       Filters, subscriptions and the wallet methods done (branch
+       `rpc-complete`: `c44d848`, `e66e47a`, `4353ebb`, `0c5d77a`, `7654d4e`,
+       `e865954`, `35e1e37`, `4b9d3b1`).
+       go-quai's filter API and event system (`quai_rpc::native::filters`,
+       quai/filters/api.go and filter_system.go): `quai_newFilter`,
+       `quai_newBlockFilter`, `quai_newPendingTransactionFilter`,
+       `quai_getFilterChanges`, `quai_getFilterLogs` and
+       `quai_uninstallFilter`, with Go's criteria types (null included),
+       errors, IDs, 5-minute deadline and timeout ticker. JSON-RPC over
+       WebSocket (`quai_rpc::ws`) on the RPC listen address (an upgrade of
+       "/", as go-quai serves WebSocket on a shared HTTP port; loopback by
+       default; go-quai's origin rule, 32 MiB messages, a ping after 30 idle
+       seconds): `quai_subscribe` "newHeads" (`RPCMarshalWorkObject` v1),
+       "logs" and "newPendingTransactions", `*_unsubscribe` of the same
+       connection, batches, frames ending in a newline, notifications after
+       the subscribe answer, the subscription limit (`--rpc.ws-max-subs`,
+       1000). Head events follow go-quai's core: the logs of each block that
+       became canonical, oldest first, then one head event; never removed
+       logs. The Qi and conversion methods (`native::qi`): `quai_qiToQuai`,
+       `quai_quaiToQi`, `quai_calculateConversionAmount`,
+       `quai_estimateFeeForQi`, `quai_getOutpointDeltasForAddressesInRange`,
+       `quai_getLockedBalance`, `quai_getWrappedQiDeposit`,
+       `quai_listRunningChains`, and `net_listening`: 55 native methods.
+       Quotes keep `big.Int` signs (negative after KawPow below 3e11
+       difficulty); JSON members match without regard to case, as
+       encoding/json does (Quais.js sends `previousOutpoint` and `pubkey`).
+       New `ChainView` hooks, each with a default: `canonical_hash`,
+       `block_or_candidate`, `utxo_set_size`, `spent_utxos`, `locked_quai`,
+       `running_chains`; the store view implements all but `locked_quai`,
+       whose default is go-quai's answer without the address index (0x0).
+       Go oracles (`reference/filters`, `reference/qi-rpc`; the production
+       filter API, event system and rpc.Server over HTTP and WebSocket, and
+       the production quaiapi handlers), Rust tests through the RPC stack
+       (`tests/filters.rs` over HTTP and real WebSocket connections,
+       `tests/qi_rpc.rs`): filters and subscriptions 311/311 steps equal
+       (filters 185, expiry 29, subscriptions 72, limit 25; three runs),
+       Qi and conversion 385/385 calls equal (17 scenarios across KawPow,
+       ShaEquivalentDifficulty, ConversionLockChange and the negative
+       logarithm). Quais.js against the Rust node: `examples/fixture-rpc.rs`
+       serves the oracle's chain with a moving head (b3, b4, b7, a reorg to
+       c6, c7, c8, back to b8) and `sdk/fixture-subscriptions.cjs` runs the
+       real client (alpha.57 from the local checkout, alpha.58 as Pelagus
+       ships it): no error in either; "block" events through "newHeads" 4,
+       7, 6, 7, 8, 8 (one per head move, the reorgs included), polled
+       "block" events 4-8, log events through the "logs" subscription (6)
+       and through `quai_newFilter` polling (4), `getLogs` 5, and the head
+       block parses. Live, read-only, against the local go-quai node
+       (`examples/live-new-heads.rs`): 10 "newHeads" notifications of its
+       live head (zone 167,437-167,446) and the Rust payload of the Go
+       export's zone 27,397-27,406 have the same 115 member paths and types
+       (values: the oracle). Historical reads
+       (`scripts/check_wallet_rpc_live.py`, `quai-node rpc` on the replayed
+       store of the Go export, head 27,406, against the node at head
+       198,644): 451/451 answers equal: `quai_qiToQuai` 420 (60 random
+       blocks), `quai_getOutpointDeltasForAddressesInRange` 20 and its
+       errors 4 (all empty: zone 0 has no Qi output before the kick-in),
+       `quai_getLockedBalance` 3, identity methods 4. After `35e1e37`, the
+       same script on a store of zone 0-8 (node at head 200,616): 77/77
+       equal, with the locked Quai of the miners of zone 1-8 (2/2); the
+       locked Quai of the 26 Quai miners of the node's blocks
+       200,232-200,632: 26/26 equal (0x0 on both). A filter on the
+       node's new blocks cannot be compared live: the Rust view is fixed.
+       Remaining differences from Go: go-quai drops events when a
+       subscriber is busy (non-blocking sends into channels of 0 or 10
+       entries) and orders notifications of different subscriptions by
+       goroutine scheduling; Rust queues up to 4,096 messages per
+       connection and sends logs before the head. Rust counts the
+       subscription limit when the call returns (Go in a goroutine). Inside
+       a notification, members are in sorted order where Go writes struct
+       order (equal as JSON). A WebSocket syntax error answers "parse error"
+       (Go: its JSON decoder's text); both then close. `quai_getFilterLogs`
+       and `quai_getLogs` return logs in block order (Go: in the order its 8
+       goroutines finish). Not served: the subscriptions "newHeadsV2",
+       "newChainBlocks(V2)", "newWorkshares(V2)", "accesses",
+       "pendingHeader" and "blockTemplateUpdates" (they need appended-block,
+       gossip-workshare and unlock events from the processor, or a miner),
+       the `eth_` namespace, `quai_getPendingHeader` (a miner),
+       `txpool_getRollingFeeInfo` (the processor's per-block fee figures),
+       `quai_getProof`, `quai_clientVersion` and `web3_clientVersion`.
+       `quai_getLockedBalance` of a Quai address answers 0x0, as go-quai
+       does without `--node.index-address-utxos` (its default; the local
+       node ran so). Pelagus reads it with each Quai
+       balance and shows no balance when it fails. The value of an indexing
+       node needs the processor's lock and unlock amounts per block (the
+       `locked_quai` hook). `quai_getOutpointDeltasForAddressesInRange`
+       needs the block store with UTXO tables; its trimmed outputs come in
+       the processor's order (Go: its trim journal's), and spent outputs of
+       a block that a reorg removed, or created below the store's base, are
+       unavailable. `quai_estimateFeeForQi` needs state (the head's UTXO set
+       size).
 2. [x] Tx pool and `sendRawTransaction` (`txpool` branch: `1be8b61`,
        `da7fc2a`, `6e32bff`, `65effe2`, `f83d499`, `d6e1b0d`, `0f9ddd5` and
        the commit of this text). `crates/quai-node/src/txpool` ports go-quai
@@ -587,11 +673,8 @@ Gate: Quais.js and Pelagus work against the Rust node.
        processor's fee window) is not served. Left for the Phase 3 gate
        (wallets): a submitted transaction reaches miners only through sharing
        clients (go-quai v0.57.0 has no transaction gossip, and the node
-       publishes no workshares); filters and WebSocket subscriptions (step 1);
-       the Qi and conversion methods Quais.js calls (`quai_estimateFeeForQi`,
-       `quai_calculateConversionAmount`, `quai_qiToQuai`, `quai_quaiToQi`,
-       `quai_getOutpointDeltasForAddressesInRange`, `quai_getLockedBalance`)
-       and `quai_listRunningChains`, `quai_getPendingHeader`.
+       publishes no workshares). Filters, WebSocket subscriptions and the Qi
+       and conversion methods: done in step 1.
 3. [ ] Fuzz every decoder. Remove `.unwrap()` from code that reads peer data
        (457 calls in non-test code on 2026-11-17).
        Started (`5df7277`): deterministic fuzz-style tests on stable Rust for
@@ -814,6 +897,67 @@ Mining, block templates and Stratum come last.
     `quai_sendRawTransaction`'s decode error text differs between go-quai
     builds.
 
+- Filters and subscriptions (quai/filters, rpc/), found by the filter
+  oracle (`reference/filters`):
+  - Nothing sends `RemovedLogsEvent`: `BodyDb.rmLogsFeed` (core/bodydb.go:33)
+    is only subscribed (:263). After a reorg, filters and "logs"
+    subscriptions get the new branch's logs and never `"removed": true`.
+  - A head move sends each new canonical block's logs (core/headerchain.go:924)
+    and one `ChainHeadEvent` (core/slice.go:2073); block filters subscribe to
+    head events (quai/filters/api.go:229), so after a jump or a reorg a block
+    filter and "newHeads" get only the final head.
+  - Events go through non-blocking sends (filter_system.go:421-425, 445,
+    465, 510) into unbuffered channels (api.go:228, 715, 770): a burst
+    drops events while a subscriber is busy. `handleLogs` logs "Failed to
+    deliver logs event" when delivery succeeds and nothing when it drops
+    (filter_system.go:422-424).
+  - A filter with toBlock "pending" and a from block of "latest" or a number
+    is a `MinedAndPendingLogsSubscription` (filter_system.go:265) that no
+    handler reads: it never receives logs. A "pending"/"pending" filter gets
+    only the miner's pending logs. `quai_getFilterLogs` of both returns the
+    head's logs (filter.go:135).
+  - A criteria's `blockHash` is ignored by live events: such a filter or
+    subscription receives every new log (filter_system.go:219).
+  - Any `<namespace>_unsubscribe` cancels a subscription of its connection,
+    whatever the namespace (rpc/handler.go:368); `["logs", null]` subscribes
+    to all logs (api.go:970).
+  - The subscription limit is a plain int incremented in the subscription's
+    goroutine after the call returns (api.go:177-198 and the other
+    subscription methods): concurrent subscribes can pass it. `Logs`
+    creates the RPC subscription before its range check (api.go:714-719).
+  - An unpolled filter lives one to two timeouts (5 to 10 minutes): the
+    timeout loop removes it at the first tick after its deadline (api.go:85,
+    102, 109).
+
+- The Qi and conversion methods (internal/quaiapi/quai_api.go), found by the
+  Qi oracle (`reference/qi-rpc`):
+  - `quai_quaiToQi` prices the requested header with the current block's
+    prime terminus (:1620); `quai_qiToQuai` uses the header's own (:1591).
+  - `quai_calculateConversionAmount` reads `BlockByNumber(primeTerminusNumber
+    - 4000)` as a zone number (:1751); a missing block is (nil, nil) and
+    the rate read panics ("method handler crashed"). It checks the ledger
+    bits only, so addresses of other zones convert.
+  - `quai_estimateFeeForQi` converts with the head's own difficulty (:1051,
+    :1064) where the quotes use the prime terminus' miner difficulty.
+  - After KawPow a difficulty below `KQuaiDifficultyDivisor` (3e11) makes
+    `CalculateQuaiReward` negative (consensus/misc/rewards.go:218-233), and
+    the conversion methods answer negative amounts ("-0x...").
+  - `quai_getOutpointDeltasForAddressesInRange` derives "created" outputs
+    from the block's transactions, not from the UTXOs execution created
+    (:449-600): a coinbase to a Qi address before ControllerKickIn is listed
+    although execution creates no output. A missing parent header panics in
+    `rawdb.FindCommonAncestor` (core/rawdb/accessors_chain.go:893-898).
+  - `quai_getLockedBalance` of a Quai address reads an index that only nodes
+    with `--node.index-address-utxos` write (core/state_processor.go:1357);
+    the flag is off by default (cmd/utils/flags.go:587-591), and such a
+    node answers 0x0 for every address. An unlock larger than the record
+    clamps it to 0 (core/rawdb/accessors_chain.go:2150-2160).
+  - "pending" makes `quai_getWrappedQiDeposit` read an empty
+    `state.StateDB{}` and crash (quai/api_backend.go:185-187).
+  - Quais.js sends `previousOutpoint` and `pubkey`; go-quai accepts them
+    only because encoding/json matches member names without regard to case
+    (core/types/utxo.go:387-390).
+
 ## Findings in macOS libmalloc
 
 - macOS 26.1-26.3 (libmalloc 792.41.1, 792.60.6, 792.80.2),
@@ -874,3 +1018,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-19 | Phase 1 | Rolling replay with `23d29bd`: 18 passes from zone 1,675,221 to 3,300,000, every root equal, 61–65 blocks/s per pass with 6 PoW threads while the host was quiet. User-approved cleanup: the go-quai node DB and logs, `peer-export-genesis` and the old 720k replay folder deleted (41 GiB free). Perf (`4532ce2`) and head-follow (`f5e0c58`) merged; the rolling replay continues with `quai-node-f5e0c58` (sha256 `38ef65a0…`) from checkpoint 3,300,000 |
 | 2026-11-19 | Phase 2.4, 4 | Merged main `f5e0c58` (perf and head-follow): coordinator rerun 467/467 workspace in 75 suites, 45/45 `quai-network --features native-transport`, fmt clean. The 2-week stateless shadow run started at 16:04Z (`scripts/mainnet/shadow_run.sh`, test-only `--shadow-bootstrap auto`, `quai-node-f5e0c58`, no block store, metrics on 127.0.0.1:9102, divergences in `shadow/quai-node/node/divergences.jsonl`), ending about 2026-12-03 |
 | 2026-11-19 | Phase 2.3, 2.4 | The first shadow run stopped after 969 heights at zone 11,212,903, 70 below the peers' head: the by-number sync asked for a prime batch past the peers' head ("missing: prime 2480940 blocks") and `shadow_run.sh` took the failure for a divergence. No block failed a consensus check. `shadow_run.sh` now restarts after a "peer data" failure (`c08d4f6`); the run resumed at 16:16Z and follows the head through gossip from zone 11,213,029. Open (node): clip by-number batches at the peers' head, or switch to gossip intake before the last batch |
+| 2026-11-19 | Phase 3.1 | Filters, WebSocket subscriptions and the Qi wallet methods (`c44d848`, `e66e47a`, `4353ebb`, `0c5d77a`, `7654d4e`, `e865954`, merges of main `54b5052`, `d86ecf0` and `7d461fc`, `35e1e37`, `4b9d3b1`, and the commit of this row): go-quai's filter API and event system (`quai_newFilter`, `quai_newBlockFilter`, `quai_newPendingTransactionFilter`, `quai_getFilterChanges`, `quai_getFilterLogs`, `quai_uninstallFilter`), JSON-RPC over WebSocket on the RPC listen address with `quai_subscribe` "newHeads", "logs", "newPendingTransactions" and `*_unsubscribe`, and `quai_qiToQuai`, `quai_quaiToQi`, `quai_calculateConversionAmount`, `quai_estimateFeeForQi`, `quai_getOutpointDeltasForAddressesInRange`, `quai_getLockedBalance`, `quai_getWrappedQiDeposit`, `quai_listRunningChains`, `net_listening` (55 native methods). Go oracles `reference/filters` (production filter API, event system, rpc.Server over HTTP and WebSocket; 4 scenarios, 311 steps) and `reference/qi-rpc` (production quaiapi handlers; 17 scenarios, 385 calls), each generated three times byte-identical: Rust 311/311 steps (three runs) and 385/385 calls equal. Quais.js alpha.57 and alpha.58 against the Rust node (`examples/fixture-rpc.rs`, `sdk/fixture-subscriptions.cjs`): no error; newHeads, logs, filter polling, getLogs and the head block work. Live, read-only, local go-quai: newHeads structure 115/115 member paths equal; historical wallet reads 451/451 equal (qiToQuai 420, outpoint deltas 20 and 4 errors, locked balance 3, identity 4). Replay of the Go export 0-27,406 with `--state` from genesis in a fresh datadir, binary of `d86ecf0` (main `2a84775` merged; sha256 `d218285f`): PASS, 27,406 zone blocks executed with all state roots equal (655.3 s, 41.8 blocks/s under load 130-150); before the merges, `--state --store` with this branch's binary (sha256 `2f09acf6`): PASS (11,171.7 s). This branch does not change replay.rs, processor.rs, execution, consensus or store. Tests on `d86ecf0` (main `2a84775` merged; `7d461fc` then merges main `bd689c8`, which changes only ROADMAP.md and scripts/mainnet/shadow_run.sh): `cargo test --release --locked --workspace --no-fail-fast` 77 suites, 477 passed, 0 failed, 0 ignored (2 h 9 min at load 100-170, no libmalloc abort); fmt clean; clippy on quai-rpc and quai-node: no errors and no warnings in those crates (47 in crates that this branch does not change). Two earlier runs on `35e1e37` did not finish: cargo got SIGTERM from outside at the disk floor in one, and I stopped one at 25.7 GiB free (logs in `results/rpc-complete/`). The live checks ran before the Go node was stopped |

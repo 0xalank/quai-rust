@@ -238,6 +238,42 @@ fn head_entropy_is_computed_as_the_child_records_it() {
     assert_eq!(v.head(), 8);
 }
 
+#[test]
+fn locked_quai_reads_zero_as_go_quai_without_the_address_index() {
+    // go-quai writes the locked Quai of an address only with
+    // --node.index-address-utxos (core/state_processor.go WriteNewLockups),
+    // which is off by default; rawdb.ReadLockedBalance then reads 0 for
+    // every address. The local go-quai node answers "0x0" for these miners.
+    // These views keep no lock and unlock amounts, so they give that answer.
+    for v in [view(), store_view(true)] {
+        let mut miners = std::collections::BTreeSet::new();
+        for h in 1..=8u64 {
+            let block = quai_rpc::native::dispatch(
+                v.as_ref(),
+                "quai_getBlockByNumber",
+                &serde_json::json!([format!("{h:#x}"), false]),
+            )
+            .unwrap();
+            let miner = block["woHeader"]["primaryCoinbase"].as_str().unwrap();
+            // Quai ledger: the ninth bit of the address is 0.
+            assert!(
+                u8::from_str_radix(&miner[4..6], 16).unwrap() < 0x80,
+                "{miner}"
+            );
+            miners.insert(miner.to_string());
+        }
+        assert_eq!(miners.len(), 2);
+        for m in &miners {
+            let got = quai_rpc::native::dispatch(
+                v.as_ref(),
+                "quai_getLockedBalance",
+                &serde_json::json!([m]),
+            );
+            assert_eq!(got.unwrap(), "0x0", "{m}");
+        }
+    }
+}
+
 /// The view with stored logs added to the receipts of block 7. go-quai has
 /// no logs before the first user transaction (zone 259,200), so the shape of
 /// a log, its indices and the filter rules are checked against go-quai's

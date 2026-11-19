@@ -53,7 +53,7 @@ use quai_execution::{
 use quai_primitives::{transaction::Address, work::WorkObject, Hash};
 use quai_rpc::view::{
     AccountState, BlockData, CallError, CallRequest, CallResult, ChainView, LogData, OutpointData,
-    ReceiptData, TxPosition, UncleKind, UtxoData, ViewError, U256,
+    ReceiptData, SpentUtxo, TxPosition, UncleKind, UtxoData, ViewError, U256,
 };
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
@@ -119,6 +119,20 @@ trait Blocks: Send + Sync {
     fn created(&self, height: u64) -> Result<Vec<OutPoint>, ViewError>;
     /// The indexed outpoints of an address; None: no index here.
     fn outpoints(&self, address: &Address) -> Result<Option<Vec<OutPoint>>, ViewError>;
+    /// The number of any kept block, canonical or not.
+    fn candidate_height(&self, _hash: &Hash) -> Result<Option<u64>, ViewError> {
+        Ok(None)
+    }
+    /// The outputs canonical block `height` removed, with their owners
+    /// (trimmed outputs first, then Qi inputs); None: not kept.
+    fn spent(&self, _height: u64) -> Result<Option<Vec<(OutPoint, Address)>>, ViewError> {
+        Ok(None)
+    }
+    /// The outputs canonical block `height` created, with their entries;
+    /// None: not kept.
+    fn created_entries(&self, _height: u64) -> Result<Option<Vec<blockstore::Created>>, ViewError> {
+        Ok(None)
+    }
 }
 
 /// Where a zone record's bytes are.
@@ -341,6 +355,25 @@ impl Blocks for StoreBlocks {
             .outpoints(address)
             .map(Some)
             .map_err(store_error)
+    }
+    fn candidate_height(&self, hash: &Hash) -> Result<Option<u64>, ViewError> {
+        Ok(self
+            .reader
+            .block(hash)
+            .map_err(store_error)?
+            .map(|b| b.number))
+    }
+    fn spent(&self, height: u64) -> Result<Option<Vec<(OutPoint, Address)>>, ViewError> {
+        if !self.reader.keeps_utxos() || height > self.head {
+            return Ok(None);
+        }
+        self.reader.spent(height).map_err(store_error)
+    }
+    fn created_entries(&self, height: u64) -> Result<Option<Vec<blockstore::Created>>, ViewError> {
+        if !self.reader.keeps_utxos() || height > self.head {
+            return Ok(None);
+        }
+        self.reader.created(height).map_err(store_error)
     }
 }
 
@@ -1390,6 +1423,96 @@ impl ChainView for ExportView {
     }
     fn pool_stats(&self) -> Option<(u64, u64, u64)> {
         Some(self.pool.as_ref()?.rpc_stats())
+    }
+    fn canonical_hash(&self, number: u64) -> Result<Option<Hash>, ViewError> {
+        self.snap().blocks.hash_at(number)
+    }
+    fn block_or_candidate(&self, hash: &Hash) -> Result<Option<Arc<BlockData>>, ViewError> {
+        if let Some(b) = self.block_by_hash(hash)? {
+            return Ok(Some(b));
+        }
+        // A block a reorg left behind: the store keeps its bytes.
+        let snap = self.snap();
+        match snap.blocks.candidate_height(hash)? {
+            Some(h) => self.load_known(&snap, h, *hash).map(Some),
+            None => Ok(None),
+        }
+    }
+    fn utxo_set_size(&self, block: &BlockData) -> Result<u64, ViewError> {
+        let snap = self.snap();
+        match &snap.state {
+            Some(s) if block.hash == snap.head_hash => Ok(s.state.utxos.consensus_size()),
+            Some(_) => Err(ViewError::Unavailable(
+                "the UTXO set size of a block other than the head".into(),
+            )),
+            None => Err(ViewError::Unavailable(
+                "the UTXO set size (this node runs without state)".into(),
+            )),
+        }
+    }
+    fn spent_utxos(&self, block: &BlockData) -> Result<Vec<SpentUtxo>, ViewError> {
+        use quai_primitives::transaction::Kind;
+        let snap = self.snap();
+        if snap.blocks.hash_at(block.number)? != Some(block.hash) {
+            return Err(ViewError::Unavailable(
+                "the spent outputs of a block that is not canonical".into(),
+            ));
+        }
+        let Some(spent) = snap.blocks.spent(block.number)? else {
+            return Err(ViewError::Unavailable(
+                "the spent outputs of a block (this view keeps no UTXO journal)".into(),
+            ));
+        };
+        // go-quai's journals: the inputs of the block's Qi transactions,
+        // then the trimmed outputs.
+        let owners: BTreeMap<OutPoint, Address> = spent.iter().cloned().collect();
+        let mut order: Vec<OutPoint> = vec![];
+        for tx in block.object.transactions() {
+            if let Kind::Qi(q) = tx.kind() {
+                for i in &q.inputs {
+                    let p = OutPoint {
+                        hash: i.hash,
+                        index: i.index,
+                    };
+                    if owners.contains_key(&p) && !order.contains(&p) {
+                        order.push(p);
+                    }
+                }
+            }
+        }
+        for (p, _) in &spent {
+            if !order.contains(p) {
+                order.push(*p);
+            }
+        }
+        let mut out = vec![];
+        for p in order {
+            // The entry: the block that created the output keeps it.
+            let mut entry = None;
+            for (height, _) in snap.blocks.tx_candidates(&p.hash)? {
+                if let Some(list) = snap.blocks.created_entries(height)? {
+                    if let Some(c) = list.into_iter().find(|c| c.point == p) {
+                        entry = Some(c);
+                        break;
+                    }
+                }
+            }
+            let c = entry.ok_or_else(|| {
+                ViewError::Unavailable(format!(
+                    "the entry of spent output {}:{}",
+                    qex::hex(&p.hash),
+                    p.index
+                ))
+            })?;
+            out.push(SpentUtxo {
+                tx_hash: p.hash,
+                index: p.index,
+                denomination: c.denomination,
+                address: owners.get(&p).copied().unwrap_or(c.address),
+                lock: trim(&c.lock),
+            });
+        }
+        Ok(out)
     }
 }
 

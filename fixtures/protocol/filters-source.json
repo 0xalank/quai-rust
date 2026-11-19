@@ -1,0 +1,38 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "571a5c22eee8850a3374ec434151ebf0605cd2dace9790bb01fec92d50b3f167",
+  "driver_sha256": "c7dd58725a37e0f973ea01b97678fd95c9d6d41e21f2eef75cc808315ac155e1",
+  "oracle_sources": {
+    "reference/filters/main.go": "b90664a5b6ec7651e5d8b721d394cd26ea6eb2ebac25561fa7b92cc1f278985b"
+  },
+  "go_sources": {
+    "quai/filters/api.go": "3c58a435533a139a2c2398961cce6f80d427828ad13c2a86800c9ded587a2f1a",
+    "quai/filters/filter.go": "2f2dc38698e9a92609d12e9716bae0b454554e1b041f83a473e000403f4c48df",
+    "quai/filters/filter_system.go": "534682e51473071e7dd71616de76741d03891fa778b275f8da6aed150dcdaa4e",
+    "rpc/handler.go": "de80c856ea23bce4b3187144400d441f8c0e755bb8b929750392a40ea769c88a",
+    "rpc/json.go": "975b8e28413be9c36b3edeecd5532d3b1d02977111505b6947eeb64f936ca553",
+    "rpc/subscription.go": "1686a5a64456e578e9be47b9a1b546b12c7950158cc03af0e27fbf0fcff0cdd9",
+    "rpc/websocket.go": "0eee6c5922be0f9188ca4452488e28d3921a938068117d3a469c84e19ba929e5",
+    "rpc/server.go": "2c172af24180ac34f97d4ec9fad277b690b8e4e7f23457b9b12847a2482ef48c",
+    "rpc/http.go": "c52c1ab14f9a2e22e6964dafa3753a7812a269c27cd857f9d467f1c13ce32c32",
+    "rpc/service.go": "f734058c4828a3eb702b99bf9d8bc953fd044def159af61829d4ddad80388869",
+    "rpc/types.go": "a3875afd0f147c211adb20b1f69b67ab88274e14d94546943652c7493a7561a3",
+    "rpc/errors.go": "f25452450f0e4e34a14ee02b807209689c38cf332e817dc70c51b7017ec35436",
+    "core/headerchain.go": "c356d8c34b0fb4f1eacefefa14d66438c234d24a7a2636381ccdf61be4b9868f",
+    "core/slice.go": "26f207c053321734a2cc33631b4039b66686f36ef16d86178e15dbd920d2cf1f",
+    "core/bodydb.go": "19c7f7238fa89f0d24cc1b886a1ba1c202b65a8c8565793888aa79c41e860368",
+    "core/events.go": "d46e5e31121199ac38860cb4551a9587824565d3c4a56b153b72f5ef36f2e021",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "core/types/log.go": "5f6d03c7a470ae1906fd336ac88660765668495188439ce8f789a72fa0fd6291",
+    "core/types/transaction_marshalling.go": "4617e09cdb6a851e0b76a40ea5bdc34cc27dbc9b3026672f4dfc03674731b146",
+    "core/types/receipt.go": "6a0dbc7fc21a960e44b92b0365a72b2c7fc27a1162c8303e0e91f10294ee1c3e",
+    "core/rawdb/accessors_chain.go": "917b3c97845995643557d06096c2722e0f4f00f9b66d9a4a8d2e09e7f702a2e7",
+    "quai/backend.go": "caf69f4358cbc2f6a1d0cadc4e2d2a59f725e00f7db2e41fe7dc4a99b9f33659",
+    "quai/api_backend.go": "e7d1816e79bf6b5f721ccd65018bc9d0a7557fc3a212951055ddee9d3b2cda92",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "Production quai/filters PublicFilterAPI and EventSystem behind one rpc.Server (namespace quai) over HTTP (Server.ServeHTTP) and WebSocket (Server.WebsocketHandler), with raw gorilla/websocket clients, over a test chain in a rawdb memory database (work objects with Quai, external and Qi transactions, stored receipts with logs, uncles, a side branch from b4). Events as go-quai v0.57.0 core emits them: a head move rewrites the canonical index; each block that becomes canonical, oldest first, sends its logs (the stored receipts' logs with derived fields) on the logs feed when it has any; then one ChainHeadEvent carries the new head read back from the database; no RemovedLogsEvent and no ChainEvent (nothing in v0.57.0 sends them for a head move). Sends are paced by 50 ms; a notifications step waits for 500 ms without frames. IDs are replaced by $F<n> and $S<n> in order of first appearance; by_subscription lists every subscription that received a notification since the connection's previous notifications step (others received none); steps marked sorted had their multi-block log list sorted by block number and log index (Filter.Logs appends goroutine results in completion order). Fixed-seed keys; no network, no real funds."
+}

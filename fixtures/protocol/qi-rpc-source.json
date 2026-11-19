@@ -1,0 +1,37 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "cff31ca2f8ccd424551908f94ea13754b6f1d08eb0b63b60a39532c0bd72f374",
+  "driver_sha256": "130ea79d4d696829702f8dde5e7c50046b206188bb2f17975c26401a9bd067e6",
+  "oracle_sources": {
+    "reference/qi-rpc/main.go": "19220b8cb4e5d90f32f00e17463a1170605b89e8e6584353e9ba85319ce665d6"
+  },
+  "go_sources": {
+    "internal/quaiapi/quai_api.go": "033048c2e5d698224bd7a7d0b7bcc79dc802e0d9a8e79069fb7c9994d0d3d97c",
+    "internal/quaiapi/transaction_args.go": "12d1e238f569d707cbd64afc4f36ae0bf8b0aa9a45f1afb9c0f06c8ddf186454",
+    "internal/quaiapi/backend.go": "36b1acb0c9f9627faf9f919d7f682c90b686137a6baf2416c69910d6a0b76e11",
+    "quai/api_backend.go": "e7d1816e79bf6b5f721ccd65018bc9d0a7557fc3a212951055ddee9d3b2cda92",
+    "consensus/misc/rewards.go": "177cd8e84c89fc5dc478b91f0687dc8a68bb507b42b3835a8c8900923d1140a0",
+    "core/types/qi_tx.go": "ccc062ce9a15b57db07d3fdfb47a2f574f38ce6f0e5d08981cf33e4969251a61",
+    "core/types/utxo.go": "e6789ad476704e88cee846b12f27d00132175299d3119e0c5eefa9b8dfded498",
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "core/types/external_tx.go": "9b8719f0681f8d6ccc7f80d91ff07604488acf080867deca9e4136e6e4979450",
+    "core/types/transaction.go": "a629fe1c32e8e4e73091540fed92c8aa0c20e070332a565708e0a5c91890f169",
+    "core/rawdb/accessors_chain.go": "917b3c97845995643557d06096c2722e0f4f00f9b66d9a4a8d2e09e7f702a2e7",
+    "core/core.go": "13da03e9b45895043ba0f41616a8888726ef659b7b7a50bc975e924231a0745c",
+    "core/vm/contracts.go": "4854f9498dda1d7c8368874b82383fc7e6cd138e78520f8e268c2310519fd1ea",
+    "core/state/statedb.go": "84bece787e5207237c612a7d2659a3692e4c6a1686f7e89343642444b5427f3e",
+    "params/protocol_params.go": "05d21d2d770bf852affd078331ec351231404710869364f6a3d1d0f226071c09",
+    "rpc/handler.go": "de80c856ea23bce4b3187144400d441f8c0e755bb8b929750392a40ea769c88a",
+    "rpc/json.go": "975b8e28413be9c36b3edeecd5532d3b1d02977111505b6947eeb64f936ca553",
+    "rpc/server.go": "2c172af24180ac34f97d4ec9fad277b690b8e4e7f23457b9b12847a2482ef48c",
+    "rpc/http.go": "c52c1ab14f9a2e22e6964dafa3753a7812a269c27cd857f9d467f1c13ce32c32",
+    "rpc/types.go": "a3875afd0f147c211adb20b1f69b67ab88274e14d94546943652c7493a7561a3",
+    "common/address.go": "5b1a3ab95391b2e6d50ef7bfcc3eba3f9eb2419ac125ee67e6d75c24c886965e",
+    "common/types.go": "7bc526e37b42e1a33adb096d652f0eed153eea4239e73f9cff3b7a207a854912",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "go-quai v0.57.0 production PublicBlockChainQuaiAPI handlers (quai_qiToQuai, quai_quaiToQi, quai_calculateConversionAmount, quai_estimateFeeForQi, quai_getOutpointDeltasForAddressesInRange, quai_getLockedBalance, quai_listRunningChains, quai_getWrappedQiDeposit) behind rpc.Server over HTTP, with a backend that mirrors quai/api_backend.go over oracle-built work objects (encoded and decoded as the database returns them), a rawdb memory database (canonical index, UTXO set sizes, UTXOs and the address index, spent and trimmed journals, address lockups written by rawdb.WriteNewLockups) and committed state. Every block of chain.blocks is known by hash in every scenario; the canonical index is per scenario. Blocks whose prime terminus number is at or after the end of the KawPow transition and that have no AuxPow all hash to blake3 of an empty AuxPow; they are linked and looked up by a synthetic id (the fixture hash), except d7, which keeps that real hash. The oracle has no miner: the pending block is nil. Fixed-seed keys; no network, no real funds."
+}

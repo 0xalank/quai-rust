@@ -833,8 +833,8 @@ impl Sched {
             self.zone_end = end;
             self.fill();
         }
-        for c in 0..2 {
-            self.dom_end[c] = if best[c] > 0 { best[c] + 1 } else { 0 };
+        for (end, best) in self.dom_end.iter_mut().zip(best) {
+            *end = if best > 0 { best + 1 } else { 0 };
         }
     }
     /// A batch that the best peer head does not cover yet, or only just:
@@ -1277,8 +1277,8 @@ async fn head_poll(src: Arc<Source>, shared: Arc<Shared>) {
             if heads[ZONE] >= from[ZONE] {
                 src.heads[ZONE].store(heads[ZONE], Ordering::Relaxed);
             }
-            for c in 0..2 {
-                src.heads[c].store(heads[c], Ordering::Relaxed);
+            for (head, value) in src.heads.iter().zip(heads).take(2) {
+                head.store(value, Ordering::Relaxed);
             }
             shared.update_end();
         }
@@ -2064,8 +2064,8 @@ mod tests {
         /// Head polls: peer `i` reports `heads[i]`.
         fn report(&mut self, heads: &[[u64; 3]]) {
             for (r, h) in self.reported.iter().zip(heads) {
-                for c in 0..3 {
-                    r[c].store(h[c], Ordering::Relaxed);
+                for (head, value) in r.iter().zip(h) {
+                    head.store(*value, Ordering::Relaxed);
                 }
             }
             self.update_end();
@@ -2182,7 +2182,7 @@ mod tests {
             "prime head {} covers the batch",
             head[0]
         );
-        let peers = vec![head; 8];
+        let peers = [head; 8];
         // go-quai's answer, as the peers gave it.
         let job = Job {
             ctx: 0,
@@ -2239,7 +2239,7 @@ mod tests {
         // to 11,213,222 (prime block 2,480,959) are delivered, and zone
         // height 11,213,223 (prime number 2,480,960) waits for prime batch
         // 2,480,960..=2,480,969.
-        let later = vec![slice.heads_at(11_213_300); 8];
+        let later = [slice.heads_at(11_213_300); 8];
         assert_eq!(later[0][0], 2_480_963);
         sim.report(&later);
         let stop = sim.pass(&slice, &later).expect("no failure");
@@ -2255,7 +2255,7 @@ mod tests {
         // Every block a prime block: the dominant batches never wait.
         let slice = Slice::new(1_000, 100, 200, 2_000, |_| 0);
         for head in [1_500, 1_503, 1_509] {
-            let peers = vec![slice.heads_at(head); 3];
+            let peers = [slice.heads_at(head); 3];
             let mut sim = Sim::new(&slice, 1_200, 64, peers.len());
             sim.report(&peers);
             let stop = sim.pass(&slice, &peers).unwrap();
@@ -2275,14 +2275,14 @@ mod tests {
         let slice = shadow_stop_slice();
         let head = slice.heads_at(11_213_300);
         let mut sim = Sim::new(&slice, 11_212_600, 64, 8);
-        sim.report(&vec![head; 8]);
+        sim.report(&[head; 8]);
         // The peers claim the heads but hold nothing from prime block
         // 2,480,940 on (as a peer with a damaged database would).
         let broken: Vec<[u64; 3]> = (0..8).map(|_| [2_480_939, head[1], head[2]]).collect();
         let e = loop {
             match sim.pass(&slice, &broken) {
                 Err(e) => break e,
-                Ok(_) => sim.report(&vec![head; 8]),
+                Ok(_) => sim.report(&[head; 8]),
             }
         };
         assert_eq!(

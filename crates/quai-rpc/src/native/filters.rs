@@ -176,6 +176,8 @@ struct State {
     active: usize,
     /// The canonical chain the event loop last saw (recent part).
     chain: BTreeMap<u64, Hash>,
+    /// The head of the last head event.
+    last: Option<Hash>,
     /// Head events handled so far.
     handled: u64,
 }
@@ -247,7 +249,9 @@ impl FilterApi {
         let view = api.view.pinned().unwrap_or_else(|| api.view.clone());
         let head = view.head();
         if let Ok(Some(b)) = view.block_by_number(head) {
-            api.lock().chain.insert(head, b.hash);
+            let mut st = api.lock();
+            st.chain.insert(head, b.hash);
+            st.last = Some(b.hash);
         }
         api
     }
@@ -510,7 +514,7 @@ impl FilterApi {
         };
         let (known, wants_logs) = {
             let mut st = self.lock();
-            if st.chain.get(&head.number) == Some(&head.hash) {
+            if st.last == Some(head.hash) {
                 st.handled += 1;
                 return;
             }
@@ -524,6 +528,13 @@ impl FilterApi {
         let mut fresh: Vec<(u64, Hash)> = vec![(head.number, head.hash)];
         let mut ancestor = None;
         let mut n = head.number;
+        if known.get(&head.number) == Some(&head.hash) {
+            // The head moved back onto a block that is already canonical: a
+            // rollback with no new block, so no logs, only the head event.
+            fresh.clear();
+            ancestor = Some(head.number);
+            n = 0;
+        }
         while n > 0 && n > lowest && fresh.len() < MAX_WALK {
             let Ok(Some(hash)) = view.canonical_hash(n - 1) else {
                 break;
@@ -569,7 +580,7 @@ impl FilterApi {
         }
         let mut st = self.lock();
         // Remember the new canonical chain.
-        let keep_below = ancestor.map_or(fresh[0].0, |a| a + 1);
+        let keep_below = ancestor.map_or_else(|| fresh.first().map_or(0, |f| f.0), |a| a + 1);
         st.chain.retain(|n, _| *n < keep_below);
         for (n, h) in &fresh {
             st.chain.insert(*n, *h);
@@ -617,6 +628,7 @@ impl FilterApi {
                 s.notify(id, v);
             }
         }
+        st.last = Some(head.hash);
         st.handled += 1;
     }
     /// The number of head events handled (tests wait on it).

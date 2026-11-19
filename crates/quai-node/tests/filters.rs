@@ -554,3 +554,70 @@ fn filters_and_subscriptions_match_go() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert_eq!(total, 311);
 }
+
+/// A head that moves back onto a block that is already canonical (a
+/// rollback with no new block): go-quai's `SetCurrentHeader` appends no
+/// block, so no logs, and `GeneratePendingHeader` still sends one head
+/// event. Not in the Go oracle; from core/headerchain.go and core/slice.go.
+#[test]
+fn rollback_onto_a_canonical_block_sends_only_the_head() {
+    let c = corpus();
+    let chain = chain(&c);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let view = Arc::new(View::new(chain.clone(), chain.names["b3"]));
+        let app = quai_rpc::App::native(
+            quai_rpc::Config {
+                mode: "native".into(),
+                ..quai_rpc::Config::default()
+            },
+            view.clone(),
+        )
+        .unwrap();
+        let api = app.filter_api().unwrap().clone();
+        let call = |method: &str, params: Value| {
+            let app = app.clone();
+            let body = serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params});
+            async move {
+                let out = app.handle(body.to_string().as_bytes()).await.unwrap();
+                serde_json::from_slice::<Value>(&out).unwrap()["result"].clone()
+            }
+        };
+        let blocks = call("quai_newBlockFilter", Value::Array(vec![])).await;
+        let logs = call("quai_newFilter", serde_json::json!([{}])).await;
+        let mut handled = api.handled();
+        for name in ["b5", "b4"] {
+            let h = chain.names[name];
+            view.set_head(h);
+            view.events.send(h).unwrap();
+            while api.handled() == handled {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            handled = api.handled();
+            let hashes = call("quai_getFilterChanges", serde_json::json!([blocks])).await;
+            assert_eq!(
+                hashes,
+                serde_json::json!([quai_primitives::encode_hex(&h)]),
+                "{name}"
+            );
+            let got = call("quai_getFilterChanges", serde_json::json!([logs])).await;
+            let numbers: Vec<&str> = got
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| l["blockNumber"].as_str().unwrap())
+                .collect();
+            if name == "b5" {
+                // b4 and b5 became canonical.
+                assert!(numbers.iter().all(|n| *n == "0x4" || *n == "0x5"));
+                assert!(numbers.contains(&"0x4"), "{numbers:?}");
+            } else {
+                assert!(numbers.is_empty(), "rollback sent logs {numbers:?}");
+            }
+        }
+    });
+}

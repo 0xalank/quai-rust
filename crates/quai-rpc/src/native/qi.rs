@@ -961,12 +961,14 @@ mod tests {
     use super::*;
     #[test]
     fn min_denominations_is_greedy() {
+        // 1,000,010,007 qits: one 1,000,000,000, one 10,000, one 5, two 1.
         let c = min_denominations(U1024::from_u64(1_000_000_000 + 2 * 5000 + 7));
         assert_eq!(c[14], 1);
-        assert_eq!(c[7], 2);
+        assert_eq!(c[8], 1);
+        assert_eq!(c[7], 0);
         assert_eq!(c[1], 1);
         assert_eq!(c[0], 2);
-        assert_eq!(c.iter().sum::<u64>(), 6);
+        assert_eq!(c.iter().sum::<u64>(), 5);
     }
     #[test]
     fn qi_gas_counts_etxs_and_conversions() {

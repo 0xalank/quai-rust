@@ -451,3 +451,34 @@ fn a_block_forking_below_the_base_is_refused() {
     drop(p);
     std::fs::remove_dir_all(data).unwrap();
 }
+
+/// A shadow run without the block store (`run --no-store`): the head
+/// choice, the reorg and the base checkpoints work without it.
+#[test]
+fn tip_mode_without_a_block_store() {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let hb = go_hashes(&doc, 1 - first);
+    let log = Log::new(Level::Error);
+    let data = scratch("no-store");
+    let mut s = settings(&data, false, false);
+    s.store = false;
+    s.checkpoint_every = 4;
+    let mut p = Processor::open(
+        Chain::for_environment("local").unwrap(),
+        s,
+        Some(Arc::new(SharedCaches::new(2).unwrap())),
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    assert!(p.live_view().is_err());
+    p.set_tip_keep(8);
+    p.enable_tip().unwrap();
+    follow_both(&mut p, &a, &b, &hb, &log).unwrap();
+    assert_eq!(p.tip().unwrap().head(), (hb[16], 16));
+    assert!(p.finish(&log).unwrap().failure.is_none());
+    assert_eq!(checkpoints(&data, false).last(), Some(&8));
+    std::fs::remove_dir_all(data).unwrap();
+}

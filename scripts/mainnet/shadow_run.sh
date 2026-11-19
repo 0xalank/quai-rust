@@ -37,7 +37,10 @@
 #   SHADOW_DURATION   seconds to run in all, restarts included
 #                     (default: 1209600, two weeks; 0: no limit)
 #   METRICS_LISTEN    Prometheus address (default: 127.0.0.1:9102)
-#   RPC_LISTEN        RPC address (default: off)
+#   SHADOW_STORE      1 keeps the block store (about 50 KB per zone block,
+#                     about 12 GB in two weeks) and allows RPC_LISTEN;
+#                     default 0: no store, bounded disk
+#   RPC_LISTEN        RPC address (default: off; needs SHADOW_STORE=1)
 #   RUN_JOBS          proof-of-work threads (default: 3)
 #   MIN_FREE_GB       stop below this free space (default: 30)
 #   ALLOW_METERED     1 allows an iPhone hotspot (172.20.10.x)
@@ -56,6 +59,7 @@ DATADIR=${SHADOW_DATADIR:-"$WORK/quai-node"}
 BOOT=${SHADOW_BOOTSTRAP:-auto}
 DURATION=${SHADOW_DURATION:-1209600}
 METRICS=${METRICS_LISTEN:-127.0.0.1:9102}
+STORE=${SHADOW_STORE:-0}
 RPC=${RPC_LISTEN:-off}
 JOBS=${RUN_JOBS:-3}
 MIN_FREE_GB=${MIN_FREE_GB:-30}
@@ -82,6 +86,14 @@ done
 case "$BOOT" in
 auto | 0x????????????????????????????????????????????????????????????????) ;;
 *) log "SHADOW_BOOTSTRAP must be auto or a 0x-prefixed 32-byte hash"; exit 2 ;;
+esac
+case "$STORE" in
+1) STORE_ARG= ;;
+0)
+	STORE_ARG=--no-store
+	[ "$RPC" = off ] || { log "RPC_LISTEN needs SHADOW_STORE=1"; exit 2; }
+	;;
+*) log "SHADOW_STORE must be 0 or 1"; exit 2 ;;
 esac
 in_use() {
 	ps -A -o pid=,command= 2>/dev/null | grep -F -e "$DATADIR" | grep quai-node |
@@ -159,7 +171,7 @@ fi
 SHA=$(shasum -a 256 "$QUAI_NODE" | cut -c1-16)
 log "binary $QUAI_NODE sha256 $SHA"
 log "TEST TOOL: shadow run from a trusted bootstrap block (--shadow-bootstrap $BOOT); the bootstrap block and its ancestry are not validated by the node"
-log "data $DATADIR; metrics $METRICS; rpc $RPC; jobs $JOBS; duration ${DURATION}s; min free ${MIN_FREE_GB} GiB"
+log "data $DATADIR; metrics $METRICS; rpc $RPC; block store $STORE; jobs $JOBS; duration ${DURATION}s; min free ${MIN_FREE_GB} GiB"
 
 escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 metric() { curl -s --max-time 5 "http://$METRICS/metrics" 2>/dev/null | awk -v n="$1" '$1 == n {print $2}'; }
@@ -183,9 +195,11 @@ while :; do
 	OUT="$LOGS/$STAMP-run.out"
 	ERR="$LOGS/$STAMP-run.log"
 	log "starting the node (log: $ERR)"
+	# Word splitting of STORE_ARG is intended (empty or --no-store).
+	# shellcheck disable=SC2086
 	nice -n "$NICE" "$QUAI_NODE" --datadir "$DATADIR" --log-level info run --stateless \
 		--shadow-bootstrap "$BOOT" --metrics-listen "$METRICS" --rpc-listen "$RPC" \
-		--jobs "$JOBS" > "$OUT" 2> "$ERR" &
+		$STORE_ARG --jobs "$JOBS" > "$OUT" 2> "$ERR" &
 	CHILD=$!
 	REASON=
 	while kill -0 "$CHILD" 2>/dev/null; do

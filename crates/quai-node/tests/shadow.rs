@@ -271,6 +271,7 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
         shadow_bootstrap: None,
         bootstrap_quorum: 3,
         bootstrap_depth: 1_000,
+        store: true,
     };
     let e = quai_node::node::run(&o, &log).err().unwrap();
     assert!(e.contains("shadow run"), "{e}");
@@ -291,6 +292,22 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
         panic!("not run")
     };
     assert_eq!(r.shadow_bootstrap, None);
+    assert!(r.store);
     assert!(quai_node::cli::USAGE.contains("TEST TOOL"));
+    // A shadow run without the block store needs the RPC off.
+    assert!(parse(&args(&["run", "--stateless", "--no-store"])).is_err());
+    let quai_node::cli::Command::Run(r) = parse(&args(&[
+        "run",
+        "--stateless",
+        "--no-store",
+        "--rpc-listen",
+        "off",
+    ]))
+    .unwrap()
+    .command
+    else {
+        panic!("not run")
+    };
+    assert!(!r.store && r.rpc_listen.is_none());
     std::fs::remove_dir_all(data).unwrap();
 }

@@ -62,6 +62,8 @@ Run options:
   --max-peers <N>       Peers to fetch from (default: 8)
   --no-gossip           At the peers' head, poll by number instead of
                         following the head through gossip
+  --no-store            Keep no block store (about 50 KB per zone block);
+                        needs --rpc-listen off. For a long shadow run
   --shadow-bootstrap <HASH|auto>
                         TEST TOOL for the shadow run, not for production.
                         With --stateless and an empty data directory, start
@@ -186,6 +188,7 @@ struct Flags {
     peers: Vec<String>,
     no_public: bool,
     no_gossip: bool,
+    no_store: bool,
     seconds: Option<u64>,
     margin: Option<u64>,
     max_peers: Option<usize>,
@@ -201,6 +204,7 @@ const RUN_ONLY: &[&str] = &[
     "--peer",
     "--no-public",
     "--no-gossip",
+    "--no-store",
     "--margin",
     "--max-peers",
     "--shadow-bootstrap",
@@ -339,6 +343,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--stateless" => f.stateless = true,
             "--no-public" => f.no_public = true,
             "--no-gossip" => f.no_gossip = true,
+            "--no-store" => f.no_store = true,
             "--seconds" => f.seconds = Some(number("--seconds", &v)?),
             "--checkpoint-every" | "--commit-every" => {
                 let n: u64 = number(&flag, &v)?;
@@ -468,7 +473,13 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 shadow_bootstrap: f.shadow_bootstrap,
                 bootstrap_quorum: f.bootstrap_quorum.unwrap_or(crate::bootstrap::QUORUM),
                 bootstrap_depth: f.bootstrap_depth.unwrap_or(crate::bootstrap::DEPTH),
+                store: !f.no_store,
             };
+            if !o.store && o.rpc_listen.is_some() {
+                return Err(
+                    "--no-store needs --rpc-listen off: the RPC serves the block store".into(),
+                );
+            }
             if o.shadow_bootstrap.is_some() && !o.stateless {
                 return Err("--shadow-bootstrap needs --stateless: peers serve no state, so execution has no parent state at the trusted block".into());
             }

@@ -20,7 +20,8 @@
 # Stops (exit status): SHADOW_DURATION reached or a STOP file in SHADOW_DIR
 # (0; the node stops after its current block and writes a checkpoint); a
 # block of the peers' canonical chain failed a check in the sync by number
-# (1: a divergence; the node cannot go past it); a setup error (2); another
+# (1: a divergence; the node cannot go past it; a "peer data" failure
+# restarts instead); a setup error (2); another
 # run holds the lock or uses the data directory (3); free disk below
 # MIN_FREE_GB (4); MAX_RESTARTS restarts within an hour (5); the default
 # gateway is an iPhone hotspot, 172.20.10.x (6).
@@ -235,9 +236,19 @@ while :; do
 	disk) EXIT=4; break ;;
 	esac
 	if [ "$STATUS" = 1 ]; then
-		log "a canonical block failed a check (a divergence): ${RESULT:-see $ERR}"
-		EXIT=1
-		break
+		case "$RESULT" in
+		*'check="peer data"'*)
+			# The peers gave no valid reply (for example a batch past their
+			# head). That is a network condition, not a divergence: start
+			# again from the checkpoint, within the MAX_RESTARTS limit.
+			log "peer data failure, not a divergence; starting again: $RESULT"
+			;;
+		*)
+			log "a canonical block failed a check (a divergence): ${RESULT:-see $ERR}"
+			EXIT=1
+			break
+			;;
+		esac
 	fi
 	if [ "$ONCE" = 1 ]; then EXIT=$STATUS; break; fi
 	# A crash: start again after a delay, unless it keeps crashing.

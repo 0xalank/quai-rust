@@ -30,7 +30,7 @@ fn main() {
     let cache = LightCache::new(algorithm, height).expect("epoch cache");
     let need = cache.dataset_size();
     let free = available_memory();
-    if !force && !free.is_some_and(|f| f >= need + (64 << 20)) {
+    if !force && free.is_none_or(|f| f < need + (64 << 20)) {
         println!(
             "{}",
             serde_json::json!({"built": false, "dataset_bytes": need, "free_bytes": free})

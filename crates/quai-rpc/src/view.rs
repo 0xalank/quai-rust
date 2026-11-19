@@ -332,11 +332,14 @@ pub trait ChainView: Send + Sync + 'static {
         ))
     }
     /// `rawdb.ReadLockedBalance`: the Quai of coinbase lockups and Qi-to-Quai
-    /// conversions of an address that are still locked, as go-quai keeps it
-    /// with `--node.index-address-utxos` (core/state_processor.go
-    /// `WriteNewLockups`). The chain processor must supply it.
+    /// conversions of an address that are still locked. go-quai writes it
+    /// only with `--node.index-address-utxos` (core/state_processor.go
+    /// `WriteNewLockups`); without that flag, its default, every address
+    /// reads zero. The default gives that answer. A view whose chain
+    /// processor keeps the lock and unlock amounts of each block overrides
+    /// it with the indexed value.
     fn locked_quai(&self, _address: &Address) -> Result<U256, ViewError> {
-        Err(ViewError::Unavailable("the locked Quai index".into()))
+        Ok([0; 32])
     }
     /// `GetSlicesRunning`: the zones this node runs.
     fn running_chains(&self) -> Vec<[u8; 2]> {

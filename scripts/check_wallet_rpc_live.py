@@ -3,7 +3,13 @@
 read-only: quai_qiToQuai at historical blocks (a header and its own prime
 terminus), quai_getOutpointDeltasForAddressesInRange over historical ranges
 for the Qi coinbase recipients of those blocks, quai_getLockedBalance of Qi
-addresses, quai_listRunningChains and the argument errors of these methods.
+addresses and of the Quai miners of those blocks, quai_listRunningChains and
+the argument errors of these methods.
+
+go-quai keeps the locked Quai of an address only with
+--node.index-address-utxos; without it (the default) every Quai address
+reads 0x0, which is what the Rust view answers until the chain processor
+supplies lock and unlock amounts. Run the Go node without that flag.
 
 The two nodes may have different heads: only answers that do not depend on
 the current head are compared. Methods that read the current head
@@ -62,8 +68,12 @@ for m in ['quai_listRunningChains', 'net_listening', 'net_version', 'quai_chainI
 # Qi coinbase recipients and sample blocks.
 numbers = sorted(rng.sample(range(1, rust_head + 1), min(a.samples, rust_head)))
 recipients = {}
+miners = set()
 for n in numbers:
     b = call(a.rust, 'quai_getBlockByNumber', [hex(n), True])['result']
+    miner = b['woHeader']['primaryCoinbase']
+    if int(miner[4:6], 16) < 0x80:
+        miners.add(miner)
     for tx in b['transactions']:
         to = tx.get('to')
         if tx.get('type') == '0x1' and to and int(to[4:6], 16) >= 0x80:
@@ -94,6 +104,8 @@ if addresses:
 for addr in addresses[:20]:
     compare('lockedBalance', 'quai_getLockedBalance', [addr])
 compare('lockedBalance', 'quai_getLockedBalance', ['0x1100000000000000000000000000000000000001'])
+for addr in sorted(miners)[:20]:
+    compare('lockedBalanceQuai', 'quai_getLockedBalance', [addr])
 
 groups = {}
 for c in cases:

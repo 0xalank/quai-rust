@@ -72,12 +72,16 @@ for n in numbers:
         compare('qiToQuai', 'quai_qiToQuai', [amount, hex(n)])
     compare('qiToQuai', 'quai_qiToQuai', ['0x3e8', {'blockHash': b['hash']}])
 
-addresses = sorted(recipients)
+# Zone 0 holds no Qi recipient before the controller kick-in: compare the
+# empty answers with fixed Qi addresses as well.
+fixed = ['0x0080000000000000000000000000000000000001',
+         '0x00FF00000000000000000000000000000000000a']
+addresses = sorted(recipients) + fixed
 for n in numbers[:20]:
     lo = max(0, n - rng.randrange(0, 1000))
     blo = call(a.rust, 'quai_getBlockByNumber', [hex(lo), False])['result']
     bhi = call(a.rust, 'quai_getBlockByNumber', [hex(n), False])['result']
-    pick = [x for x in addresses if any(lo <= m <= n for m in recipients[x])][:5] or addresses[:3]
+    pick = [x for x in addresses if any(lo <= m <= n for m in recipients.get(x, ()))][:5] or addresses[:3]
     if pick:
         compare('deltas', 'quai_getOutpointDeltasForAddressesInRange',
                 [pick, blo['hash'], bhi['hash']])

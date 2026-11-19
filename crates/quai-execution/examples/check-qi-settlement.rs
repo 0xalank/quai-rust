@@ -39,7 +39,7 @@ pub fn verify_observed(
             };
             let u = Utxo {
                 denomination: v["denomination"].as_u64().unwrap() as u8,
-                address: b(&v["address"]).try_into().unwrap(),
+                address: qi::UtxoAddress::new(&b(&v["address"])).unwrap(),
                 lock: b(&v["lock"]),
             };
             checks += 1;
@@ -116,7 +116,20 @@ pub fn verify_observed(
                         .map(|t| encode_hex(&t.encode()))
                         .collect::<Vec<_>>()),
                 );
-                cmp("created",json!(state.materialize().unwrap().iter().map(|(p,v)|json!({"hash":encode_hex(&p.hash),"index":p.index,"denomination":v.denomination,"address":encode_hex(&v.address),"lock":encode_hex(&v.lock)})).collect::<Vec<_>>()));
+                cmp("created",json!(state.materialize().unwrap().iter().map(|(p,v)|json!({"hash":encode_hex(&p.hash),"index":p.index,"denomination":v.denomination,"address":encode_hex(v.address.as_bytes()),"lock":encode_hex(&v.lock)})).collect::<Vec<_>>()));
+                // types.CalculateBlockQiTxGas, the gas that prices the
+                // transaction in a block (rows with other address lengths).
+                if !row["block_qi_gas"].is_null() {
+                    cmp(
+                        "block_qi_gas",
+                        json!(quai_execution::gas::block_qi_gas(
+                            &tx,
+                            ctx.scaling_factor,
+                            ctx.inputs.location
+                        )
+                        .ok()),
+                    );
+                }
                 if out.receipt.typed_rlp().is_err() {
                     cmp("receipt_encodable", json!(false));
                 }

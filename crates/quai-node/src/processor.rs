@@ -860,7 +860,7 @@ impl Checker {
                         created.push(Created {
                             point: *point,
                             denomination: u.denomination,
-                            address: u.address,
+                            address: u.address.clone(),
                             lock: u.lock.clone(),
                         });
                     }
@@ -946,7 +946,7 @@ impl Checker {
                 .map(|(p, u)| Created {
                     point: *p,
                     denomination: u.denomination,
-                    address: u.address,
+                    address: u.address.clone(),
                     lock: u.lock.clone(),
                 })
                 .collect(),

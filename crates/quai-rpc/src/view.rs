@@ -128,6 +128,9 @@ pub trait AccountState: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UtxoData {
     pub denomination: u8,
+    /// `common.BytesToAddress(utxo.Address)`: the last 20 bytes of an
+    /// address that a Qi transaction before Polaris made longer. It owns
+    /// the output, and `quai_getUTXO` shows it.
     pub address: Address,
     /// Big-endian lock height, without leading zeros; empty for no lock.
     pub lock: Vec<u8>,
@@ -148,6 +151,8 @@ pub struct SpentUtxo {
     pub tx_hash: Hash,
     pub index: u16,
     pub denomination: u8,
+    /// `common.AddressBytes(sutxo.Address)`: the first 20 bytes of a longer
+    /// address, as `GetDeltas` keys spent outputs.
     pub address: Address,
     /// Big-endian lock height, without leading zeros; empty for no lock.
     pub lock: Vec<u8>,

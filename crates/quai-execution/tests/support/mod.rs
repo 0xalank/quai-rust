@@ -69,9 +69,8 @@ pub fn verify(corpus: &Value) -> Result<Value, String> {
                 Utxo {
                     denomination: u8::try_from(number(u, "denomination")?)
                         .map_err(|_| "bad denomination")?,
-                    address: raw(u, "address")?
-                        .try_into()
-                        .map_err(|_| "bad UTXO address")?,
+                    address: quai_execution::qi::UtxoAddress::new(&raw(u, "address")?)
+                        .ok_or("bad UTXO address")?,
                     lock: raw(u, "lock")?,
                 },
             );

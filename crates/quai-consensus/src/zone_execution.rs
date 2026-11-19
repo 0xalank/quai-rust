@@ -168,25 +168,6 @@ fn budgets(
     }
     Ok(())
 }
-fn qi_price_gas(tx: &Transaction, scaling: f64, location: [u8; 2]) -> Result<u64, Error> {
-    let Kind::Qi(q) = tx.kind() else {
-        return Err(invalid("Qi price kind"));
-    };
-    let mut total = gas::intrinsic_qi_gas(tx, if scaling < 15.0 { 0.0 } else { scaling })
-        .map_err(|_| Error::Unsupported("Qi price gas domain"))?;
-    for out in &q.outputs {
-        let address = out.address.as_ref().ok_or(invalid("Qi output address"))?;
-        if address.len() != 20 {
-            return Err(Error::Unsupported("historical long Qi output"));
-        }
-        if address[0] != location[0] << 4 | location[1] || address[1] & 128 == 0 {
-            total = total
-                .checked_add(21000)
-                .ok_or(invalid("Qi price gas overflow"))?;
-        }
-    }
-    Ok(total)
-}
 fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Error>>(
     state: &mut State,
     history: &History,
@@ -417,11 +398,10 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                 supply_added = add(supply_added, Uint::from_u64(v.added_qit))?;
                 supply_removed = add(supply_removed, Uint::from_u64(v.removed_qit))?;
                 let fee = payouts::convert_qi(&quote, Uint::from_u64(v.fee_qit))?;
-                price = Some(fee.wrapping_div(&Uint::from_u64(qi_price_gas(
-                    tx,
-                    scaling,
-                    profile.location,
-                )?)));
+                // ProcessQiTx refused shorter output addresses above.
+                let block_gas = gas::block_qi_gas(tx, scaling, profile.location)
+                    .map_err(|_| Error::Unsupported("Qi price gas domain"))?;
+                price = Some(fee.wrapping_div(&Uint::from_u64(block_gas)));
                 c.block.gas_remaining = qi_ctx.gas_remaining;
                 c.block.cumulative_gas = qi_ctx.used_gas;
                 c.region_remaining = qi_ctx.region_etx_remaining;

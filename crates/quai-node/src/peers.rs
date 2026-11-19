@@ -3,17 +3,25 @@
 //!
 //! The fetch logic is the one of `crates/quai-network/examples/peer-export.rs`
 //! (that example keeps its own copy and CLI): each peer is probed for its
-//! zone head; ten-block batches by number (BlockHash, then
+//! prime, region and zone heads; ten-block batches by number (BlockHash, then
 //! WorkObjectBlocks) are fetched ahead of the processor in each context;
 //! every block is decoded and checked as the Go exporter does (hash
 //! recomputed from the bytes, body roots, hash links in all three contexts,
 //! dominant parents), and a height whose records break a chain rule is
 //! fetched again from another peer. A peer that fails repeatedly is dropped.
 //!
+//! go-quai answers WorkObjectBlocks only with all ten blocks
+//! (`GetWorkObjectsFrom` returns nothing when one is missing), so a batch is
+//! asked only of a peer whose head in that context covers its last block.
+//! A peer that lacks a prime or region batch near the best head is not at
+//! fault: the batch waits for the heads to move.
+//!
 //! The source delivers zone heights in order from the processor's start
 //! height, up to the best peer head less `margin` (so that it never fetches
 //! a block that a reorganization may still remove), and then polls the
-//! peers' heads. Public peers are not used when the default gateway is an
+//! peers' heads. With `handoff` it ends instead at the first height that
+//! needs a batch past the peers' heads, and the node follows the head
+//! through gossip. Public peers are not used when the default gateway is an
 //! iPhone hotspot (172.20.10.x) unless ALLOW_METERED=1.
 use crate::processor::{BlockSource, Next, SourceError};
 use crate::qex::{Context, Height, RawRecord};
@@ -63,6 +71,12 @@ const WINDOW: u64 = 64;
 const QUEUE: usize = 512;
 /// Time between head probes.
 const HEAD_POLL: Duration = Duration::from_secs(15);
+/// First distance probed above the last known head in a head poll.
+const HEAD_STEP: u64 = 16;
+/// Prime and region blocks below the best peer head within which a peer
+/// that lacks a batch is not at fault: a dominant head can move back in a
+/// reorganization, and a head poll is up to `HEAD_POLL` old.
+const HEAD_SLACK: u64 = BATCH;
 
 fn hex(b: &[u8]) -> String {
     encode_hex(b)
@@ -309,6 +323,22 @@ struct Chain {
     genesis: Hash,
 }
 impl Chain {
+    /// The checker of a source that starts at zone height `start` with the
+    /// heads `heads` there (prime, region, zone).
+    fn new(start: u64, heads: [(Hash, u64); 3], genesis: Hash) -> Self {
+        if start == 0 {
+            return Self {
+                last: [None; 3],
+                next_zone: 0,
+                genesis,
+            };
+        }
+        Self {
+            last: heads.map(|(hash, number)| Some(Tip { number, hash })),
+            next_zone: start + 1,
+            genesis,
+        }
+    }
     /// `records`: the prime, region and zone records of one zone height in
     /// that order (prime and region only when coincident).
     fn height(&mut self, records: &[&Block]) -> Result<(), String> {
@@ -550,22 +580,24 @@ impl Conn {
             .await?;
         reply_objects(&raw, blocks).map_err(Fault::Bad)
     }
-    /// The peer's zone head, after the network check; `from` is a height the
-    /// peer is known to have.
-    async fn head(&mut self, genesis: Hash, from: u64) -> Result<u64, Fault> {
+    /// The network check: the peer's zone genesis is this network's.
+    async fn genesis_check(&mut self, genesis: Hash) -> Result<(), Fault> {
         match self.block_hash(ZONE, 0).await? {
-            Some(h) if h == genesis => {}
-            Some(h) => {
-                return Err(Fault::Bad(format!(
-                    "zone genesis {} is not this network's",
-                    hex(&h)
-                )))
-            }
-            None => return Err(Fault::Missing("no zone genesis".into())),
+            Some(h) if h == genesis => Ok(()),
+            Some(h) => Err(Fault::Bad(format!(
+                "zone genesis {} is not this network's",
+                hex(&h)
+            ))),
+            None => Err(Fault::Missing("no zone genesis".into())),
         }
-        let (mut lo, mut step) = (from, 1024u64);
+    }
+    /// The peer's head in `ctx`: the highest number with a canonical hash.
+    /// `from` is a number the peer is believed to have (a guess below its
+    /// head is cheapest); `step` is the first distance probed above it.
+    async fn head_in(&mut self, ctx: usize, from: u64, step: u64) -> Result<u64, Fault> {
+        let (mut lo, mut step) = (from, step.max(1));
         let mut hi = lo.saturating_add(step);
-        while self.block_hash(ZONE, hi).await?.is_some() {
+        while self.block_hash(ctx, hi).await?.is_some() {
             lo = hi;
             step = step.saturating_mul(2);
             hi = hi.saturating_add(step);
@@ -573,12 +605,12 @@ impl Conn {
                 return Err(Fault::Bad("no head".into()));
             }
         }
-        if lo > 0 && self.block_hash(ZONE, lo).await?.is_none() {
+        if lo > 0 && self.block_hash(ctx, lo).await?.is_none() {
             lo = 0;
         }
         while hi - lo > 1 {
             let mid = lo + (hi - lo) / 2;
-            if self.block_hash(ZONE, mid).await?.is_some() {
+            if self.block_hash(ctx, mid).await?.is_some() {
                 lo = mid;
             } else {
                 hi = mid;
@@ -586,8 +618,28 @@ impl Conn {
         }
         Ok(lo)
     }
+    /// The peer's zone head, after the network check; `from` is a height the
+    /// peer is known to have.
+    async fn head(&mut self, genesis: Hash, from: u64) -> Result<u64, Fault> {
+        self.genesis_check(genesis).await?;
+        self.head_in(ZONE, from, 1024).await
+    }
+    /// The peer's prime, region and zone heads, after the network check.
+    /// go-quai answers a batch only when it holds all ten blocks
+    /// (`GetWorkObjectsFrom`), so the source asks a peer only for batches
+    /// below its head in the batch's context.
+    async fn heads(&mut self, genesis: Hash, from: [u64; 3], step: u64) -> Result<[u64; 3], Fault> {
+        self.genesis_check(genesis).await?;
+        let mut out = [0; 3];
+        for (ctx, head) in out.iter_mut().enumerate() {
+            *head = self.head_in(ctx, from[ctx], step).await?;
+        }
+        Ok(out)
+    }
     /// One batch: BlockHash(start), then the blocks from that hash, checked
-    /// and hash-linked. A dominant batch at the peer's head can be short.
+    /// and hash-linked. A dominant batch fetched block by block (`single`)
+    /// can be short at the peer's head; WorkObjectBlocks gives all ten
+    /// blocks or none.
     async fn batch(&mut self, job: Job, single: bool) -> Result<Vec<Block>, Fault> {
         let first = self
             .block_hash(job.ctx, job.start)
@@ -686,9 +738,16 @@ struct Source {
     index: usize,
     peer: PeerId,
     node: Arc<PublicNode>,
-    head: AtomicU64,
+    /// The prime, region and zone heads the peer reported (a dominant head
+    /// is lowered when the peer does not have a batch below it).
+    heads: [AtomicU64; 3],
     alive: AtomicBool,
     stats: Mutex<Stats>,
+}
+impl Source {
+    fn heads(&self) -> [u64; 3] {
+        [0, 1, 2].map(|c| self.heads[c].load(Ordering::Relaxed))
+    }
 }
 struct JobState {
     need: u64,
@@ -710,12 +769,86 @@ struct Sched {
     zone_next: u64,
     /// Zone heights below this can be fetched (best peer head less margin, +1).
     zone_end: u64,
+    /// Prime and region numbers below this can be fetched (best peer head
+    /// in the context, +1; 0 while no peer reported one).
+    dom_end: [u64; 2],
     /// The last zone height the source delivers: no batch starts above it.
     to: Option<u64>,
     write_pos: u64,
     error: Option<String>,
 }
+/// What the next zone height waits for.
+enum Step {
+    /// Batches that the peers have and that are not fetched yet.
+    Wait,
+    /// A batch past the peers' head (zone: less the margin): only part of it
+    /// exists. A source that hands off to gossip ends here.
+    Head { ctx: usize, start: u64 },
+    /// The records of the height: prime and region when coincident, zone.
+    Height(Vec<Fetched>),
+}
+/// The result of one request for the peer that answered it.
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    /// The batch arrived with this many blocks.
+    Blocks(u64),
+    /// The peer does not have the whole batch yet: a dominant batch at the
+    /// head. Not a fault; the batch waits for a peer whose head covers it.
+    NotYet,
+    /// A fault of the peer. `strike`: it counts toward dropping the peer.
+    Fault { strike: bool },
+}
 impl Sched {
+    /// The scheduler of a source that starts at zone height `start` with the
+    /// heads `heads` there (prime, region, zone).
+    fn new(start: u64, heads: [(Hash, u64); 3], to: Option<u64>) -> Self {
+        let dom = if start == 0 {
+            [0, 0]
+        } else {
+            [heads[0].1 + 1, heads[1].1 + 1]
+        };
+        Self {
+            pending: BTreeSet::new(),
+            state: HashMap::new(),
+            zone: BTreeMap::new(),
+            dom: [BTreeMap::new(), BTreeMap::new()],
+            dom_next: dom.map(|n| n / BATCH * BATCH),
+            zone_next: start / BATCH * BATCH,
+            zone_end: 0,
+            dom_end: [0, 0],
+            to,
+            write_pos: start,
+            error: None,
+        }
+    }
+    /// The fetch limit in each context for a peer with these heads: the zone
+    /// head less the margin, the prime and region heads.
+    fn limits(heads: [u64; 3], margin: u64) -> [u64; 3] {
+        [heads[0], heads[1], heads[ZONE].saturating_sub(margin)]
+    }
+    /// Move the fetch limits with the best peer heads.
+    fn set_heads(&mut self, best: [u64; 3], margin: u64) {
+        let end = best[ZONE].saturating_sub(margin) + 1;
+        if end > self.zone_end {
+            self.zone_end = end;
+            self.fill();
+        }
+        for c in 0..2 {
+            self.dom_end[c] = if best[c] > 0 { best[c] + 1 } else { 0 };
+        }
+    }
+    /// A batch that the best peer head does not cover yet, or only just:
+    /// zone, its last height at or above the fetch limit; prime and region,
+    /// its last block within `HEAD_SLACK` of the best head (a dominant head
+    /// can move back a few blocks in a reorganization).
+    fn at_head(&self, job: Job) -> bool {
+        let last = job.start + BATCH - 1;
+        if job.ctx == ZONE {
+            last >= self.zone_end
+        } else {
+            last + HEAD_SLACK >= self.dom_end[job.ctx]
+        }
+    }
     fn push(&mut self, job: Job, need: u64) {
         let st = self.state.entry(job).or_insert(JobState {
             need,
@@ -750,16 +883,59 @@ impl Sched {
             self.dom_next[ctx] += BATCH;
         }
     }
-    fn take(&mut self, source: usize, limit: u64) -> Option<(Job, bool)> {
+    /// The next job for `source`, whose fetch limits are `limits`
+    /// ([`Sched::limits`]): a batch is asked only of a peer that holds all
+    /// of it.
+    fn take(&mut self, source: usize, limits: [u64; 3]) -> Option<(Job, bool)> {
         let (found, single) = self.pending.iter().find_map(|&(need, job)| {
             let st = self.state.get(&job)?;
             (!st.excluded.contains(&source)
-                && need <= limit
-                && (job.ctx != ZONE || job.start + BATCH - 1 <= limit))
+                && need <= limits[ZONE]
+                && job.start + BATCH - 1 <= limits[job.ctx])
                 .then_some(((need, job), st.single))
         })?;
         self.pending.remove(&found);
         Some((found.1, single))
+    }
+    /// Book the answer of `source` (whose reported heads are `heads`) to
+    /// `job`.
+    fn settle(
+        &mut self,
+        source: usize,
+        heads: &[AtomicU64; 3],
+        job: Job,
+        result: Result<Vec<Block>, Fault>,
+    ) -> Outcome {
+        match result {
+            Ok(blocks) => {
+                let n = blocks.len() as u64;
+                self.complete(job, blocks, source);
+                Outcome::Blocks(n)
+            }
+            // go-quai answers BlockHash and WorkObjectBlocks only for blocks
+            // it holds (GetWorkObjectsFrom: all ten or nothing). At the head
+            // of a dominant chain that means "not yet": the peer's head is
+            // below the batch's last block, and the batch waits for a peer
+            // whose head covers it, without an attempt or a strike.
+            Err(Fault::Missing(_)) if job.ctx != ZONE && self.at_head(job) => {
+                heads[job.ctx].fetch_min(job.start + BATCH - 2, Ordering::Relaxed);
+                if let Some(st) = self.state.get(&job) {
+                    self.pending.insert((st.need, job));
+                }
+                Outcome::NotYet
+            }
+            Err(fault) => {
+                let (exclude, single) = match fault {
+                    Fault::TooLarge => (false, true),
+                    Fault::Io(_) => (false, false),
+                    Fault::Missing(_) | Fault::Bad(_) => (true, false),
+                };
+                self.retry(job, source, exclude, single, &fault.to_string());
+                Outcome::Fault {
+                    strike: !matches!(fault, Fault::TooLarge),
+                }
+            }
+        }
     }
     fn complete(&mut self, job: Job, blocks: Vec<Block>, source: usize) {
         let need = self.state.remove(&job).map_or(job.start, |s| s.need);
@@ -801,6 +977,7 @@ impl Sched {
         }
     }
     fn retry(&mut self, job: Job, source: usize, exclude: bool, single: bool, why: &str) {
+        let at_head = self.at_head(job);
         let Some(st) = self.state.get_mut(&job) else {
             return;
         };
@@ -810,7 +987,7 @@ impl Sched {
         }
         st.single |= single;
         if st.attempts >= MAX_ATTEMPTS {
-            if job.start + BATCH > self.zone_end {
+            if at_head {
                 // At the peers' head: try again from the start later.
                 st.attempts = 0;
                 st.excluded.clear();
@@ -853,6 +1030,72 @@ impl Sched {
         );
         self.retry(job, source, true, false, why);
     }
+    /// What zone height `z` waits for; `first`: it is the processor's start
+    /// block, which comes without dominant records.
+    fn step(&mut self, z: u64, first: bool) -> Step {
+        self.write_pos = z;
+        self.fill();
+        let start = z / BATCH * BATCH;
+        let Some(zone) = self
+            .zone
+            .get(&start)
+            .and_then(|b| b.get((z - start) as usize))
+            .cloned()
+        else {
+            // `fill` asks only for whole batches below the fetch limit.
+            return if self.zone_end > 0 && start + BATCH > self.zone_end {
+                Step::Head { ctx: ZONE, start }
+            } else {
+                Step::Wait
+            };
+        };
+        if first {
+            return Step::Height(vec![zone]);
+        }
+        // A record at the zone block's own number in a dominant context is
+        // coincident when it has the zone block's hash. For a zone block
+        // that is not coincident, the record at that number is a later
+        // block, which may not exist yet.
+        let n = [zone.block.numbers[0], zone.block.numbers[1]];
+        for (c, number) in n.iter().enumerate() {
+            self.need_dominant(c, number + 1, start);
+        }
+        let dom = [
+            self.dom[0].get(&n[0]).cloned(),
+            self.dom[1].get(&n[1]).cloned(),
+        ];
+        if let [Some(p), Some(r)] = dom {
+            let mut records = vec![];
+            for d in [p, r] {
+                if d.block.hash == zone.block.hash {
+                    records.push(d);
+                }
+            }
+            records.push(zone);
+            return Step::Height(records);
+        }
+        for (c, number) in n.iter().enumerate() {
+            let start = number / BATCH * BATCH;
+            if dom[c].is_none() && self.dom_end[c] > 0 && start + BATCH > self.dom_end[c] {
+                return Step::Head { ctx: c, start };
+            }
+        }
+        Step::Wait
+    }
+    /// Drop the batches below the next zone height `z` and the dominant
+    /// records below the last ones delivered.
+    fn delivered(&mut self, z: u64, last: &[Option<Tip>; 3]) {
+        let start = z / BATCH * BATCH;
+        let below: Vec<u64> = self.zone.range(..start).map(|(k, _)| *k).collect();
+        for k in below {
+            self.zone.remove(&k);
+        }
+        for (c, tip) in last.iter().take(2).enumerate() {
+            if let Some(t) = tip {
+                self.dom[c] = self.dom[c].split_off(&t.number);
+            }
+        }
+    }
 }
 
 /// Counters for logs and metrics.
@@ -890,29 +1133,29 @@ impl Shared {
             .cloned()
             .collect()
     }
-    /// Move the fetch limit with the best peer head.
+    /// Move the fetch limits with the best peer heads.
     fn update_end(&self) {
-        let best = self
-            .alive()
-            .iter()
-            .map(|s| s.head.load(Ordering::Relaxed))
-            .max()
-            .unwrap_or(0);
-        self.status.head.store(best, Ordering::Relaxed);
-        self.status
-            .peers
-            .store(self.alive().len(), Ordering::Relaxed);
-        let end = best.saturating_sub(self.margin) + 1;
-        let mut s = lock(&self.sched);
-        if end > s.zone_end {
-            s.zone_end = end;
-            s.fill();
-        }
-        drop(s);
+        let alive = self.alive();
+        let best = [0, 1, 2].map(|c| {
+            alive
+                .iter()
+                .map(|s| s.heads[c].load(Ordering::Relaxed))
+                .max()
+                .unwrap_or(0)
+        });
+        self.status.head.store(best[ZONE], Ordering::Relaxed);
+        self.status.peers.store(alive.len(), Ordering::Relaxed);
+        lock(&self.sched).set_heads(best, self.margin);
         self.notify.notify_waiters();
     }
-    /// Probe a connected peer and start its workers.
-    async fn add(self: &Arc<Self>, node: Arc<PublicNode>, peer: PeerId) -> Result<(), String> {
+    /// Probe a connected peer and start its workers. `hints`: numbers the
+    /// peer probably has (the processor's start heads).
+    async fn add(
+        self: &Arc<Self>,
+        node: Arc<PublicNode>,
+        peer: PeerId,
+        hints: [u64; 3],
+    ) -> Result<(), String> {
         // One probe per peer at a time: a peer that connects while it is
         // being added must not become two sources.
         if lock(&self.sources).iter().any(|s| s.peer == peer) || !lock(&self.probing).insert(peer) {
@@ -920,14 +1163,17 @@ impl Shared {
         }
         let probed = async {
             let mut conn = Conn::new(node.clone(), peer)?;
-            tokio::time::timeout(Duration::from_secs(120), conn.head(self.genesis, 0))
-                .await
-                .map_err(|_| "head probe timed out".to_string())?
-                .map_err(|e| e.to_string())
+            tokio::time::timeout(
+                Duration::from_secs(120),
+                conn.heads(self.genesis, hints, 1024),
+            )
+            .await
+            .map_err(|_| "head probe timed out".to_string())?
+            .map_err(|e| e.to_string())
         }
         .await;
         lock(&self.probing).remove(&peer);
-        let head = probed?;
+        let heads = probed?;
         let src = {
             let mut sources = lock(&self.sources);
             if sources
@@ -942,7 +1188,7 @@ impl Shared {
                 index: sources.len(),
                 peer,
                 node,
-                head: AtomicU64::new(head),
+                heads: heads.map(AtomicU64::new),
                 alive: AtomicBool::new(true),
                 stats: Mutex::new(Stats::default()),
             });
@@ -970,39 +1216,36 @@ async fn worker(src: Arc<Source>, shared: Arc<Shared>) {
             tokio::time::sleep_until(t.into()).await;
             continue;
         }
-        let limit = src
-            .head
-            .load(Ordering::Relaxed)
-            .saturating_sub(shared.margin);
-        let job = lock(&shared.sched).take(src.index, limit);
+        let limits = Sched::limits(src.heads(), shared.margin);
+        let job = lock(&shared.sched).take(src.index, limits);
         let Some((job, single)) = job else {
             let _ =
                 tokio::time::timeout(Duration::from_millis(500), shared.notify.notified()).await;
             continue;
         };
         let result = conn.batch(job, single).await;
+        let fault = result
+            .as_ref()
+            .err()
+            .map(|f| format!("{} {}: {f}", NAMES[job.ctx], job.start));
+        let outcome = lock(&shared.sched).settle(src.index, &src.heads, job, result);
         let mut stats = lock(&src.stats);
-        match result {
-            Ok(blocks) => {
-                stats.blocks += blocks.len() as u64;
+        match outcome {
+            Outcome::Blocks(n) => {
+                stats.blocks += n;
                 stats.strikes = 0;
-                shared
-                    .status
-                    .blocks
-                    .fetch_add(blocks.len() as u64, Ordering::Relaxed);
-                drop(stats);
-                lock(&shared.sched).complete(job, blocks, src.index);
+                shared.status.blocks.fetch_add(n, Ordering::Relaxed);
             }
-            Err(fault) => {
+            Outcome::NotYet => {
+                drop(stats);
+                // The best head may be lower now: the source may hand off.
+                shared.update_end();
+            }
+            Outcome::Fault { strike } => {
                 stats.faults += 1;
                 shared.status.faults.fetch_add(1, Ordering::Relaxed);
-                stats.last_fault = Some(format!("{} {}: {fault}", NAMES[job.ctx], job.start));
-                let (exclude, single) = match fault {
-                    Fault::TooLarge => (false, true),
-                    Fault::Io(_) => (false, false),
-                    Fault::Missing(_) | Fault::Bad(_) => (true, false),
-                };
-                if !matches!(fault, Fault::TooLarge) {
+                stats.last_fault = fault;
+                if strike {
                     stats.strikes += 1;
                     let delay = Duration::from_secs(1 << stats.strikes.min(6));
                     stats.backoff_until = Some(Instant::now() + delay);
@@ -1010,9 +1253,7 @@ async fn worker(src: Arc<Source>, shared: Arc<Shared>) {
                 if stats.strikes >= MAX_STRIKES {
                     src.alive.store(false, Ordering::Relaxed);
                 }
-                let why = fault.to_string();
                 drop(stats);
-                lock(&shared.sched).retry(job, src.index, exclude, single, &why);
                 if !src.alive.load(Ordering::Relaxed) {
                     shared.update_end();
                 }
@@ -1021,20 +1262,25 @@ async fn worker(src: Arc<Source>, shared: Arc<Shared>) {
         shared.notify.notify_waiters();
     }
 }
-/// Follow a peer's head.
+/// Follow a peer's heads.
 async fn head_poll(src: Arc<Source>, shared: Arc<Shared>) {
     let Ok(mut conn) = Conn::new(src.node.clone(), src.peer) else {
         return;
     };
     while !shared.stop.load(Ordering::Relaxed) && src.alive.load(Ordering::Relaxed) {
         tokio::time::sleep(HEAD_POLL).await;
-        let from = src.head.load(Ordering::Relaxed);
-        match tokio::time::timeout(Duration::from_secs(60), conn.head(shared.genesis, from)).await {
-            Ok(Ok(head)) if head >= from => {
-                src.head.store(head, Ordering::Relaxed);
-                shared.update_end();
+        let from = src.heads();
+        let probe = conn.heads(shared.genesis, from, HEAD_STEP);
+        if let Ok(Ok(heads)) = tokio::time::timeout(Duration::from_secs(60), probe).await {
+            // The zone head only moves up, as before; a dominant head is the
+            // peer's answer (it can move back in a reorganization).
+            if heads[ZONE] >= from[ZONE] {
+                src.heads[ZONE].store(heads[ZONE], Ordering::Relaxed);
             }
-            _ => {}
+            for c in 0..2 {
+                src.heads[c].store(heads[c], Ordering::Relaxed);
+            }
+            shared.update_end();
         }
     }
 }
@@ -1108,8 +1354,11 @@ pub struct Options {
     pub peers: Vec<Multiaddr>,
     /// Use the colosseum boot peers and the peers they lead to.
     pub public: bool,
-    /// End the source once it delivered every height up to the best peer
-    /// head less `margin` (the node then follows the head through gossip).
+    /// End the source at the first height that needs a batch past the
+    /// peers' head (zone: the best head less `margin`; prime and region: the
+    /// best head), before the last partial batch; the node then follows the
+    /// head through gossip. Without it the source waits there for the heads
+    /// to move.
     pub handoff: bool,
 }
 
@@ -1138,23 +1387,10 @@ impl PeerSource {
         let status = Arc::new(Status::default());
         let stop = Arc::new(AtomicBool::new(false));
         let o = options.clone();
-        let next_dom = [o.heads[0].1 + 1, o.heads[1].1 + 1];
-        let start_dom = if o.start == 0 { [0, 0] } else { next_dom };
         let shared = Arc::new(Shared {
             sources: Mutex::new(vec![]),
             probing: Mutex::new(HashSet::new()),
-            sched: Mutex::new(Sched {
-                pending: BTreeSet::new(),
-                state: HashMap::new(),
-                zone: BTreeMap::new(),
-                dom: [BTreeMap::new(), BTreeMap::new()],
-                dom_next: [start_dom[0] / BATCH * BATCH, start_dom[1] / BATCH * BATCH],
-                zone_next: o.start / BATCH * BATCH,
-                zone_end: 0,
-                to: o.to,
-                write_pos: o.start,
-                error: None,
-            }),
+            sched: Mutex::new(Sched::new(o.start, o.heads, o.to)),
             notify: Notify::new(),
             stop: stop.clone(),
             status: status.clone(),
@@ -1231,6 +1467,8 @@ impl BlockSource for PeerSource {
 async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: crate::log::Log) {
     let events = node.clone();
     let candidates = shared.clone();
+    // Numbers every synced peer has: the start of the head probes.
+    let hints = [o.heads[0].1, o.heads[1].1, o.start];
     tokio::spawn(async move {
         let mut tried = HashSet::new();
         while let Ok(event) = events.next().await {
@@ -1243,7 +1481,7 @@ async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: cr
                 }
                 let (shared, node) = (candidates.clone(), events.clone());
                 tokio::spawn(async move {
-                    match shared.add(node, peer).await {
+                    match shared.add(node, peer, hints).await {
                         Ok(()) => log.info(&format!("peer {peer}: source")),
                         Err(e) => log.debug(&format!("peer {peer}: not a source: {e}")),
                     }
@@ -1256,7 +1494,7 @@ async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: cr
     for peer in node.verified_peers() {
         let (shared, node) = (shared.clone(), node.clone());
         tokio::spawn(async move {
-            match shared.add(node, peer).await {
+            match shared.add(node, peer, hints).await {
                 Ok(()) => log.info(&format!("peer {peer}: source")),
                 Err(e) => log.debug(&format!("peer {peer}: not a source: {e}")),
             }
@@ -1308,15 +1546,7 @@ async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: cr
 
 /// Put the fetched batches together, height by height, and queue them.
 async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: crate::log::Log) {
-    let mut chain = Chain {
-        last: [None; 3],
-        next_zone: o.start,
-        genesis: o.genesis,
-    };
-    if o.start > 0 {
-        chain.last = o.heads.map(|(hash, number)| Some(Tip { number, hash }));
-        chain.next_zone = o.start + 1;
-    }
+    let mut chain = Chain::new(o.start, o.heads, o.genesis);
     let mut z = o.start;
     let mut failures: HashMap<u64, u32> = HashMap::new();
     let send = |item: Item| -> bool {
@@ -1351,61 +1581,31 @@ async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: cr
             }));
             return;
         }
-        enum Step {
-            Wait,
-            Height(Vec<Fetched>),
-        }
-        let step = {
-            let mut s = lock(&shared.sched);
-            s.write_pos = z;
-            s.fill();
-            let start = z / BATCH * BATCH;
-            match s
-                .zone
-                .get(&start)
-                .and_then(|b| b.get((z - start) as usize))
-                .cloned()
-            {
-                None => Step::Wait,
-                Some(zone) if z == o.start && z > 0 => Step::Height(vec![zone]),
-                Some(zone) => {
-                    // A record at the zone block's own number in a dominant
-                    // context is coincident when it has the zone block's hash.
-                    let n = [zone.block.numbers[0], zone.block.numbers[1]];
-                    for (c, number) in n.iter().enumerate() {
-                        s.need_dominant(c, number + 1, start);
-                    }
-                    match [s.dom[0].get(&n[0]).cloned(), s.dom[1].get(&n[1]).cloned()] {
-                        [Some(p), Some(r)] => {
-                            let mut records = vec![];
-                            for d in [p, r] {
-                                if d.block.hash == zone.block.hash {
-                                    records.push(d);
-                                }
-                            }
-                            records.push(zone);
-                            Step::Height(records)
-                        }
-                        _ => Step::Wait,
-                    }
-                }
-            }
-        };
+        let step = lock(&shared.sched).step(z, z == o.start && z > 0);
         match step {
-            Step::Wait => {
-                let caught_up = {
-                    let s = lock(&shared.sched);
-                    s.zone_end > 0 && z >= s.zone_end
+            Step::Head { ctx, start } if o.handoff => {
+                // Before the last partial batch: gossip delivers the head.
+                let s = lock(&shared.sched);
+                let head = if ctx == ZONE {
+                    s.zone_end.saturating_sub(1)
+                } else {
+                    s.dom_end[ctx].saturating_sub(1)
                 };
-                if o.handoff && caught_up {
-                    log.info(&format!(
-                        "peers: every height to {} delivered (peers' head {} less margin {})",
-                        z.saturating_sub(1),
-                        shared.status.head.load(Ordering::Relaxed),
-                        o.margin
-                    ));
-                    return;
-                }
+                drop(s);
+                log.info(&format!(
+                    "peers: every height to {} delivered; zone height {z} needs the {} batch {start}, which ends past the peers' {} head {head}{}: following the head through gossip",
+                    z.saturating_sub(1),
+                    NAMES[ctx],
+                    NAMES[ctx],
+                    if ctx == ZONE {
+                        format!(" (best head {} less margin {})", shared.status.head.load(Ordering::Relaxed), o.margin)
+                    } else {
+                        String::new()
+                    },
+                ));
+                return;
+            }
+            Step::Wait | Step::Head { .. } => {
                 let _ = tokio::time::timeout(Duration::from_millis(200), shared.notify.notified())
                     .await;
             }
@@ -1437,17 +1637,7 @@ async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: cr
                             return;
                         }
                         z += 1;
-                        let mut s = lock(&shared.sched);
-                        let start = z / BATCH * BATCH;
-                        let below: Vec<u64> = s.zone.range(..start).map(|(k, _)| *k).collect();
-                        for k in below {
-                            s.zone.remove(&k);
-                        }
-                        for c in 0..2 {
-                            if let Some(t) = chain.last[c] {
-                                s.dom[c] = s.dom[c].split_off(&t.number);
-                            }
-                        }
+                        lock(&shared.sched).delivered(z, &chain.last);
                     }
                     Err(e) => {
                         let count = failures.entry(z).or_default();
@@ -1739,6 +1929,7 @@ mod tests {
             dom_next: [0, 0],
             zone_next: 0,
             zone_end: 100,
+            dom_end: [0, 0],
             to: Some(37),
             write_pos: 0,
             error: None,
@@ -1751,6 +1942,355 @@ mod tests {
         s.fill();
         assert_eq!(s.pending.len(), 10);
     }
+    // -----------------------------------------------------------------
+    // A simulated slice and peers that answer as go-quai does.
+
+    fn hash_of(z: u64) -> Hash {
+        let mut h = [0x5a; 32];
+        h[..8].copy_from_slice(&z.to_be_bytes());
+        h
+    }
+    /// Zone heights `zg..=z1` of a slice. The block at `zg` is a prime
+    /// block with prime number `pg` and region number `rg`; `order(z)` is
+    /// 0 (prime), 1 (region) or 2 (zone) for the others. Numbers, parents
+    /// and dominant parents as go-quai sets them: a block's prime and region
+    /// numbers are its dominant parents' numbers plus one.
+    struct Slice {
+        zone: BTreeMap<u64, Block>,
+        dom: [BTreeMap<u64, Block>; 2],
+        /// The tips (hash, number) of each context at each zone height.
+        tips: BTreeMap<u64, [(Hash, u64); 3]>,
+    }
+    impl Slice {
+        fn new(zg: u64, pg: u64, rg: u64, z1: u64, order: impl Fn(u64) -> usize) -> Self {
+            let mut s = Slice {
+                zone: BTreeMap::new(),
+                dom: [BTreeMap::new(), BTreeMap::new()],
+                tips: BTreeMap::new(),
+            };
+            let mut tips = [(hash_of(zg), pg), (hash_of(zg), rg), (hash_of(zg), zg)];
+            s.tips.insert(zg, tips);
+            for z in zg + 1..=z1 {
+                let hash = hash_of(z);
+                let numbers = [tips[0].1 + 1, tips[1].1 + 1, z];
+                let dom_parents = [tips[0].0, tips[1].0];
+                let record = |ctx: usize, parent: Hash| Block {
+                    ctx,
+                    number: numbers[ctx],
+                    hash,
+                    parent,
+                    dom_parents,
+                    numbers,
+                    location: LOCATIONS[ZONE].to_vec(),
+                    raw: vec![],
+                };
+                for ctx in order(z)..3 {
+                    let parent = if ctx == ZONE {
+                        tips[ZONE].0
+                    } else {
+                        dom_parents[ctx]
+                    };
+                    let map = if ctx == ZONE {
+                        &mut s.zone
+                    } else {
+                        &mut s.dom[ctx]
+                    };
+                    map.insert(numbers[ctx], record(ctx, parent));
+                    tips[ctx] = (hash, numbers[ctx]);
+                }
+                s.tips.insert(z, tips);
+            }
+            s
+        }
+        /// The heads of a peer whose zone head is `z`.
+        fn heads_at(&self, z: u64) -> [u64; 3] {
+            self.tips[&z].map(|t| t.1)
+        }
+    }
+    /// go-quai's answer to the batch `job` of a peer whose heads are
+    /// `heads`: BlockHash(start) (none above its head), then
+    /// WorkObjectBlocks from that hash, which holds all ten blocks or none
+    /// (p2p/node/api.go `GetWorkObjectsFrom`).
+    fn go_answer(slice: &Slice, heads: [u64; 3], job: Job) -> Result<Vec<Block>, Fault> {
+        let chain = if job.ctx == ZONE {
+            &slice.zone
+        } else {
+            &slice.dom[job.ctx]
+        };
+        if job.start > heads[job.ctx] || !chain.contains_key(&job.start) {
+            return Err(Fault::Missing(format!("{} {}", NAMES[job.ctx], job.start)));
+        }
+        let blocks: Vec<Block> = (job.start..job.start + BATCH)
+            .filter(|n| *n <= heads[job.ctx])
+            .filter_map(|n| chain.get(&n).cloned())
+            .collect();
+        if blocks.len() as u64 != BATCH {
+            return Err(Fault::Missing(format!(
+                "{} {} blocks",
+                NAMES[job.ctx], job.start
+            )));
+        }
+        Ok(blocks)
+    }
+    /// The scheduler and the chain checker driven as the workers and the
+    /// assembler drive them, with simulated peers.
+    struct Sim {
+        s: Sched,
+        chain: Chain,
+        start: u64,
+        z: u64,
+        margin: u64,
+        /// The heads each peer reported, as `Source::heads`.
+        reported: Vec<[AtomicU64; 3]>,
+        strikes: Vec<u32>,
+        faults: u64,
+        not_yet: u64,
+    }
+    impl Sim {
+        fn new(slice: &Slice, start: u64, margin: u64, peers: usize) -> Self {
+            let heads = slice.tips[&start];
+            Sim {
+                s: Sched::new(start, heads, None),
+                chain: Chain::new(start, heads, hash_of(0)),
+                start,
+                z: start,
+                margin,
+                reported: (0..peers).map(|_| [0, 0, 0].map(AtomicU64::new)).collect(),
+                strikes: vec![0; peers],
+                faults: 0,
+                not_yet: 0,
+            }
+        }
+        /// Head polls: peer `i` reports `heads[i]`.
+        fn report(&mut self, heads: &[[u64; 3]]) {
+            for (r, h) in self.reported.iter().zip(heads) {
+                for c in 0..3 {
+                    r[c].store(h[c], Ordering::Relaxed);
+                }
+            }
+            self.update_end();
+        }
+        /// `Shared::update_end`.
+        fn update_end(&mut self) {
+            let best = [0, 1, 2].map(|c| {
+                self.reported
+                    .iter()
+                    .map(|r| r[c].load(Ordering::Relaxed))
+                    .max()
+                    .unwrap_or(0)
+            });
+            self.s.set_heads(best, self.margin);
+        }
+        /// The workers take jobs until none is left for any peer (`actual`:
+        /// the heads the peers really have), the assembler delivers heights,
+        /// and again until nothing moves. Returns where the assembler
+        /// stopped, or the source's error.
+        fn pass(&mut self, slice: &Slice, actual: &[[u64; 3]]) -> Result<Step, String> {
+            loop {
+                let mut taken = 0;
+                loop {
+                    let mut busy = false;
+                    for (i, heads) in actual.iter().enumerate() {
+                        let reported =
+                            [0, 1, 2].map(|c| self.reported[i][c].load(Ordering::Relaxed));
+                        let Some((job, _)) = self.s.take(i, Sched::limits(reported, self.margin))
+                        else {
+                            continue;
+                        };
+                        busy = true;
+                        taken += 1;
+                        let answer = go_answer(slice, *heads, job);
+                        match self.s.settle(i, &self.reported[i], job, answer) {
+                            Outcome::Blocks(_) => self.strikes[i] = 0,
+                            Outcome::NotYet => {
+                                self.not_yet += 1;
+                                self.update_end();
+                            }
+                            Outcome::Fault { strike } => {
+                                self.faults += 1;
+                                self.strikes[i] += u32::from(strike);
+                            }
+                        }
+                        if let Some(e) = self.s.error.take() {
+                            return Err(e);
+                        }
+                    }
+                    if !busy {
+                        break;
+                    }
+                }
+                let before = self.z;
+                let step = loop {
+                    match self.s.step(self.z, self.z == self.start && self.z > 0) {
+                        Step::Height(records) => {
+                            let blocks: Vec<&Block> =
+                                records.iter().map(|f| f.block.as_ref()).collect();
+                            if self.z != self.start {
+                                self.chain.height(&blocks)?;
+                            }
+                            self.z += 1;
+                            self.s.delivered(self.z, &self.chain.last);
+                        }
+                        other => break other,
+                    }
+                };
+                if taken == 0 && self.z == before {
+                    return Ok(step);
+                }
+            }
+        }
+    }
+    fn head_of(step: &Step) -> Option<(usize, u64)> {
+        match step {
+            Step::Head { ctx, start } => Some((*ctx, *start)),
+            _ => None,
+        }
+    }
+    /// The slice of the first shadow run's stop (2026-11-19): zone 11,212,902
+    /// is prime block 2,480,939; prime blocks every 4 zone heights before it
+    /// and every 16 after it, region blocks every 2.
+    fn shadow_stop_slice() -> Slice {
+        Slice::new(11_212_502, 2_480_839, 6_043_000, 11_213_400, |z| {
+            if (z <= 11_212_902 && z % 4 == 2) || z % 16 == 6 {
+                0
+            } else if z % 2 == 0 {
+                1
+            } else {
+                2
+            }
+        })
+    }
+
+    /// The first shadow run stopped at zone 11,212,903, 70 below the peers'
+    /// head 11,212,973: "prime batch 2480940: no valid reply after 8
+    /// attempts (last: missing: prime 2480940 blocks)". The zone block's
+    /// prime number was 2,480,940, the batch 2,480,940..=2,480,949 ended past
+    /// the peers' prime head, and go-quai answers WorkObjectBlocks only with
+    /// all ten blocks. The source asked every peer for it and failed. Now it
+    /// asks no peer whose prime head is below the batch's end, a "missing"
+    /// answer there is not a fault, and at that height a source that hands
+    /// off to gossip ends; one that does not waits for the prime head.
+    #[test]
+    fn a_prime_batch_past_the_peers_head_waits_and_hands_off() {
+        let slice = shadow_stop_slice();
+        assert_eq!(slice.zone[&11_212_902].numbers[0], 2_480_939);
+        assert_eq!(slice.dom[0][&2_480_939].hash, hash_of(11_212_902));
+        assert_eq!(slice.zone[&11_212_903].numbers[0], 2_480_940);
+        let head = slice.heads_at(11_212_973);
+        assert!(
+            head[0] < 2_480_949,
+            "prime head {} covers the batch",
+            head[0]
+        );
+        let peers = vec![head; 8];
+        // go-quai's answer, as the peers gave it.
+        let job = Job {
+            ctx: 0,
+            start: 2_480_940,
+        };
+        assert!(
+            matches!(go_answer(&slice, head, job), Err(Fault::Missing(m)) if m == "prime 2480940 blocks")
+        );
+
+        // The node resumed at 11,211,933 in the shadow run; here from a
+        // checkpoint at 11,212,600, margin 64.
+        let mut sim = Sim::new(&slice, 11_212_600, 64, peers.len());
+        sim.report(&peers);
+        assert_eq!(sim.s.zone_end, 11_212_973 - 64 + 1);
+        let stop = sim.pass(&slice, &peers).expect("no failure at the head");
+        assert_eq!(head_of(&stop), Some((0, 2_480_940)));
+        assert_eq!(sim.z, 11_212_903, "every height to 11,212,902 delivered");
+        assert_eq!(
+            (sim.faults, sim.not_yet),
+            (0, 0),
+            "no peer was asked for the batch"
+        );
+        // The job waits in the queue for a peer whose head covers it.
+        assert!(sim.s.pending.iter().any(|(_, j)| *j == job));
+
+        // Without a hand-off the source waits: polls at the same heads
+        // change nothing and fail nothing.
+        for _ in 0..20 {
+            sim.report(&peers);
+            let stop = sim.pass(&slice, &peers).expect("no failure");
+            assert_eq!(head_of(&stop), Some((0, 2_480_940)));
+        }
+        assert_eq!((sim.z, sim.faults), (11_212_903, 0));
+
+        // Head polls that are older than the peers' last reorganization
+        // claim a prime head that covers the batch: each peer answers
+        // "missing" once, is not at fault, and its prime head is lowered
+        // below the batch's end.
+        let stale: Vec<[u64; 3]> = peers.iter().map(|h| [2_480_949, h[1], h[2]]).collect();
+        sim.report(&stale);
+        let stop = sim
+            .pass(&slice, &peers)
+            .expect("a stale head is not a failure");
+        assert_eq!(head_of(&stop), Some((0, 2_480_940)));
+        assert_eq!((sim.not_yet, sim.faults), (8, 0));
+        assert!(sim.strikes.iter().all(|s| *s == 0));
+        assert!(sim
+            .reported
+            .iter()
+            .all(|r| r[0].load(Ordering::Relaxed) == 2_480_948));
+
+        // The prime chain moves on: every waiting height is delivered.
+        // At zone head 11,213,300 the prime head is 2,480,963: the heights
+        // to 11,213,222 (prime block 2,480,959) are delivered, and zone
+        // height 11,213,223 (prime number 2,480,960) waits for prime batch
+        // 2,480,960..=2,480,969.
+        let later = vec![slice.heads_at(11_213_300); 8];
+        assert_eq!(later[0][0], 2_480_963);
+        sim.report(&later);
+        let stop = sim.pass(&slice, &later).expect("no failure");
+        assert_eq!(head_of(&stop), Some((0, 2_480_960)));
+        assert_eq!(sim.z, 11_213_223);
+        assert_eq!(sim.faults, 0);
+    }
+
+    /// A zone batch that ends past the best head less the margin is the last
+    /// partial batch: a source that hands off ends before it.
+    #[test]
+    fn the_source_hands_off_before_the_last_partial_zone_batch() {
+        // Every block a prime block: the dominant batches never wait.
+        let slice = Slice::new(1_000, 100, 200, 2_000, |_| 0);
+        for head in [1_500, 1_503, 1_509] {
+            let peers = vec![slice.heads_at(head); 3];
+            let mut sim = Sim::new(&slice, 1_200, 64, peers.len());
+            sim.report(&peers);
+            let stop = sim.pass(&slice, &peers).unwrap();
+            // The fetch limit is head - 64; whole batches only.
+            let last_batch = (head - 64 + 1) / BATCH * BATCH;
+            assert_eq!(head_of(&stop), Some((ZONE, last_batch)), "head {head}");
+            assert_eq!(sim.z, last_batch, "head {head}");
+            assert_eq!((sim.faults, sim.not_yet), (0, 0));
+        }
+    }
+
+    /// A batch well below the peers' heads that every peer answers
+    /// "missing" for still fails the source after `MAX_ATTEMPTS`: waiting
+    /// is only for batches at the head.
+    #[test]
+    fn a_missing_batch_below_the_head_is_still_a_fault() {
+        let slice = shadow_stop_slice();
+        let head = slice.heads_at(11_213_300);
+        let mut sim = Sim::new(&slice, 11_212_600, 64, 8);
+        sim.report(&vec![head; 8]);
+        // The peers claim the heads but hold nothing from prime block
+        // 2,480,940 on (as a peer with a damaged database would).
+        let broken: Vec<[u64; 3]> = (0..8).map(|_| [2_480_939, head[1], head[2]]).collect();
+        let e = loop {
+            match sim.pass(&slice, &broken) {
+                Err(e) => break e,
+                Ok(_) => sim.report(&vec![head; 8]),
+            }
+        };
+        assert_eq!(
+            e,
+            "prime batch 2480940: no valid reply after 8 attempts (last: missing: prime 2480940)"
+        );
+    }
+
     #[test]
     fn reply_frames_and_numbers() {
         assert_eq!(number_bytes(0), Vec::<u8>::new());

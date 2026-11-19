@@ -40,6 +40,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 type R<T> = Result<T, RpcError>;
+/// A new canonical block and its logs, each with its JSON.
+type BlockLogs = (Arc<BlockData>, Vec<(LogData, Value)>);
 
 /// go-quai's filter deadline (quai/backend.go: `5*time.Minute`).
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -548,7 +550,7 @@ impl FilterApi {
         }
         fresh.reverse();
         // The logs of each new block (go-quai's `AppendBlock` → logsFeed).
-        let mut block_logs: Vec<(Arc<BlockData>, Vec<(LogData, Value)>)> = vec![];
+        let mut block_logs: Vec<BlockLogs> = vec![];
         if wants_logs {
             for (number, hash) in &fresh {
                 let b = if *hash == head.hash {

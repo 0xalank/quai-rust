@@ -380,8 +380,8 @@ async fn run(chain: Arc<Chain>, s: &Value) -> Result<usize, String> {
                     serde_json::from_slice(&body).unwrap()
                 } else {
                     let k = step["conn"].as_u64().unwrap();
-                    if !conns.contains_key(&k) {
-                        conns.insert(k, connect(addr).await);
+                    if let std::collections::hash_map::Entry::Vacant(e) = conns.entry(k) {
+                        e.insert(connect(addr).await);
                     }
                     conns.get_mut(&k).unwrap().call(&request, want).await
                 };

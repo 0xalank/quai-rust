@@ -3,7 +3,8 @@
 //! verifiers. The ordered checker imports the successful results through the
 //! verifier memo handoff, so it never trusts a value it could not recompute.
 use quai_consensus::{
-    pow::SharedCaches,
+    pow::{Algorithm, SharedCaches},
+    share_rules,
     verifier::{HeaderProofMemo, InclusionWorkMemo, Verifier},
     Error,
 };
@@ -33,6 +34,37 @@ pub struct Pool {
     ready: BTreeMap<u64, Done>,
     workers: Vec<JoinHandle<()>>,
     stop: Arc<AtomicBool>,
+}
+/// Compute the ProgPoW kernels of a job's block header and workshares
+/// together (`LightCache::prefetch`), so that the dataset items of their
+/// rounds are computed side by side. The checks below then take these
+/// results instead of computing each kernel alone; nothing is skipped.
+fn prefetch(caches: &SharedCaches, job: &Job) {
+    let mut epochs: BTreeMap<u64, Vec<(Hash, u64, u64)>> = BTreeMap::new();
+    for h in std::iter::once(&job.header).chain(&job.uncles) {
+        let w = h.wire();
+        if w.aux_pow.is_some() {
+            continue;
+        }
+        let Some(nonce) = w.nonce else { continue };
+        let Ok(height) =
+            share_rules::number(w.prime_terminus_number.as_deref().unwrap_or_default())
+        else {
+            continue;
+        };
+        if height > Algorithm::Progpow.max_height() {
+            continue;
+        }
+        epochs
+            .entry(height / Algorithm::Progpow.epoch_length())
+            .or_default()
+            .push((h.seal_hash(), nonce, height));
+    }
+    for inputs in epochs.values() {
+        if let Ok(cache) = caches.get(Algorithm::Progpow, inputs[0].2) {
+            cache.prefetch(inputs);
+        }
+    }
 }
 fn work(verifier: &mut Verifier, job: Job, location: &[u8]) -> Done {
     let block = verifier.verify_header_proof(&job.header).map(|p| p.hash());
@@ -74,7 +106,7 @@ impl Pool {
                 std::thread::Builder::new()
                     .name(format!("pow-{i}"))
                     .spawn(move || {
-                        let mut verifier = Verifier::with_shared_caches(caches);
+                        let mut verifier = Verifier::with_shared_caches(caches.clone());
                         loop {
                             let job = match jobs.lock() {
                                 Ok(rx) => rx.recv(),
@@ -84,6 +116,7 @@ impl Pool {
                             if stop.load(Ordering::Relaxed) {
                                 return;
                             }
+                            prefetch(&caches, &job);
                             if done.send(work(&mut verifier, job, &location)).is_err() {
                                 return;
                             }

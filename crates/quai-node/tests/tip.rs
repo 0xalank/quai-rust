@@ -5,6 +5,11 @@
 //! on, and moved the head to it at its block 15. The processor follows the
 //! same heads; the reorg rolls back the executed state, the block store and
 //! its indexes, then executes the new branch with every state root equal.
+//!
+//! With a short tip (8 or 12 blocks above the final base instead of 240),
+//! the tests also cross the base checkpoints and their state compaction,
+//! stop the processor in the middle of a reorg, and offer a block that
+//! forks below the base.
 use quai_consensus::pow::SharedCaches;
 use quai_node::cli::{start_pool, TxpoolOptions};
 use quai_node::log::{Level, Log};
@@ -108,7 +113,35 @@ fn settings(data: &std::path::Path, state: bool, resume: bool) -> Settings {
         checkpoint_every: 1_000,
         commit_every: 1_000,
         store: true,
+        shadow: false,
     }
+}
+/// Heights in order from a list.
+struct Heights(std::collections::VecDeque<Height>);
+impl BlockSource for Heights {
+    fn next(&mut self) -> Result<Next, SourceError> {
+        Ok(self
+            .0
+            .pop_front()
+            .map_or(Next::End, |h| Next::Height(Box::new(h))))
+    }
+    fn target(&self) -> Option<u64> {
+        self.0.back().map(|h| h.zone_height)
+    }
+    fn receipts(&self) -> bool {
+        false
+    }
+}
+fn checkpoints(data: &std::path::Path, state: bool) -> Vec<u64> {
+    let chain = Chain::for_environment("local").unwrap();
+    let dir = quai_node::processor::checkpoint_dir(data, &chain, state);
+    let mut out: Vec<u64> = quai_node::checkpoint::list(&dir)
+        .unwrap()
+        .into_iter()
+        .map(|(h, _)| h)
+        .collect();
+    out.sort();
+    out
 }
 
 fn reorg_follows_go(state: bool) {
@@ -134,6 +167,9 @@ fn reorg_follows_go(state: bool) {
     p.set_metrics(metrics.clone());
     let (view, _live) = p.live_view().unwrap();
     let mut events = view.head_events().unwrap();
+    // The base, final, is 8 canonical blocks below the head: the reorg at
+    // height 15 returns to it.
+    p.set_tip_keep(8);
     p.enable_tip().unwrap();
     // A child before its parent waits for it; the genesis is known.
     assert_eq!(
@@ -207,18 +243,23 @@ fn reorg_follows_go(state: bool) {
         // Every block of both branches executed with all roots equal.
         assert!(s.state_blocks.unwrap() >= 16);
     }
-    // A resumed processor starts at the new head (the view's snapshots
-    // keep the store open until they are dropped).
+    // A resumed processor starts at the final base, 8 below the head
+    // (the view's snapshots keep the store open until they are dropped),
+    // and continues on the new branch.
     drop((view, _live, events));
-    let p = Processor::open(
+    let mut p = Processor::open(
         chain,
         settings(&data, state, true),
         Some(caches),
         std::time::Instant::now(),
     )
     .unwrap();
+    assert_eq!(p.zone_head(), Some((hb[8], 8)));
+    p.run(&mut Heights(b[8..].iter().cloned().collect()), &log)
+        .unwrap();
     assert_eq!(p.zone_head(), Some((hb[16], 16)));
-    drop(p);
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
     std::fs::remove_dir_all(data).unwrap();
 }
 
@@ -229,6 +270,219 @@ fn reorgs_follow_go_with_state() {
 #[test]
 fn reorgs_follow_go_without_state() {
     reorg_follows_go(false);
+}
+
+/// Offer branch A to its head, then branch B; the reorg at B's block 15
+/// returns to the common ancestor at height 8.
+fn follow_both(
+    p: &mut Processor,
+    a: &[Height],
+    b: &[Height],
+    hb: &[quai_primitives::Hash],
+    log: &Log,
+) -> Result<(), String> {
+    for h in &a[1..] {
+        assert!(
+            matches!(p.offer(h.clone(), log)?, Offer::Accepted { .. }),
+            "A {}",
+            h.zone_height
+        );
+    }
+    for h in &b[9..] {
+        match p.offer(h.clone(), log)? {
+            Offer::Accepted { head, removed, .. } => {
+                if h.zone_height == 15 {
+                    assert_eq!(removed.len(), 8);
+                    assert_eq!(head, (hb[15], 15));
+                }
+            }
+            other => panic!("B {}: {other:?}", h.zone_height),
+        }
+    }
+    Ok(())
+}
+fn opened(data: &std::path::Path, state: bool, resume: bool, every: u64) -> Processor {
+    let mut s = settings(data, state, resume);
+    s.checkpoint_every = every;
+    s.commit_every = 2;
+    Processor::open(
+        Chain::for_environment("local").unwrap(),
+        s,
+        Some(Arc::new(SharedCaches::new(2).unwrap())),
+        std::time::Instant::now(),
+    )
+    .unwrap()
+}
+
+/// Every canonical tip block commits its own state version; the base
+/// checkpoints compact the state and execute the blocks above the base
+/// again. The reorg to height 8 crosses the commits of 9..=16 and, with a
+/// 12-block tip, uses a version re-created after the compaction at the base
+/// 4; with an 8-block tip it returns to the base itself (compacted at 8).
+fn reorg_across_commits(state: bool, keep: u64, compacted: u64) {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let hb = go_hashes(&doc, 1 - first);
+    let log = Log::new(Level::Warn);
+    let data = scratch(&format!("commits-{state}-{keep}"));
+    let mut p = opened(&data, state, false, 4);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    p.set_tip_keep(keep);
+    p.enable_tip().unwrap();
+    follow_both(&mut p, &a, &b, &hb, &log).unwrap();
+    assert_eq!(p.tip().unwrap().head(), (hb[16], 16));
+    assert_eq!(p.tip().unwrap().base().1, compacted.max(16 - keep));
+    // The base checkpoints of branch A; with state, compacted files.
+    let cps = checkpoints(&data, state);
+    assert!(cps.contains(&compacted), "{cps:?}");
+    if state {
+        let chain = Chain::for_environment("local").unwrap();
+        let dir = quai_node::processor::checkpoint_dir(&data, &chain, true);
+        assert!(dir.join(format!("state-{compacted:010}.redb")).is_file());
+    }
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none());
+    if state {
+        assert!(s.state_blocks.unwrap() >= 16);
+    }
+    // The run resumes at the final base and checks branch B to its head.
+    let base = *checkpoints(&data, state).last().unwrap();
+    let mut p = opened(&data, state, true, 4);
+    assert_eq!(p.zone_head(), Some((hb[base as usize], base)));
+    p.run(
+        &mut Heights(b[base as usize..].iter().cloned().collect()),
+        &log,
+    )
+    .unwrap();
+    assert_eq!(p.zone_head(), Some((hb[16], 16)));
+    assert!(p.finish(&log).unwrap().failure.is_none());
+    std::fs::remove_dir_all(data).unwrap();
+}
+#[test]
+fn reorg_across_state_commits_and_a_compaction_below_it() {
+    reorg_across_commits(true, 12, 4);
+}
+#[test]
+fn reorg_to_a_compacted_base_with_state() {
+    reorg_across_commits(true, 8, 8);
+}
+#[test]
+fn reorg_to_a_base_checkpoint_without_state() {
+    reorg_across_commits(false, 8, 8);
+}
+
+/// The processor stops in the middle of a reorg (after the rollback, or
+/// after some blocks of the new branch); the next start resumes at the
+/// last base checkpoint and checks the new branch to its head.
+fn crash_in_reorg(state: bool, point: &str, at: u64) {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let hb = go_hashes(&doc, 1 - first);
+    let log = Log::new(Level::Error);
+    let data = scratch(&format!("crash-{state}-{point}"));
+    let chain = Chain::for_environment("local").unwrap();
+    let dir = quai_node::processor::checkpoint_dir(&data, &chain, state);
+    let mut p = opened(&data, state, false, 4);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    p.set_tip_keep(8);
+    p.enable_tip().unwrap();
+    quai_node::store::inject_fault(&dir, point, at);
+    let crashed = follow_both(&mut p, &a, &b, &hb, &log);
+    let e = crashed.expect_err("the injected fault stops the reorg");
+    assert!(e.contains("test fault"), "{e}");
+    // A crash: no finish, no final checkpoint.
+    drop(p);
+    let base = *checkpoints(&data, state).last().unwrap();
+    assert_eq!(base, 8);
+    let mut p = opened(&data, state, true, 4);
+    assert_eq!(p.zone_head(), Some((hb[8], 8)));
+    p.run(&mut Heights(b[8..].iter().cloned().collect()), &log)
+        .unwrap();
+    assert_eq!(p.zone_head(), Some((hb[16], 16)));
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    if state {
+        assert!(s.state_blocks.unwrap() >= 16);
+    }
+    std::fs::remove_dir_all(data).unwrap();
+}
+#[test]
+fn a_crash_after_the_reorg_rollback_resumes_with_state() {
+    crash_in_reorg(true, "reorg-rolled-back", 8);
+}
+#[test]
+fn a_crash_inside_the_new_branch_resumes_with_state() {
+    crash_in_reorg(true, "reorg-applied", 11);
+}
+#[test]
+fn a_crash_inside_the_new_branch_resumes_without_state() {
+    crash_in_reorg(false, "reorg-applied", 11);
+}
+
+/// A block whose parent is at or below the final base without being it is
+/// refused without stopping the node, and the head stays.
+#[test]
+fn a_block_forking_below_the_base_is_refused() {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Error);
+    let data = scratch("below-base");
+    let mut p = opened(&data, true, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    p.set_tip_keep(4);
+    p.enable_tip().unwrap();
+    for h in &a[1..] {
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
+    }
+    assert_eq!(p.tip().unwrap().base(), (ha[12], 12));
+    assert_eq!(p.offer(b[11].clone(), &log).unwrap(), Offer::Known);
+    assert_eq!(
+        p.offer(b[14].clone(), &log).unwrap(),
+        Offer::NeedParent(hb[13])
+    );
+    assert_eq!(p.offer(b[13].clone(), &log).unwrap(), Offer::BelowBase);
+    assert_eq!(p.tip().unwrap().head(), (ha[16], 16));
+    assert_eq!(p.tip().unwrap().canonical_at(14), Some(ha[14]));
+    drop(p);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+/// A shadow run without the block store (`run --no-store`): the head
+/// choice, the reorg and the base checkpoints work without it.
+#[test]
+fn tip_mode_without_a_block_store() {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let hb = go_hashes(&doc, 1 - first);
+    let log = Log::new(Level::Error);
+    let data = scratch("no-store");
+    let mut s = settings(&data, false, false);
+    s.store = false;
+    s.checkpoint_every = 4;
+    let mut p = Processor::open(
+        Chain::for_environment("local").unwrap(),
+        s,
+        Some(Arc::new(SharedCaches::new(2).unwrap())),
+        std::time::Instant::now(),
+    )
+    .unwrap();
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    assert!(p.live_view().is_err());
+    p.set_tip_keep(8);
+    p.enable_tip().unwrap();
+    follow_both(&mut p, &a, &b, &hb, &log).unwrap();
+    assert_eq!(p.tip().unwrap().head(), (hb[16], 16));
+    assert!(p.finish(&log).unwrap().failure.is_none());
+    assert_eq!(checkpoints(&data, false).last(), Some(&8));
+    std::fs::remove_dir_all(data).unwrap();
 }
 
 /// The transaction pool on the live view, started as `quai-node run` starts

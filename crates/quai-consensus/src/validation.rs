@@ -457,6 +457,104 @@ pub fn native_parent_metrics(
         },
     })
 }
+/// What [`verify_workshare`] found for one share.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkshareReport {
+    /// The share's block hash (`WorkObjectHeader.Hash`).
+    pub hash: Hash,
+    /// The proof-of-work hash the classification used.
+    pub pow: Hash,
+    pub parent: Hash,
+    pub number: u64,
+    /// The parent was in the history, so the parent rules ran too.
+    pub parent_checked: bool,
+}
+/// A gossiped workshare (go-quai `worker.AddWorkShare`): `validateUncleData`,
+/// then `UncleWorkShareClassification` must be `Valid` (a share that meets the
+/// block target is a block, not a workshare). When the share's parent is in
+/// `history`, also the uncle rules of any block that would include it and that
+/// do not depend on that block (`check_inclusions_projection`): the proof ID,
+/// the difficulty after the parent, the prime terminus, the SHA and scrypt
+/// controllers and the number. go-quai drops shares more than
+/// 2 * NewWorkSharesInclusionDepth below its head before these rules; the
+/// caller applies that distance.
+pub fn verify_workshare(
+    verifier: &mut Verifier,
+    history: &History,
+    header: &Header,
+    profile: &Profile,
+) -> Result<WorkshareReport, Error> {
+    profile.validate()?;
+    let h = header;
+    let hash = header_id(h)?;
+    // validateUncleData has no Qi coinbase and no early lock rule.
+    data_policy(h, u64::MAX, false)?;
+    let work = verifier.work_for_inclusion(h, &profile.location)?;
+    match share_rules::classify(h, work.hash(), profile.p2p_threshold)? {
+        Classification::Valid => {}
+        Classification::Block => return Err(Error::Invalid("workshare meets the block target")),
+        Classification::Sub => return Err(Error::Invalid("workshare below the workshare target")),
+        Classification::Invalid => return Err(Error::Invalid("workshare proof classification")),
+    }
+    let algo = h
+        .wire()
+        .aux_pow
+        .as_ref()
+        .map(|b| crate::auxiliary::Auxiliary::decode(b).map(|a| a.id()))
+        .transpose()?;
+    if !rules::pow_id_valid(prime(h)?, algo, true) {
+        return Err(Error::Invalid("uncle proof ID"));
+    }
+    let mut report = WorkshareReport {
+        hash,
+        pow: work.hash(),
+        parent: parent(h),
+        number: num(h)?,
+        parent_checked: false,
+    };
+    let parent = match history.get(&report.parent) {
+        Ok(p) => p,
+        Err(Error::Unavailable(_)) => return Ok(report),
+        Err(e) => return Err(e),
+    };
+    if diff(h)? != expected_difficulty(history, &parent, profile)? {
+        return Err(Error::Invalid("uncle difficulty"));
+    }
+    if prime(h)? >= FORKS.kawpow {
+        let order = native_parent_metrics(verifier, history, &parent, profile)?.order;
+        let expected = if order == 0 || profile.genesis.contains(&parent.id) {
+            parent.numbers[0]
+        } else {
+            parent.prime
+        };
+        if prime(h)? != expected {
+            return Err(Error::Invalid("uncle prime terminus"));
+        }
+        let (sha, scrypt) = expected_share_triples(&parent, prime(h)?, &profile.location)?;
+        let actual = Triple::from_header(h, true)?;
+        if actual.difficulty != sha.difficulty || actual.count != sha.count {
+            return Err(Error::Invalid("uncle SHA controller"));
+        }
+        let actual = Triple::from_header(h, false)?;
+        if actual.difficulty != scrypt.difficulty || actual.count != scrypt.count {
+            return Err(Error::Invalid("uncle scrypt controller"));
+        }
+    }
+    let pn = if profile.genesis.contains(&parent.id) {
+        0
+    } else {
+        parent.numbers[2]
+    };
+    if report.number
+        != pn
+            .checked_add(1)
+            .ok_or(Error::Unsupported("uncle number overflow"))?
+    {
+        return Err(Error::Invalid("uncle number"));
+    }
+    report.parent_checked = true;
+    Ok(report)
+}
 /// Testable controlled-hash policy projection. It does not verify PoW and never
 /// returns a token accepted by the native runtime inclusion path.
 pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(

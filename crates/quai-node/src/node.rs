@@ -45,6 +45,19 @@ pub struct Options {
     /// At the peers' head less the margin, follow the head through gossip
     /// with go-quai's head choice (tip mode); otherwise poll by number.
     pub gossip: bool,
+    /// Test tool for the shadow run: start a stateless node at a trusted
+    /// zone block (`bootstrap.rs`) when the data directory holds no
+    /// checkpoint (Some(None) chooses the block), and accept the checkpoints
+    /// of such a run. That block and its ancestry are not validated by this
+    /// node. None: start only from the genesis or a validated checkpoint.
+    pub shadow_bootstrap: Option<Option<quai_primitives::Hash>>,
+    /// Peers that must agree on the trusted block.
+    pub bootstrap_quorum: usize,
+    /// Zone blocks the trusted block stays below the best peer head.
+    pub bootstrap_depth: u64,
+    /// Keep the block store (needed by the RPC). Off for a long shadow run
+    /// with bounded disk: the store grows about 50 KB per zone block.
+    pub store: bool,
     /// The transaction pool (with state only).
     pub txpool: crate::cli::TxpoolOptions,
 }
@@ -101,79 +114,22 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             crate::processor::describe(&e)
         )
     })?;
-    let settings = Settings {
-        jobs: o.jobs,
-        progress: o.progress,
-        state: !o.stateless,
-        datadir: Some(o.datadir.clone()),
-        resume: true,
-        checkpoint_every: o.checkpoint_every,
-        commit_every: o.commit_every,
-        store: true,
-    };
-    let mut processor = Processor::open(chain.clone(), settings, None, started)?;
-    processor.set_stop_flag(stop.clone());
-    let start = processor.start();
-    let heads = processor.heads().map(|h| h.unwrap_or_default());
-    log.info(&format!(
-        "run: environment {} (chain {}), {}, starting at zone {start} ({}), {} proof-of-work threads",
-        chain.spec().environment,
-        chain.spec().chain_id,
-        if o.stateless { "stateless" } else { "with state" },
-        match processor.resumed_from() {
-            Some(h) => format!("checkpoint {h}"),
-            None => "genesis".into(),
-        },
-        o.jobs
-    ));
-    let metrics = Arc::new(Metrics::new(start));
-    processor.set_metrics(metrics.clone());
-    // The RPC view follows the processor's published head.
-    let (mut view, live) = processor.live_view()?;
-    // The transaction pool resets on every published head (with state).
-    let pool = if o.stateless {
-        None
-    } else {
-        crate::cli::start_pool(
-            &mut view,
-            &o.txpool,
-            &o.datadir,
-            runtime.handle(),
-            stop.clone(),
-            *log,
-        )?
-    };
-    let view = Arc::new(view);
-    let shutdown = {
-        let stop = stop.clone();
-        move || {
-            let stop = stop.clone();
-            async move {
-                while !stop.load(Ordering::Relaxed) {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
+    // Production runs trust no block: refuse a shadow run's checkpoint
+    // before anything else (the processor refuses it too).
+    if o.shadow_bootstrap.is_none() {
+        let dir = crate::processor::checkpoint_dir(&o.datadir, &chain, !o.stateless);
+        let latest =
+            crate::checkpoint::list(&dir).map_err(|e| format!("checkpoint directory: {e}"))?;
+        if let Some((h, path)) = latest.first() {
+            if let Some((t, at)) = crate::checkpoint::read(path).ok().and_then(|c| c.trusted) {
+                return Err(format!(
+                    "checkpoint {h} rejected: it continues a shadow run (a test tool) whose bootstrap trusted zone block {} at {at}; that block and its ancestry were not validated by this node. Without --shadow-bootstrap the node starts only from the genesis or from a checkpoint it validated itself: use another data directory",
+                    quai_primitives::encode_hex(&t)
+                ));
             }
         }
-    };
-    if let Some(listen) = &o.rpc_listen {
-        let config = crate::cli::rpc_config(listen.clone());
-        let app = quai_rpc::App::native(config, view.clone())?;
-        let listener = runtime
-            .block_on(tokio::net::TcpListener::bind(listen))
-            .map_err(|e| format!("rpc listen {listen}: {e}"))?;
-        log.info(&format!(
-            "rpc: native JSON-RPC on {}",
-            listener.local_addr().map_err(|e| e.to_string())?
-        ));
-        let rpc_log = *log;
-        let done = shutdown();
-        runtime.spawn(async move {
-            if let Err(e) = quai_rpc::serve_until(app, listener, done).await {
-                rpc_log.error(&format!("rpc: {e}"));
-            }
-        });
     }
-    // Peers.
+    // The network first: a bootstrap fetches the trusted ancestry from it.
     let peer_addrs = o
         .peers
         .iter()
@@ -204,6 +160,150 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                 .map_err(|e| format!("p2p: {e}"))?,
         )
     };
+    if let Some(trusted) = o.shadow_bootstrap {
+        if !o.stateless {
+            return Err("--shadow-bootstrap needs --stateless: peers serve no state (go-quai GetTrieNode is not implemented), so execution has no parent state at the trusted block".into());
+        }
+        log.warn("SHADOW BOOTSTRAP (test tool, not for production): this run starts at a trusted zone block; that block and its whole ancestry are NOT validated by this node. Every block after it passes every stateless check");
+        let dir = crate::processor::checkpoint_dir(&o.datadir, &chain, false);
+        let existing =
+            crate::checkpoint::list(&dir).map_err(|e| format!("checkpoint directory: {e}"))?;
+        match existing.first() {
+            Some((h, path)) => {
+                let cp =
+                    crate::checkpoint::read(path).map_err(|e| format!("checkpoint {h}: {e}"))?;
+                match (cp.trusted, trusted) {
+                    (Some((t, at)), Some(want)) if t != want => {
+                        return Err(format!(
+                            "{} continues a shadow run from zone block {} at {at}, not {}; use another data directory",
+                            dir.display(),
+                            quai_primitives::encode_hex(&t),
+                            quai_primitives::encode_hex(&want)
+                        ))
+                    }
+                    (Some((t, at)), _) => log.warn(&format!(
+                        "SHADOW BOOTSTRAP: resuming from checkpoint {h}; the trusted block is {} at {at} (evidence: {})",
+                        quai_primitives::encode_hex(&t),
+                        dir.join("bootstrap.json").display()
+                    )),
+                    (None, _) => log.info(&format!(
+                        "shadow bootstrap: {} holds the validated checkpoint {h}; resuming from it without a trusted block",
+                        dir.display()
+                    )),
+                }
+            }
+            None => {
+                let bootstrap = crate::bootstrap::run(
+                    runtime.handle(),
+                    node.clone(),
+                    chain.clone(),
+                    &o.datadir,
+                    &crate::bootstrap::Options {
+                        trusted,
+                        quorum: o.bootstrap_quorum,
+                        depth: o.bootstrap_depth,
+                        peers: peer_addrs.clone(),
+                        public: o.public,
+                        max_peers: o.max_peers,
+                    },
+                    &stop,
+                    log,
+                );
+                if let Err(e) = bootstrap {
+                    // A signal during the bootstrap: nothing was written.
+                    if stop.load(Ordering::Relaxed) {
+                        log.warn("bootstrap stopped by a signal before its checkpoint");
+                        return Ok(match signal.load(Ordering::Relaxed) {
+                            0 => 130,
+                            code => code,
+                        });
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+    let settings = Settings {
+        jobs: o.jobs,
+        progress: o.progress,
+        state: !o.stateless,
+        datadir: Some(o.datadir.clone()),
+        resume: true,
+        checkpoint_every: o.checkpoint_every,
+        commit_every: o.commit_every,
+        store: o.store,
+        shadow: o.shadow_bootstrap.is_some(),
+    };
+    let mut processor = Processor::open(chain.clone(), settings, None, started)?;
+    processor.set_stop_flag(stop.clone());
+    let start = processor.start();
+    let heads = processor.heads().map(|h| h.unwrap_or_default());
+    log.info(&format!(
+        "run: environment {} (chain {}), {}, starting at zone {start} ({}), {} proof-of-work threads",
+        chain.spec().environment,
+        chain.spec().chain_id,
+        if o.stateless { "stateless" } else { "with state" },
+        match processor.resumed_from() {
+            Some(h) => format!("checkpoint {h}"),
+            None => "genesis".into(),
+        },
+        o.jobs
+    ));
+    let metrics = Arc::new(Metrics::new(start));
+    processor.set_metrics(metrics.clone());
+    // The RPC view follows the processor's published head (with a block
+    // store), and the transaction pool resets on every published head (with
+    // state and a store).
+    let mut live_view = if o.store {
+        Some(processor.live_view()?)
+    } else {
+        None
+    };
+    let pool = match (&mut live_view, o.stateless) {
+        (Some((view, _)), false) => crate::cli::start_pool(
+            view,
+            &o.txpool,
+            &o.datadir,
+            runtime.handle(),
+            stop.clone(),
+            *log,
+        )?,
+        (None, false) if o.txpool.enabled => {
+            log.info("txpool: off (no block store)");
+            None
+        }
+        _ => None,
+    };
+    let live_view = live_view.map(|(view, live)| (Arc::new(view), live));
+    let shutdown = {
+        let stop = stop.clone();
+        move || {
+            let stop = stop.clone();
+            async move {
+                while !stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+    };
+    if let (Some(listen), Some((view, _))) = (&o.rpc_listen, &live_view) {
+        let config = crate::cli::rpc_config(listen.clone());
+        let app = quai_rpc::App::native(config, view.clone())?;
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind(listen))
+            .map_err(|e| format!("rpc listen {listen}: {e}"))?;
+        log.info(&format!(
+            "rpc: native JSON-RPC on {}",
+            listener.local_addr().map_err(|e| e.to_string())?
+        ));
+        let rpc_log = *log;
+        let done = shutdown();
+        runtime.spawn(async move {
+            if let Err(e) = quai_rpc::serve_until(app, listener, done).await {
+                rpc_log.error(&format!("rpc: {e}"));
+            }
+        });
+    }
     let mut source = PeerSource::start(
         runtime.handle(),
         node.clone(),
@@ -255,6 +355,11 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             *log,
         ) {
             Ok(gossip) => {
+                let mut detector = crate::divergence::Detector::new(
+                    Some(o.datadir.join("node").join("divergences.jsonl")),
+                    Some(metrics.clone()),
+                    *log,
+                );
                 let followed = crate::tip::follow(
                     &mut processor,
                     runtime.handle(),
@@ -262,11 +367,15 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                     gossip,
                     &stop,
                     log,
+                    &mut detector,
+                    Some(metrics.clone()),
+                    stats.clone(),
                 );
                 match followed {
                     Ok(t) => log.info(&format!(
-                        "tip: {} offered, {} accepted, {} rejected, {} fetched, {} reorgs ({} blocks, deepest {}), {} refused by the horizon; gossip {} blocks, {} workshares",
-                        t.offered, t.accepted, t.rejected, t.fetched, t.reorgs, t.reorged_blocks, t.deepest, t.refused,
+                        "tip: blocks {} offered, {} accepted, {} rejected, {} below the tip base, {} fetched; {} reorgs ({} blocks, deepest {}), {} refused by the horizon; workshares {} valid, {} valid without the parent rules, {} rejected, {} too old; gossip {} blocks, {} workshares",
+                        t.offered, t.accepted, t.rejected, t.below_base, t.fetched, t.reorgs, t.reorged_blocks, t.deepest, t.refused,
+                        t.shares_valid, t.shares_parent_unknown, t.shares_rejected, t.shares_old,
                         stats.blocks.load(Ordering::Relaxed), stats.workshares.load(Ordering::Relaxed)
                     )),
                     Err(e) => result = Err(e),
@@ -283,7 +392,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             return Err(e);
         }
     };
-    drop(live);
+    drop(live_view);
     runtime.shutdown_timeout(Duration::from_secs(5));
     let line = node_line(&summary, metrics.peer_head());
     println!("{line}");

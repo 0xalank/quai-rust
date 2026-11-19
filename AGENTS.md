@@ -24,8 +24,9 @@
 
 ## Performance experiments
 
-Do not start new tuning before the Phase 1 gate, except the Phase 4 items in
-`ROADMAP.md`. When you run an experiment:
+Performance work may run now (`ROADMAP.md`, Phase 4); every result must stay
+identical to Go. Every header's proof-of-work is checked; no assume-valid.
+When you run an experiment:
 
 - Optimize Rust implementation files or the documented configuration space.
   During an experiment, keep the workload, Go reference/client, validation and

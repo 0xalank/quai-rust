@@ -567,6 +567,7 @@ fn a_source_that_waits_gives_the_export_result() {
         checkpoint_every: 10_000,
         commit_every: 1_000,
         store: false,
+        shadow: false,
     };
     let chain = quai_node::spec::Chain::for_environment("local").unwrap();
     let mut p =

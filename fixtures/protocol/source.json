@@ -1,7 +1,7 @@
 {
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "generator_sha256": "8f9aa60981d784ae8176d50aa7a6ef05f93dd39ed41b2d37f1965bd1df655176",
-  "vectors_sha256": "447c8ab8a05f49e42fe25f33666a7d8825f85fe98361148e4875d28f5c3e64e4",
+  "generator_sha256": "f9138d4eb1ef0f99e84f6eae17971983650e761f99f570526076058207b2b46b",
+  "vectors_sha256": "1708ef4fc46242b486c8c569f53edba2c4d4d16bd43f23215719adb19975299a",
   "sources": {
     "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
     "core/types/proto_block.proto": "56dc50f200e62d0ce18506983f5ae3738616e429facdcf6e631aa4cbcd42614e",

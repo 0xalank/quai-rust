@@ -99,6 +99,18 @@ impl Header {
                     .checked_add(schedule.transition_period)
                     .ok_or("fork schedule overflow")?;
         if activated {
+            // go-quai decodes an AuxPow only when it has a donor header and a
+            // coinbase transaction, and drops any other without checking it
+            // (core/types/wo.go:1652): the header then has no AuxPow, in its
+            // encoding and in its hash. A present but empty field counts as
+            // present, as in protobuf-go.
+            if let Some(bytes) = &wire.aux_pow {
+                let aux = crate::schema::block::ProtoAuxPow::decode(bytes.as_slice())
+                    .map_err(|_| "malformed auxiliary protobuf")?;
+                if aux.header.is_none() || aux.transaction.is_none() {
+                    wire.aux_pow = None;
+                }
+            }
             if let Some(bytes) = &mut wire.aux_pow {
                 if !allow_auxiliary {
                     return Err("auxiliary header form not implemented".into());

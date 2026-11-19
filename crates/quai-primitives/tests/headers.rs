@@ -7,6 +7,7 @@ fn frozen_go_header_and_threshold_vectors_match() {
     .unwrap();
     assert_eq!(report["passed"], true, "{report}");
     assert!(report["checks"].as_u64().unwrap() > 1000);
+    assert_eq!(report["aux_shape_vectors"], 75);
 }
 #[test]
 fn malformed_and_oversized_wire_data_is_rejected() {

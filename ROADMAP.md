@@ -43,9 +43,9 @@ by the coordinator.
 | G0–G2 | Chain spec, wire formats, commitments | Partial |
 | G3 | EVM, Qi and ETX execution | Partial |
 | G4 | PoW, AuxPoW, workshares, fork choice | Partial |
-| G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; reorg rollback tested on the private fixture |
-| G6–G7 | P2P and sync | Mainnet sync by height from public peers; gossip head choice live without validation |
-| G8 | Mainnet shadow sync | Not started |
+| G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; tip mode: a state version per canonical block, reorgs across commits and a compaction and crashes in a reorg tested on the private fixture |
+| G6–G7 | P2P and sync | Mainnet sync by height from public peers; stateless head-follow live with every check and go-quai's head choice |
+| G8 | Mainnet shadow sync | Shadow run (test tool) and divergence detector; 2 h 20 min live, 0 divergences; the 2-week run not started |
 | G9 | Live RPC, tx pool, wallets | Reads on replayed state; tx pool equal to Go (363/363 oracle steps); filters, subscriptions and Qi wallet estimates missing |
 | G10–G11 | Production tests, mining | Not started |
 
@@ -334,7 +334,7 @@ divergence from Go.
        answers inbound requests with "not found" until it has validated state
        (step 3, Phase 3.1), so two Rust public nodes fail each other's genesis
        check; Kademlia contacts with only circuit addresses are not dialed.
-3. [ ] Follow the live head. Send gossiped blocks and workshares through the
+3. [x] Follow the live head. Send gossiped blocks and workshares through the
        same validation path.
        Done (`43e035d`): go-quai's head choice for slice [0 0]
        (`forkchoice.rs`: NodeSet, BuildPendingHeaders with its 21 tries and
@@ -361,13 +361,104 @@ divergence from Go.
        of depth 1, one of 2, one of 3; 50 blocks) between zone 11,197,132 and
        11,197,466; the block 3 below the chosen head equal to the peers'
        canonical hash 28/28 times.
-       Left: a validating run at the live head. The node needs a checkpoint
-       near it: a stateless sync from zone 730,369 to 11.2M takes about 15-20
-       days at this host's 6-8 blocks/s (about 3 days at 35-50 blocks/s on an
-       idle host). With state, the tip keeps its state overlay until the next
-       checkpoint, and a reorg below the last state commit stops the node
-       (restart from an older checkpoint).
+       Done (branch `head-follow`): a validating stateless run at the live
+       head, end to end through the switch from the sync by number to
+       gossip, from a shadow bootstrap (step 4, a test tool). In tip mode
+       every gossip block passes every stateless check (proof-of-work
+       included) and go-quai's head choice; every gossip workshare passes
+       go-quai's intake (`worker.AddWorkShare`: `validateUncleData`, then
+       `UncleWorkShareClassification` must be Valid) and the uncle rules that
+       do not depend on an including block (`validation::verify_workshare`:
+       proof ID, difficulty after the parent, prime terminus, SHA and scrypt
+       controllers, number), after go-quai's intake distance. Tip state with
+       `--state`: every canonical tip block commits its own state version, a
+       reorg restores the common ancestor's version (no more "restart from an
+       older checkpoint"); the tip base, 240 canonical blocks below the head
+       (4 x the 60-block horizon), is final, and checkpoints in tip mode (and
+       at the end of a run) are written there, so a restart never resumes on
+       a removed branch; a base checkpoint compacts the state and executes
+       the canonical blocks above the base again into the compacted file.
+       Tests (`tests/tip.rs` 9/9, the fixture's branches): a reorg across the
+       per-block commits and a compaction below the common ancestor, a reorg
+       to a compacted base (with and without state), a crash after the
+       rollback and inside the new branch (resume at the base checkpoint,
+       every root of the new branch equal), a block that forks below the base
+       refused without stopping. Fixed on the way: SIGTERM in tip mode ended
+       the run with "gossip stopped" and no checkpoint; a block forking below
+       the base made the follower fetch the same parent forever; the peer
+       source never fetched the batch that holds `--to` when `--to` does not
+       end a ten-block batch (a bootstrap stalled 8 heights short); a peer
+       could become two sources; share views were decoded as full work
+       objects and refused.
+       Left: a stateful run at the head needs state near the head: peers
+       serve no state (go-quai `GetTrieNode` is "todo"), and the rolling
+       replay is at zone 1.45M of 11.2M.
 4. [ ] Run next to a Go node and compare heads and roots.
+       Shadow run, a TEST TOOL and not for production (branch `head-follow`):
+       `quai-node run --stateless --shadow-bootstrap <zone block hash|auto>`
+       starts at a trusted zone block T instead of the genesis. T and its
+       ancestry are NOT validated by the node, which warns so at every start;
+       every block after T passes every stateless check, proof-of-work
+       included. auto takes the block 1,000 below the best peer head that at
+       least 3 peers report as canonical, and `headers/bootstrap.json` keeps
+       the peers' heads and answers. The node fetches the prime blocks
+       P-8,000..=P-4,002 (P: the prime head at T) for their exchange rates,
+       then the zone heights from the prime block P-4,002 to T with their
+       prime and region records, every record hash-linked to the one before
+       it and the last one T, and derives the window of a replay at T
+       (`processor::bootstrap_checkpoint`): append snapshots checked against
+       the next headers' commitments and PCRC, rollups against the ETX rollup
+       roots and region manifests, the interlinks of P from its proof-of-work
+       rank, the token choice sets of P-1 and P rebuilt from the inbound ETXs
+       of the last 4,001 prime blocks (a row depends only on its block, its
+       parent, its inbound ETXs and the rate 4,000 prime blocks back). On the
+       fixture the derived window equals a replay's record by record, and the
+       next blocks pass (`tests/shadow.rs`). Peers serve no state (go-quai
+       `GetTrieNode` is "todo"), so the flag needs `--stateless`; nothing else
+       is skipped after T. The checkpoint format gains an optional trailing
+       section with T (needed: the provenance must travel with the
+       checkpoint), which every later checkpoint keeps; `run` without the
+       flag and every replay refuse such a checkpoint and start only from the
+       genesis or a checkpoint the node validated itself
+       (`run_refuses_a_shadow_checkpoint_without_the_test_flag`).
+       Divergence detector (`divergence.rs`): a block the node rejects that
+       the peers' canonical chain holds; a gossip workshare the node rejected
+       that a block passing every check includes; the canonical block 5 below
+       the head differing from the majority of the answering peers for a
+       minute; the peers 10 blocks ahead for 3 minutes. Each one is logged
+       with the block, the check, the expected and the actual value, appended
+       to `<datadir>/node/divergences.jsonl` and counted in `/metrics`
+       (`quai_node_divergences_total{kind}`, with the workshare results, the
+       rejected blocks, the unavailable checks and the comparisons).
+       `scripts/mainnet/shadow_run.sh` (TEST TOOL): the long stateless run,
+       started again after a crash; guards as `rolling_replay.sh`: no run on
+       an iPhone hotspot gateway, a disk floor, a STOP file, a lock, a pinned
+       binary with its sha256, logs per start and `history.jsonl`.
+       Live, `shadow_run.sh` with binary `f65ed71` (sha256 `e45f562e…`),
+       2 h 20 min (8,407 s) on public peers, the host at load 170-290. auto
+       chose T `0x7f82…6c5c` at zone 11,200,137, 1,000 below the best peer
+       head 11,201,137, canonical for 11 of 12 peers (one lagging peer at
+       8.68M had none); P at prime 2,478,094; 18,004 heights adopted (4,002
+       prime, 9,738 region records, 4,001 token choice rows) in 90 s. Then
+       962 heights by number and the switch to gossip at 11,201,099, every
+       block with every stateless check, to 11,202,627, the peers' head at
+       the end: 2,642 heights, 0 failures, 0 rejected blocks; in tip mode
+       1,985 blocks offered, 1,806 accepted, 178 ancestors fetched; 145
+       reorgs removing 152 blocks (139 of depth 1, 5 of 2, 1 of 3), none
+       refused by the horizon; 15,244 gossip workshares: 14,488 passed every
+       check, 92 every check but the parent rules (parent not held), 0
+       rejected; the canonical block 5 below the head equal to the peers'
+       264 of 264 times; 0 divergences of any kind, 0 unavailable checks. CPU
+       590 s (7.1% of one core), RSS median 195 MB, max 345 MB (60 s
+       samples); a final checkpoint at the tip base 11,202,387. Earlier runs
+       found the bugs fixed above (a stalled bootstrap, share views refused at
+       decode). The block store grew about 50 KB per block, so `shadow_run.sh`
+       runs `run --no-store` (no RPC) unless SHADOW_STORE=1.
+       Next: the 2-week run: `scripts/mainnet/shadow_run.sh` from the merged
+       checkout (defaults: SHADOW_BOOTSTRAP=auto, SHADOW_DURATION two weeks,
+       metrics on 127.0.0.1:9102, MIN_FREE_GB 30). The stateless run compares
+       heads, blocks and workshares, not state roots: a stateful run next to
+       a synced Go node needs state near the head (step 3).
 
 ## Phase 3: product
 
@@ -778,3 +869,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-19 | Phase 1 | Rolling replay (`23d29bd`, no malloc errors): stopped at the 27 GiB disk floor after a clean checkpoint at zone 1,654,965, every root equal; restarted with a 26 GiB floor (the Go node's guard stops the node first at 25 GiB). The agents' build directories (about 6 GiB) return at their merges |
 | 2026-11-19 | Phase 1 | Rolling replay: stopped at the 26 GiB floor after a clean checkpoint at zone 1,675,221, every root equal; the Go node's guard stopped the Go node at 25 GiB as designed. Restarted with a 24 GiB floor after deleting the stopped node's logs. Free space also falls with other jobs on this disk (865 of 926 GB used) |
 | 2026-11-19 | Phase 4.2-4.5 | Branch `perf` (`cc89a28`, `68b8d80`, `40ec374`, `c4af194`, `17d2a40`, `e010158`; main `03f967c` merged as `cf2e2ee`). Go replay benchmark (`reference/replay-bench`, `scripts/benchmark_replay.py`): go-quai's own import path from genesis, every proof-of-work checked on both sides; Go export zone 0-3,000, 3 alternating runs each: CPU per 1,000 blocks go-quai 207 s, Rust main 143 s (Go/Rust 1.45x, 1.29-1.49), Rust `c4af194` 26.7 s (7.8x, 5.4-8.7); peak RSS 419 against 131-173 MiB; 62 against 20 KiB written per height. Light proof-of-work 16.8 -> 2.89 ms CPU per check (go-quai 21.5 ms): items in lockstep, a job's kernels four at a time, the KISS99 program drawn once; identical to Go on 5,269 real headers and 35,936 inputs with mutations and later epochs, and on the 253 Go vectors. `--pow-dag light|full|auto` (default light): full dataset proven on KAWPOW epoch 0 (1.0 GiB, 0.33 ms per check); the 4.0 GiB ProgPoW epoch 0 was not run, free memory stayed at 1.6-2.4 GiB (max 4.4). Ordered checks: incremental ETX-set root, exact fast division, RLP lists: main-thread CPU -35% on zone 720,000-724,000 with a byte-identical checkpoint. Assume-valid dropped by the user; nothing skips a check. On the merge: `cargo test --release --locked --workspace` 455/455 in 74 suites (the run before the merge aborted in the replay suite with the libmalloc SIGABRT that `23d29bd` fixes), fmt clean, clippy without errors on the changed crates; Go export 0-27,406 with `--state` from genesis in a fresh datadir, `--pow-dag auto` (it chose light: 1.84 GiB free): replay PASS, every root equal, 775 CPU s, peak RSS 205 MiB; zone 720,000-724,000 PASS with the same checkpoint (`71ca22db`). Full mode was not run: it needs 4 GiB beside a 1 GiB margin. During the final tests the rolling replay's disk guard stopped it twice (26 and 25 GiB free, 05:56 and 06:35 UTC), each time after a clean checkpoint, and it restarted; this worktree then held 2.4 GB of build output, deleted after the run |
+| 2026-11-19 | Phase 2.3, 2.4 | Head-follow (branch `head-follow`, main merged as `c2c2101`): shadow bootstrap, a TEST TOOL (`f93baf2`): `run --stateless --shadow-bootstrap auto` builds the window at a trusted block 1,000 below the head, agreed by 7-11 of 8-12 peers, from about 18,000 fetched zone heights (4,002 prime and about 9,740 region records, 4,001 token choice rows) in 42-102 s; on the fixture the window equals a replay's; `run` without the flag and every replay refuse its checkpoints (test). Tip state version per canonical block and checkpoints at the final base (`f46f00e`; reorgs across commits and a compaction, crashes in a reorg: tests). Workshare intake check (`b418976`), divergence detector (`3e71945`), `shadow_run.sh` (`5c550b4`), `run --no-store` (`811944c`); fixed from live runs: the peer batch that holds `--to` (`7ec892c`), share views refused at decode (`f65ed71`). Live 2 h 20 min (`f65ed71`): 2,642 heights with every stateless check to the peers' head, 145 reorgs (139/5/1 of depth 1/2/3), 14,488 workshares with every check and 92 without the parent rules, 0 rejected, 264/264 head comparisons equal, 0 divergences, 7.1% of a core, RSS at most 345 MB; 20 min with `--no-store` (`c2c2101`): 1,264 heights, 0 divergences, 47 MB of data. Tests: 443/443 in 73 suites at `811944c`; 455/455 in 75 suites at `c2c2101`; fmt clean; clippy (quai-node) without errors or quai-node warnings; replay 0-27,406 with `--state` from genesis in a fresh datadir PASS with `f65ed71` (10,268 s) and PASS with `c2c2101` (7,592 s), every root equal |

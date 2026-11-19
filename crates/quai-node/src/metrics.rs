@@ -17,6 +17,34 @@ pub struct Metrics {
     pub reorgs: AtomicU64,
     /// Blocks removed from the canonical chain by reorgs.
     pub reorged_blocks: AtomicU64,
+    /// The deepest reorg (blocks removed).
+    pub deepest_reorg: AtomicU64,
+    /// Gossip blocks and workshares that go-quai's validators accepted.
+    pub gossip_blocks: AtomicU64,
+    pub gossip_workshares: AtomicU64,
+    /// Tip blocks offered to the processor, and the ones it rejected.
+    pub tip_offered: AtomicU64,
+    pub blocks_rejected: AtomicU64,
+    /// Gossip workshares: every check passed (with the parent rules), passed
+    /// without the parent rules (parent unknown), rejected, or older than
+    /// go-quai's intake distance (ignored, as go-quai does).
+    pub workshares_valid: AtomicU64,
+    pub workshares_parent_unknown: AtomicU64,
+    pub workshares_rejected: AtomicU64,
+    pub workshares_old: AtomicU64,
+    /// Checks that could not run for a missing input ("unavailable").
+    pub checks_unavailable: AtomicU64,
+    /// Divergences from the peers: a block they accept and this node
+    /// rejects, a workshare they include and this node rejected, the
+    /// canonical chain a few blocks below the head differing from theirs,
+    /// and the head left behind theirs.
+    pub divergences_block: AtomicU64,
+    pub divergences_workshare: AtomicU64,
+    pub divergences_head: AtomicU64,
+    pub divergences_stall: AtomicU64,
+    /// Comparisons of the canonical chain with the peers', and agreements.
+    pub head_checks: AtomicU64,
+    pub head_agreements: AtomicU64,
     /// Blocks per second over the last minute, times 1000.
     rate_milli: AtomicU64,
     samples: Mutex<Vec<(Instant, u64)>>,
@@ -32,6 +60,13 @@ impl Metrics {
     }
     pub fn set_peers(&self, status: Arc<peers::Status>) {
         let _ = self.peers.set(status);
+    }
+    /// A block the peers announced (tip mode): the peers' head is at least
+    /// its number.
+    pub fn note_peer_head(&self, number: u64) {
+        if let Some(p) = self.peers.get() {
+            p.head.fetch_max(number, Ordering::Relaxed);
+        }
     }
     pub fn peer_head(&self) -> u64 {
         self.peers
@@ -60,6 +95,8 @@ impl Metrics {
     /// The Prometheus text exposition.
     pub fn render(&self) -> String {
         let mut out = String::new();
+        // Families with labels go after the others.
+        let mut labeled = String::new();
         let mut put = |name: &str, kind: &str, help: &str, value: String| {
             out.push_str(&format!(
                 "# HELP {name} {help}\n# TYPE {name} {kind}\n{name} {value}\n"
@@ -102,6 +139,78 @@ impl Metrics {
             "Blocks removed from the canonical chain by reorgs.",
             get(&self.reorged_blocks),
         );
+        put(
+            "quai_node_deepest_reorg_blocks",
+            "gauge",
+            "Blocks removed by the deepest reorg.",
+            get(&self.deepest_reorg),
+        );
+        put(
+            "quai_node_gossip_blocks_total",
+            "counter",
+            "Gossip zone blocks that go-quai's validators accepted.",
+            get(&self.gossip_blocks),
+        );
+        put(
+            "quai_node_gossip_workshares_total",
+            "counter",
+            "Gossip zone workshares that go-quai's validators accepted.",
+            get(&self.gossip_workshares),
+        );
+        put(
+            "quai_node_tip_offered_total",
+            "counter",
+            "Blocks offered to the head choice in tip mode.",
+            get(&self.tip_offered),
+        );
+        put(
+            "quai_node_blocks_rejected_total",
+            "counter",
+            "Blocks this node rejected in tip mode.",
+            get(&self.blocks_rejected),
+        );
+        labeled.push_str("# HELP quai_node_workshares_total Gossip workshares by result.\n# TYPE quai_node_workshares_total counter\n");
+        for (result, v) in [
+            ("valid", &self.workshares_valid),
+            ("valid_parent_unknown", &self.workshares_parent_unknown),
+            ("rejected", &self.workshares_rejected),
+            ("old", &self.workshares_old),
+        ] {
+            labeled.push_str(&format!(
+                "quai_node_workshares_total{{result=\"{result}\"}} {}\n",
+                v.load(Ordering::Relaxed)
+            ));
+        }
+        put(
+            "quai_node_checks_unavailable_total",
+            "counter",
+            "Checks that could not run for a missing input.",
+            get(&self.checks_unavailable),
+        );
+        labeled.push_str("# HELP quai_node_divergences_total Divergences from the peers by kind.\n# TYPE quai_node_divergences_total counter\n");
+        for (kind, v) in [
+            ("block", &self.divergences_block),
+            ("workshare", &self.divergences_workshare),
+            ("head", &self.divergences_head),
+            ("stall", &self.divergences_stall),
+        ] {
+            labeled.push_str(&format!(
+                "quai_node_divergences_total{{kind=\"{kind}\"}} {}\n",
+                v.load(Ordering::Relaxed)
+            ));
+        }
+        put(
+            "quai_node_head_checks_total",
+            "counter",
+            "Comparisons of the canonical chain a few blocks below the head with the peers'.",
+            get(&self.head_checks),
+        );
+        put(
+            "quai_node_head_agreements_total",
+            "counter",
+            "Comparisons where the peers' canonical block was this node's.",
+            get(&self.head_agreements),
+        );
         if let Some(p) = self.peers.get() {
             put(
                 "quai_node_peers",
@@ -136,6 +245,7 @@ impl Metrics {
                 t.elapsed().as_secs().to_string(),
             );
         }
+        out.push_str(&labeled);
         out
     }
 }
@@ -196,6 +306,8 @@ mod tests {
         let text = m.render();
         assert!(text.contains("# TYPE quai_node_head_height gauge\nquai_node_head_height 5\n"));
         assert!(text.contains("quai_node_blocks_total 7\n"));
+        assert!(text.contains("quai_node_divergences_total{kind=\"block\"} 0\n"));
+        assert!(text.contains("quai_node_workshares_total{result=\"valid\"} 0\n"));
         assert!(!text.contains("quai_node_peers "));
         let status = Arc::new(peers::Status::default());
         status.peers.store(3, Ordering::Relaxed);

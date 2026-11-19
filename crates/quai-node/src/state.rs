@@ -37,6 +37,8 @@ use std::sync::Arc;
 
 /// Confirmation and rollup lists kept for recent blocks.
 pub const KEEP: usize = 4096;
+/// A committed state version: its id and commitment.
+pub type Version = (Hash, Commitment);
 
 pub struct StateReplay {
     pub profile: Profile,
@@ -141,6 +143,19 @@ impl StateReplay {
         }
         self.store.commit(height, block, &self.base, &self.state)?;
         self.past.flush()?;
+        self.committed_height = height;
+        self.rebase()
+    }
+    /// The last committed version and its commitment.
+    pub fn version_point(&self) -> Version {
+        (self.store.version, self.store.commitment.clone())
+    }
+    /// Make an earlier committed version of this database the state again
+    /// (a reorg to the block at `height`, or a compaction at the tip base).
+    /// The changes since the last commit are dropped.
+    pub fn restore_version(&mut self, height: u64, version: &Version) -> io::Result<()> {
+        self.store.version = version.0;
+        self.store.commitment = version.1.clone();
         self.committed_height = height;
         self.rebase()
     }

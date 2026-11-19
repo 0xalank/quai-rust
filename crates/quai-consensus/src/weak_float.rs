@@ -1,5 +1,6 @@
 //! Bounded binary-precision reproduction of the pinned Go weak-share cubic.
 //! No host floating-point operations or general exponent approximation.
+use crate::bigdiv::Quotient as _;
 use crate::{rules::Uint, Error};
 use crypto_bigint::U256;
 type Nat = U256;
@@ -109,11 +110,11 @@ impl F {
         }
         let mut k = p as usize + b.m.bits_vartime() - self.m.bits_vartime();
         let mut n = shift(self.m, k)?;
-        let mut q = n.wrapping_div(&b.m);
+        let mut q = n.quotient(&b.m);
         if q.bits_vartime() > p as usize {
             k -= 1;
             n = shift(self.m, k)?;
-            q = n.wrapping_div(&b.m);
+            q = n.quotient(&b.m);
         }
         let rem = n.wrapping_sub(&q.wrapping_mul(&b.m));
         let twice = rem.shl_vartime(1);

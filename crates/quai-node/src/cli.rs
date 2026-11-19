@@ -3,6 +3,7 @@
 use crate::config::Config;
 use crate::log::{Level, Log};
 use crate::replay::{self, End};
+use quai_consensus::pow::DagMode;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
@@ -44,6 +45,14 @@ Replay options:
   --store               Keep the accepted blocks in the block store
                         (<checkpoint dir>/blocks.redb) for `rpc`
   --no-report           Do not write <datadir>/replay/last.json
+  --pow-dag <MODE>      Where the proof-of-work kernel takes dataset items:
+                        light (default) computes each from the epoch cache;
+                        full builds the epoch's dataset in memory on all
+                        cores (4 GiB for ProgPoW epoch 0), reads it once it
+                        is complete and drops it when a newer epoch starts;
+                        auto is full only when the free memory holds the
+                        dataset and 1 GiB more, else light. Every header is
+                        checked in full in each mode
 
 RPC options:
   --export <DIR>        Serve this export (the one the replay checked)
@@ -150,6 +159,7 @@ pub struct ReplayArgs {
     pub checkpoint_every: u64,
     pub commit_every: u64,
     pub store: bool,
+    pub pow_dag: DagMode,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -201,11 +211,12 @@ struct Flags {
     seconds: Option<u64>,
     margin: Option<u64>,
     max_peers: Option<usize>,
+    pow_dag: Option<DagMode>,
     no_txpool: bool,
     sharing_clients: Option<Vec<String>>,
     sync_tx_with_return: Option<bool>,
 }
-const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report"];
+const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report", "--pow-dag"];
 const RUN_ONLY: &[&str] = &[
     "--stateless",
     "--rpc-listen",
@@ -256,6 +267,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--margin"
                 | "--max-peers"
                 | "--seconds"
+                | "--pow-dag"
                 | "--txpool-sharing-clients"
                 | "--txpool-sync-tx-with-return"
         );
@@ -326,6 +338,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--no-public" => f.no_public = true,
             "--no-gossip" => f.no_gossip = true,
             "--seconds" => f.seconds = Some(number("--seconds", &v)?),
+            "--pow-dag" => f.pow_dag = Some(v.parse().map_err(|e| format!("--pow-dag: {e}"))?),
             "--no-txpool" => f.no_txpool = true,
             "--txpool-sharing-clients" => {
                 f.sharing_clients = Some(
@@ -436,6 +449,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             checkpoint_every: f.checkpoint_every.unwrap_or(10_000),
             commit_every: f.commit_every.unwrap_or(1_000),
             store: f.store,
+            pow_dag: f.pow_dag.unwrap_or(DagMode::Light),
         }),
         "rpc" => Command::Rpc(RpcArgs {
             export: f.export.take(),
@@ -689,6 +703,7 @@ pub fn main_with(args: &[String]) -> i32 {
                 checkpoint_every: r.checkpoint_every,
                 commit_every: r.commit_every,
                 store: r.store,
+                pow_dag: r.pow_dag,
             };
             let signals = replay_signals(log);
             let stop = signals.as_ref().map(|s| s.1.clone());
@@ -769,8 +784,24 @@ mod tests {
                 checkpoint_every: 10_000,
                 commit_every: 1_000,
                 store: false,
+                pow_dag: DagMode::Light,
             })
         );
+        for (v, mode) in [
+            ("light", DagMode::Light),
+            ("full", DagMode::Full),
+            ("auto", DagMode::Auto),
+        ] {
+            match parse(&args(&["replay", "--export", "/x", "--pow-dag", v]))
+                .unwrap()
+                .command
+            {
+                Command::Replay(r) => assert_eq!(r.pow_dag, mode),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert!(parse(&args(&["replay", "--export", "/x", "--pow-dag", "fast"])).is_err());
+        assert!(parse(&args(&["run", "--pow-dag", "full"])).is_err());
         assert_eq!(parse(&args(&[])).unwrap().command, Command::Help);
         assert!(parse(&args(&["replay"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--jobs", "0"])).is_err());

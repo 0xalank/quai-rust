@@ -1,5 +1,6 @@
 //! Bounded reward/conversion arithmetic used by zone header base-fee policy.
 //! Does not distribute rewards, settle fees, or execute economic state.
+use crate::bigdiv::Quotient as _;
 use crate::{
     history::Record,
     rules::Uint,
@@ -49,9 +50,7 @@ pub fn equivalent_difficulty(h: &Header, difficulty: Uint) -> Result<Uint, Error
     let sha = Triple::from_header(h, true)?;
     let scrypt = Triple::from_header(h, false)?;
     let base = if prime >= FORKS.sha_equivalent_difficulty {
-        sha.difficulty
-            .wrapping_div(&u(167000))
-            .max(u(750_000_000_000))
+        sha.difficulty.quotient(&u(167000)).max(u(750_000_000_000))
     } else {
         difficulty
     };
@@ -63,7 +62,7 @@ pub fn equivalent_difficulty(h: &Header, difficulty: Uint) -> Result<Uint, Error
     narrow(
         wide(base)
             .wrapping_mul(&total)
-            .wrapping_div(&total.wrapping_sub(&shares)),
+            .quotient(&total.wrapping_sub(&shares)),
     )
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,9 +114,7 @@ pub fn reward_quote_at_difficulty(
             .shr_vartime(64),
     )?
     .max(Uint::ONE);
-    let qi = equivalent
-        .wrapping_div(&one_over_kqi(number))
-        .max(Uint::ONE);
+    let qi = equivalent.quotient(&one_over_kqi(number)).max(Uint::ONE);
     let conversion_quai = if prime >= FORKS.conversion_lock_change {
         narrow(wide(quai).wrapping_add(&wide(average_fees).wrapping_mul(&U1024::from_u64(2))))?
     } else {
@@ -127,8 +124,8 @@ pub fn reward_quote_at_difficulty(
     let base_fee = narrow(
         wide(conversion_quai)
             .wrapping_mul(&U1024::from_u64(5))
-            .wrapping_div(&wide(qi))
-            .wrapping_div(&U1024::from_u64(21000)),
+            .quotient(&wide(qi))
+            .quotient(&U1024::from_u64(21000)),
     )?;
     Ok(RewardQuote {
         equivalent,

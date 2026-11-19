@@ -1,5 +1,6 @@
 //! Reward-depth assembly and fee feedback from the pinned StateProcessor rules.
 //! Imported history and arithmetic projections do not confer block admission.
+use crate::bigdiv::Quotient as _;
 use crate::{
     economics::{self, RewardQuote},
     history::{History, Record},
@@ -46,7 +47,7 @@ pub fn convert_qi(quote: &RewardQuote, amount: Uint) -> Result<Uint, Error> {
     narrow(
         wide(amount)
             .wrapping_mul(&wide(quote.conversion_quai))
-            .wrapping_div(&wide(quote.qi)),
+            .quotient(&wide(quote.qi)),
     )
 }
 pub fn average_fees(
@@ -68,16 +69,16 @@ pub fn average_fees(
         let cap = wide(quote.quai).wrapping_mul(&U1024::from_u64(4));
         wide(body_number(parent, "total")?)
             .min(cap)
-            .wrapping_div(&U1024::from_u64(2))
+            .quotient(&U1024::from_u64(2))
     } else {
-        wide(quai_fees.wrapping_div(&u(2)))
-            .wrapping_add(&wide(convert_qi(quote, qi_fees.wrapping_div(&u(2)))?))
+        wide(quai_fees.quotient(&u(2)))
+            .wrapping_add(&wide(convert_qi(quote, qi_fees.quotient(&u(2)))?))
     };
     narrow(
         wide(previous)
             .wrapping_mul(&U1024::from_u64(99))
             .wrapping_add(&signal)
-            .wrapping_div(&U1024::from_u64(100)),
+            .quotient(&U1024::from_u64(100)),
     )
 }
 /// Includes the original u32 subtraction/addition wraparound and per-algorithm
@@ -90,7 +91,7 @@ pub fn time_discount(reward: Uint, id: u8, timestamp: u32, signature: u32) -> Re
     narrow(
         wide(reward)
             .wrapping_mul(&U1024::from_u64(numerator as u64))
-            .wrapping_div(&U1024::from_u64((100 * span) as u64)),
+            .quotient(&U1024::from_u64((100 * span) as u64)),
     )
 }
 pub struct Distribution {
@@ -105,7 +106,7 @@ fn reward_pool(target: &Record, quote: &RewardQuote) -> Result<Uint, Error> {
         narrow(
             wide(quote.quai)
                 .wrapping_add(&wide(body_number(target, "avg")?))
-                .wrapping_add(&wide(body_number(target, "total")?.wrapping_div(&u(2)))),
+                .wrapping_add(&wide(body_number(target, "total")?.quotient(&u(2)))),
         )
     }
 }
@@ -144,8 +145,8 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
     let parent = &chain[0];
     let quote = economics::reward_quote(&target.header, exchange, body_number(&target, "avg")?)?;
     let pool = reward_pool(&target, &quote)?;
-    let base_quai = pool.wrapping_div(&u(9));
-    let base_qi = quote.qi.wrapping_div(&u(9));
+    let base_quai = pool.quotient(&u(9));
+    let base_qi = quote.qi.quotient(&u(9));
     let mut evaluations = 0;
     let mut hashes = std::collections::BTreeMap::<Vec<u8>, Hash>::new();
     let mut hash = |header: &Header| -> Result<Hash, Error> {
@@ -182,7 +183,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                 entropy = if quai_primitives::meets_blake3_target(&pow, &difficulty.to_be_bytes())
                     .map_err(|_| Error::Invalid("share difficulty"))?
                 {
-                    let bound = U1024::ONE.shl_vartime(256).wrapping_div(&wide(difficulty));
+                    let bound = U1024::ONE.shl_vartime(256).quotient(&wide(difficulty));
                     let low: Uint = bound.resize();
                     rules::intrinsic(low.to_be_bytes())?
                 } else {
@@ -215,7 +216,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
         let qi = to[1] & 128 != 0;
         let mut reward;
         if block.prime < FORKS.kawpow {
-            reward = narrow(wide(pool).wrapping_mul(&wide(entropy)).wrapping_div(&total))?;
+            reward = narrow(wide(pool).wrapping_mul(&wide(entropy)).quotient(&total))?;
             if reward > pool {
                 return Err(Error::Invalid("share exceeds reward pool"));
             }
@@ -241,7 +242,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                         reward = narrow(
                             wide(reward)
                                 .wrapping_mul(&wide(triple.count))
-                                .wrapping_div(&wide(valid)),
+                                .quotient(&wide(valid)),
                         )?;
                     }
                 }
@@ -255,7 +256,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                         narrow(
                             wide(reward)
                                 .wrapping_mul(&U1024::from_u64(70))
-                                .wrapping_div(&U1024::from_u64(100)),
+                                .quotient(&U1024::from_u64(100)),
                         )?
                     } else {
                         reward
@@ -267,7 +268,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                 reward = narrow(
                     wide(reward)
                         .wrapping_mul(&U1024::from_u64(70))
-                        .wrapping_div(&U1024::from_u64(100)),
+                        .quotient(&U1024::from_u64(100)),
                 )?;
             }
         }
@@ -285,7 +286,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                 reward = narrow(
                     wide(reward)
                         .wrapping_mul(&wide(quote.qi))
-                        .wrapping_div(&wide(quote.conversion_quai)),
+                        .quotient(&wide(quote.conversion_quai)),
                 )?;
             }
         } else {

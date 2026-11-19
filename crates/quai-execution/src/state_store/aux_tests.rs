@@ -126,6 +126,95 @@ fn lazy_etx_and_lockup_overlays_have_no_change_or_payload_cap() {
     drop(db);
     std::fs::remove_dir_all(directory).unwrap();
 }
+/// The lazy queue's root updates the trie of its previous root with the keys
+/// changed since; over many blocks of pushes, pops and auxiliary changes,
+/// with a forked copy, it equals the root of an in-memory image queue built
+/// from scratch after every block.
+#[test]
+fn lazy_etx_root_updates_equal_full_rebuilds_block_after_block() {
+    let directory = dir("incremental");
+    let db =
+        quai_store::state_db::StateDatabase::open(&directory.join("state.redb"), [53; 32]).unwrap();
+    let mut memory = World::default();
+    memory
+        .etxs_mut()
+        .push(&(0..300).map(tx).collect::<Vec<_>>())
+        .unwrap();
+    for n in 0..8u64 {
+        memory
+            .etxs_mut()
+            .set_auxiliary(keccak(&n.to_be_bytes()).to_vec(), vec![n as u8 + 1])
+            .unwrap();
+    }
+    let (parent, c) = persist(&db, None, 0, &World::default(), &memory);
+    let (old, _) =
+        restore_sparse(Arc::new(Mutex::new(db.snapshot(Some(parent)).unwrap())), &c).unwrap();
+    let (mut lazy, mut image) = (old.clone(), memory.clone());
+    let (mut fork_lazy, mut fork_image) = (None, None);
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut pushed = 300u64;
+    for block in 0..300u64 {
+        let pops = next() % 6;
+        let pushes = next() % 8;
+        let aux = next() % 4 == 0;
+        let key = keccak(&(next() % 12).to_be_bytes()).to_vec();
+        let value = if next() % 3 == 0 {
+            vec![]
+        } else {
+            vec![block as u8, 7]
+        };
+        let batch = (pushed..pushed + pushes).map(tx).collect::<Vec<_>>();
+        pushed += pushes;
+        for (world, mirror) in [(&mut lazy, &mut image)]
+            .into_iter()
+            .chain(fork_lazy.as_mut().zip(fork_image.as_mut()))
+        {
+            for _ in 0..pops {
+                assert_eq!(
+                    world.etxs_mut().pop().unwrap(),
+                    mirror.etxs_mut().pop().unwrap()
+                );
+            }
+            world.etxs_mut().push(&batch).unwrap();
+            mirror.etxs_mut().push(&batch).unwrap();
+            if aux {
+                world
+                    .etxs_mut()
+                    .set_auxiliary(key.clone(), value.clone())
+                    .unwrap();
+                mirror
+                    .etxs_mut()
+                    .set_auxiliary(key.clone(), value.clone())
+                    .unwrap();
+            }
+            assert_eq!(
+                world.etxs().root().unwrap(),
+                mirror.etxs().root().unwrap(),
+                "block {block}"
+            );
+        }
+        if block == 120 {
+            fork_lazy = Some(lazy.clone());
+            fork_image = Some(image.clone());
+            // The fork diverges at once; the original keeps its own changes.
+            lazy.etxs_mut().push(&[tx(1_000_000)]).unwrap();
+            image.etxs_mut().push(&[tx(1_000_000)]).unwrap();
+        }
+    }
+    assert_ne!(
+        lazy.etxs().root().unwrap(),
+        fork_lazy.as_ref().unwrap().etxs().root().unwrap()
+    );
+    drop((old, lazy, fork_lazy));
+    drop(db);
+    std::fs::remove_dir_all(directory).unwrap();
+}
 #[test]
 fn lazy_etx_and_lockup_roundtrip_reads_only_touched_records_and_keeps_pinned_parents() {
     let directory = dir("roundtrip");

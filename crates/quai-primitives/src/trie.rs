@@ -29,9 +29,15 @@ pub fn uint(value: u64) -> Vec<u8> {
     bytes(&encoded[encoded.iter().position(|b| *b != 0).unwrap_or(8)..])
 }
 pub fn list(items: impl IntoIterator<Item = Vec<u8>>) -> Vec<u8> {
-    let body: Vec<u8> = items.into_iter().flatten().collect();
-    let mut out = prefix(body.len(), 0xc0, 0xf7);
-    out.extend(body);
+    // Whole-item copies into one buffer: the same bytes as flattening the
+    // items, without a byte-by-byte iterator and its regrowing buffer.
+    let items: Vec<Vec<u8>> = items.into_iter().collect();
+    let length = items.iter().map(Vec::len).sum();
+    let mut out = prefix(length, 0xc0, 0xf7);
+    out.reserve(length);
+    for item in &items {
+        out.extend_from_slice(item);
+    }
     out
 }
 fn compact(path: &[u8], leaf: bool) -> Vec<u8> {
@@ -212,6 +218,32 @@ mod tests {
             ordered_root(&[vec![2], vec![1]])
         );
         assert!(ordered_root(&[vec![]]).is_err());
+    }
+    #[test]
+    fn list_equals_the_flattened_items_with_their_prefix() {
+        let flat = |items: &[Vec<u8>]| {
+            let body: Vec<u8> = items.iter().flatten().copied().collect();
+            let mut out = prefix(body.len(), 0xc0, 0xf7);
+            out.extend(body);
+            out
+        };
+        for sizes in [
+            vec![],
+            vec![0],
+            vec![1, 2, 3],
+            vec![55],
+            vec![56],
+            vec![20, 36],
+            vec![256, 0, 1000],
+            vec![70_000, 3],
+        ] {
+            let items: Vec<Vec<u8>> = sizes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (0..*n).map(|j| (i * 31 + j) as u8).collect())
+                .collect();
+            assert_eq!(list(items.clone()), flat(&items), "{sizes:?}");
+        }
     }
     #[test]
     fn ordered_root_has_no_byte_budget() {

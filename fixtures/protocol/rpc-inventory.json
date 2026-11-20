@@ -1,0 +1,6730 @@
+{
+ "apis": [
+  {
+   "constructor": "quaiapi.NewPublicQuaiAPI",
+   "namespace": "eth",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:201",
+   "type": "quaiapi.PublicQuaiAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPublicQuaiAPI",
+   "namespace": "quai",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:206",
+   "type": "quaiapi.PublicQuaiAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPublicBlockChainAPI",
+   "namespace": "eth",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:211",
+   "type": "quaiapi.PublicBlockChainAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPublicBlockChainQuaiAPI",
+   "namespace": "quai",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:216",
+   "type": "quaiapi.PublicBlockChainQuaiAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPublicDebugAPI",
+   "namespace": "debug",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:221",
+   "type": "quaiapi.PublicDebugAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPrivateDebugAPI",
+   "namespace": "debug",
+   "public": false,
+   "source": "internal/quaiapi/backend.go:226",
+   "type": "quaiapi.PrivateDebugAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPublicNetAPI",
+   "namespace": "net",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:231",
+   "type": "quaiapi.PublicNetAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quaiapi.NewPublicTransactionPoolAPI",
+   "namespace": "eth",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:239",
+   "type": "quaiapi.PublicTransactionPoolAPI",
+   "version": "1.0",
+   "zone_only": true
+  },
+  {
+   "constructor": "quaiapi.NewPublicTransactionPoolAPI",
+   "namespace": "quai",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:245",
+   "type": "quaiapi.PublicTransactionPoolAPI",
+   "version": "1.0",
+   "zone_only": true
+  },
+  {
+   "constructor": "quaiapi.NewPublicTxPoolAPI",
+   "namespace": "txpool",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:251",
+   "type": "quaiapi.PublicTxPoolAPI",
+   "version": "1.0",
+   "zone_only": true
+  },
+  {
+   "constructor": "quaiapi.NewPublicWorkSharesAPI",
+   "namespace": "workshare",
+   "public": true,
+   "source": "internal/quaiapi/backend.go:257",
+   "type": "quaiapi.PublicWorkSharesAPI",
+   "version": "1.0",
+   "zone_only": true
+  },
+  {
+   "constructor": "quai.NewPublicQuaiAPI",
+   "namespace": "eth",
+   "public": true,
+   "source": "quai/backend.go:299",
+   "type": "quai.PublicQuaiAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quai.NewPublicMinerAPI",
+   "namespace": "eth",
+   "public": true,
+   "source": "quai/backend.go:304",
+   "type": "quai.PublicMinerAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quai.NewPrivateMinerAPI",
+   "namespace": "miner",
+   "public": false,
+   "source": "quai/backend.go:309",
+   "type": "quai.PrivateMinerAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "filters.NewPublicFilterAPI",
+   "namespace": "eth",
+   "public": true,
+   "source": "quai/backend.go:314",
+   "type": "filters.PublicFilterAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "filters.NewPublicFilterAPI",
+   "namespace": "quai",
+   "public": true,
+   "source": "quai/backend.go:319",
+   "type": "filters.PublicFilterAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quai.NewPrivateAdminAPI",
+   "namespace": "admin",
+   "public": false,
+   "source": "quai/backend.go:324",
+   "type": "quai.PrivateAdminAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quai.NewPublicDebugAPI",
+   "namespace": "debug",
+   "public": true,
+   "source": "quai/backend.go:328",
+   "type": "quai.PublicDebugAPI",
+   "version": "1.0",
+   "zone_only": false
+  },
+  {
+   "constructor": "quai.NewPrivateDebugAPI",
+   "namespace": "debug",
+   "public": false,
+   "source": "quai/backend.go:333",
+   "type": "quai.PrivateDebugAPI",
+   "version": "1.0",
+   "zone_only": false
+  }
+ ],
+ "config": {
+  "http": {
+   "cors": null,
+   "host": "localhost",
+   "modules": [
+    "net",
+    "web3",
+    "quai",
+    "net"
+   ],
+   "port": 9200,
+   "prefix": "",
+   "vhosts": [
+    "localhost"
+   ]
+  },
+  "ws": {
+   "host": "127.0.0.1",
+   "modules": null,
+   "origins": null,
+   "port": 8200,
+   "prefix": ""
+  }
+ },
+ "location": [
+  0,
+  0
+ ],
+ "methods": [
+  {
+   "args": [
+    "string",
+    "*uint64",
+    "*uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateAdminAPI).ExportChain",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_exportChain does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "admin_exportChain",
+   "name": "exportChain",
+   "namespace": "admin",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:324"
+   ],
+   "results": [
+    "bool",
+    "error"
+   ],
+   "source": "quai/api.go:155",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_exportChain does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "string"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateAdminAPI).ImportChain",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_importChain does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "admin_importChain",
+   "name": "importChain",
+   "namespace": "admin",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:324"
+   ],
+   "results": [
+    "bool",
+    "error"
+   ],
+   "source": "quai/api.go:202",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_importChain does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumberOrHash",
+    "[]uint8",
+    "int",
+    "bool",
+    "bool",
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PublicDebugAPI).AccountRange",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_accountRange does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_accountRange",
+   "name": "accountRange",
+   "namespace": "debug",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:328"
+   ],
+   "results": [
+    "state.IteratorDump",
+    "error"
+   ],
+   "source": "quai/api.go:311",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PrivateDebugAPI).ChaindbCompact",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_chaindbCompact does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_chaindbCompact",
+   "name": "chaindbCompact",
+   "namespace": "debug",
+   "public": false,
+   "registered_by": [
+    "internal/quaiapi/backend.go:226"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1708",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_chaindbCompact does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "string"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PrivateDebugAPI).ChaindbProperty",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_chaindbProperty does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_chaindbProperty",
+   "name": "chaindbProperty",
+   "namespace": "debug",
+   "public": false,
+   "registered_by": [
+    "internal/quaiapi/backend.go:226"
+   ],
+   "results": [
+    "string",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1697",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_chaindbProperty does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PublicDebugAPI).DumpBlock",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_dumpBlock does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_dumpBlock",
+   "name": "dumpBlock",
+   "namespace": "debug",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:328"
+   ],
+   "results": [
+    "state.Dump",
+    "error"
+   ],
+   "source": "quai/api.go:263",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicDebugAPI).GetBlockRlp",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_getBlockRlp does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_getBlockRlp",
+   "name": "getBlockRlp",
+   "namespace": "debug",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:221"
+   ],
+   "results": [
+    "string",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1644",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "*common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateDebugAPI).GetModifiedAccountsByHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_getModifiedAccountsByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_getModifiedAccountsByHash",
+   "name": "getModifiedAccountsByHash",
+   "namespace": "debug",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:333"
+   ],
+   "results": [
+    "[]common.Address",
+    "error"
+   ],
+   "source": "quai/api.go:451",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_getModifiedAccountsByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "uint64",
+    "*uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateDebugAPI).GetModifiedAccountsByNumber",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_getModifiedAccountsByNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_getModifiedAccountsByNumber",
+   "name": "getModifiedAccountsByNumber",
+   "namespace": "debug",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:333"
+   ],
+   "results": [
+    "[]common.Address",
+    "error"
+   ],
+   "source": "quai/api.go:422",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_getModifiedAccountsByNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "int"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicDebugAPI).GetWorkshareLRUDump",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_getWorkshareLRUDump does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_getWorkshareLRUDump",
+   "name": "getWorkshareLRUDump",
+   "namespace": "debug",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:221"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1676",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateDebugAPI).Preimage",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_preimage does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_preimage",
+   "name": "preimage",
+   "namespace": "debug",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:333"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "quai/api.go:300",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_preimage does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicDebugAPI).PrintBlock",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_printBlock does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_printBlock",
+   "name": "printBlock",
+   "namespace": "debug",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:221"
+   ],
+   "results": [
+    "string",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1657",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicDebugAPI).SeedHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_seedHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_seedHash",
+   "name": "seedHash",
+   "namespace": "debug",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:221"
+   ],
+   "results": [
+    "string",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1666",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "int",
+    "common.Address",
+    "hexutil.Bytes",
+    "int"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateDebugAPI).StorageRangeAt",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_storageRangeAt does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "debug_storageRangeAt",
+   "name": "storageRangeAt",
+   "namespace": "debug",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:333"
+   ],
+   "results": [
+    "quai.StorageRangeResult",
+    "error"
+   ],
+   "source": "quai/api.go:373",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method debug_storageRangeAt does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).BlockNumber",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_blockNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_blockNumber",
+   "name": "blockNumber",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "hexutil.Uint64"
+   ],
+   "source": "internal/quaiapi/api.go:201",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs",
+    "rpc.BlockNumberOrHash",
+    "*quaiapi.StateOverride"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).Call",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_call does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_call",
+   "name": "call",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:687",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).ChainId",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_chainId does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_chainId",
+   "name": "chainId",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:196",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicQuaiAPI).ClientVersion",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_clientVersion does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_clientVersion",
+   "name": "clientVersion",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:201"
+   ],
+   "results": [
+    "string"
+   ],
+   "source": "internal/quaiapi/quai_api.go:83",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs",
+    "*rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).CreateAccessList",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_createAccessList does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_createAccessList",
+   "name": "createAccessList",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "*quaiapi.accessListResult",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1193",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs",
+    "*rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).EstimateGas",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_estimateGas does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_estimateGas",
+   "name": "estimateGas",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "hexutil.Uint64",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:867",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicQuaiAPI).GasPrice",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_gasPrice does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_gasPrice",
+   "name": "gasPrice",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:201"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:72",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.AddressBytes",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetBalance",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBalance does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getBalance",
+   "name": "getBalance",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:209",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetBlockByHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBlockByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getBlockByHash",
+   "name": "getBlockByHash",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:392",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetBlockByNumber",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBlockByNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getBlockByNumber",
+   "name": "getBlockByNumber",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:375",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetBlockTransactionCountByHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBlockTransactionCountByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getBlockTransactionCountByHash",
+   "name": "getBlockTransactionCountByHash",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:1432",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetBlockTransactionCountByNumber",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBlockTransactionCountByNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getBlockTransactionCountByNumber",
+   "name": "getBlockTransactionCountByNumber",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:1423",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Address",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetCode",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getCode does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getCode",
+   "name": "getCode",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:457",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.ID"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).GetFilterChanges",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getFilterChanges does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getFilterChanges",
+   "name": "getFilterChanges",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "interface {}",
+    "error"
+   ],
+   "source": "quai/filters/api.go:921",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.ID"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).GetFilterLogs",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getFilterLogs does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getFilterLogs",
+   "name": "getFilterLogs",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "[]*types.Log",
+    "error"
+   ],
+   "source": "quai/filters/api.go:872",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetHeaderByHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getHeaderByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getHeaderByHash",
+   "name": "getHeaderByHash",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}"
+   ],
+   "source": "internal/quaiapi/api.go:362",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetHeaderByNumber",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getHeaderByNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getHeaderByNumber",
+   "name": "getHeaderByNumber",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:346",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.FilterCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).GetLogs",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getLogs does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getLogs",
+   "name": "getLogs",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "[]*types.Log",
+    "error"
+   ],
+   "source": "quai/filters/api.go:812",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address",
+    "[]string",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetProof",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getProof does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getProof",
+   "name": "getProof",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "*quaiapi.AccountResult",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:284",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetRawTransactionByBlockHashAndIndex",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getRawTransactionByBlockHashAndIndex does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getRawTransactionByBlockHashAndIndex",
+   "name": "getRawTransactionByBlockHashAndIndex",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "hexutil.Bytes"
+   ],
+   "source": "internal/quaiapi/api.go:1465",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetRawTransactionByBlockNumberAndIndex",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getRawTransactionByBlockNumberAndIndex does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getRawTransactionByBlockNumberAndIndex",
+   "name": "getRawTransactionByBlockNumberAndIndex",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "hexutil.Bytes"
+   ],
+   "source": "internal/quaiapi/api.go:1457",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetRawTransactionByHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getRawTransactionByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getRawTransactionByHash",
+   "name": "getRawTransactionByHash",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1520",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Address",
+    "string",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetStorageAt",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getStorageAt does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getStorageAt",
+   "name": "getStorageAt",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:480",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint",
+    "common.Location"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionByBlockHashAndIndex",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getTransactionByBlockHashAndIndex does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getTransactionByBlockHashAndIndex",
+   "name": "getTransactionByBlockHashAndIndex",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction"
+   ],
+   "source": "internal/quaiapi/api.go:1449",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionByBlockNumberAndIndex",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getTransactionByBlockNumberAndIndex does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getTransactionByBlockNumberAndIndex",
+   "name": "getTransactionByBlockNumberAndIndex",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction"
+   ],
+   "source": "internal/quaiapi/api.go:1441",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionByHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getTransactionByHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getTransactionByHash",
+   "name": "getTransactionByHash",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1500",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.MixedcaseAddress",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionCount",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getTransactionCount does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getTransactionCount",
+   "name": "getTransactionCount",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "*hexutil.Uint64",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1473",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetTransactionReceipt",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getTransactionReceipt does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getTransactionReceipt",
+   "name": "getTransactionReceipt",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1323",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetUncleByBlockHashAndIndex",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getUncleByBlockHashAndIndex does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getUncleByBlockHashAndIndex",
+   "name": "getUncleByBlockHashAndIndex",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:421",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetUncleByBlockNumberAndIndex",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getUncleByBlockNumberAndIndex does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getUncleByBlockNumberAndIndex",
+   "name": "getUncleByBlockNumberAndIndex",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:402",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetUncleCountByBlockHash",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getUncleCountByBlockHash does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getUncleCountByBlockHash",
+   "name": "getUncleCountByBlockHash",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:448",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainAPI).GetUncleCountByBlockNumber",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getUncleCountByBlockNumber does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_getUncleCountByBlockNumber",
+   "name": "getUncleCountByBlockNumber",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:211"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:439",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PublicMinerAPI).Mining",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_mining does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_mining",
+   "name": "mining",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:304"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "quai/api.go:71",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewBlockFilter",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_newBlockFilter does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_newBlockFilter",
+   "name": "newBlockFilter",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "rpc.ID"
+   ],
+   "source": "quai/filters/api.go:226",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.FilterCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewFilter",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_newFilter does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_newFilter",
+   "name": "newFilter",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "rpc.ID",
+    "error"
+   ],
+   "source": "quai/filters/api.go:769",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewPendingTransactionFilter",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_newPendingTransactionFilter does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_newPendingTransactionFilter",
+   "name": "newPendingTransactionFilter",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "rpc.ID"
+   ],
+   "source": "quai/filters/api.go:135",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PublicQuaiAPI).PrimaryCoinbase",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_primaryCoinbase does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_primaryCoinbase",
+   "name": "primaryCoinbase",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:299"
+   ],
+   "results": [
+    "common.Address",
+    "error"
+   ],
+   "source": "quai/api.go:55",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).ReceiveTxFromPoolSharingClient",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_receiveTxFromPoolSharingClient does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_receiveTxFromPoolSharingClient",
+   "name": "receiveTxFromPoolSharingClient",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1610",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).SendRawTransaction",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_sendRawTransaction does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_sendRawTransaction",
+   "name": "sendRawTransaction",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:239"
+   ],
+   "results": [
+    "common.Hash",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1596",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.ID"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).UninstallFilter",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_uninstallFilter does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "eth_uninstallFilter",
+   "name": "uninstallFilter",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "quai/filters/api.go:854",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).Accesses",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "accesses",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:610",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "invalid argument 1: json: cannot unmarshal non-string into Go value of type common.InternalAddress"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.BlockTemplateUpdatesCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).BlockTemplateUpdates",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "blockTemplateUpdates",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:1182",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "invalid argument 1: json: cannot unmarshal number into Go value of type filters.BlockTemplateUpdatesCriteria"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.FilterCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).Logs",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "logs",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:703",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "invalid argument 1: json: cannot unmarshal number into Go value of type filters.input"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewChainBlocks",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newChainBlocks",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:432",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewChainBlocksV2",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newChainBlocksV2",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:476",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewHeads",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newHeads",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:565",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewHeadsV2",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newHeadsV2",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:520",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewPendingTransactions",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newPendingTransactions",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:176",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewWorkshares",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newWorkshares",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:266",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewWorksharesV2",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "newWorksharesV2",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:349",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).PendingHeader",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "eth_subscribe",
+   "name": "pendingHeader",
+   "namespace": "eth",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:314"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:1089",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "string"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetExtra",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setExtra does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setExtra",
+   "name": "setExtra",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [
+    "bool",
+    "error"
+   ],
+   "source": "quai/api.go:87",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setExtra does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetGasLimit",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setGasLimit does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setGasLimit",
+   "name": "setGasLimit",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "quai/api.go:105",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setGasLimit does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Big"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetGasPrice",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setGasPrice does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setGasPrice",
+   "name": "setGasPrice",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "quai/api.go:95",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setGasPrice does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetLockupByte",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setLockupByte does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setLockupByte",
+   "name": "setLockupByte",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [
+    "bool",
+    "error"
+   ],
+   "source": "quai/api.go:116",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setLockupByte does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "string"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetMinerPreference",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setMinerPreference does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setMinerPreference",
+   "name": "setMinerPreference",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [
+    "bool",
+    "error"
+   ],
+   "source": "quai/api.go:124",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setMinerPreference does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetPrimaryCoinbase",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setPrimaryCoinbase does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setPrimaryCoinbase",
+   "name": "setPrimaryCoinbase",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "quai/api.go:111",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setPrimaryCoinbase does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "int"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai.(*PrivateMinerAPI).SetRecommitInterval",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setRecommitInterval does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "miner_setRecommitInterval",
+   "name": "setRecommitInterval",
+   "namespace": "miner",
+   "public": false,
+   "registered_by": [
+    "quai/backend.go:309"
+   ],
+   "results": [],
+   "source": "quai/api.go:137",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_setRecommitInterval does not exist/is not available"
+    },
+    "served": false
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicNetAPI).Listening",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "net_listening",
+   "name": "listening",
+   "namespace": "net",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:231"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "internal/quaiapi/api.go:1740",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicNetAPI).PeerCount",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "net_peerCount",
+   "name": "peerCount",
+   "namespace": "net",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:231"
+   ],
+   "results": [
+    "hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:1750",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicNetAPI).PeerCountByDirection",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "net_peerCountByDirection",
+   "name": "peerCountByDirection",
+   "namespace": "net",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:231"
+   ],
+   "results": [
+    "quaiapi.PeerCountByDirection"
+   ],
+   "source": "internal/quaiapi/api.go:1758",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicNetAPI).Version",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "net_version",
+   "name": "version",
+   "namespace": "net",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:231"
+   ],
+   "results": [
+    "string"
+   ],
+   "source": "internal/quaiapi/api.go:1745",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).BaseFee",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_baseFee",
+   "name": "baseFee",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:991",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).BlockNumber",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_blockNumber",
+   "name": "blockNumber",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint64"
+   ],
+   "source": "internal/quaiapi/quai_api.go:113",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).CalcOrder",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_calcOrder",
+   "name": "calcOrder",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1628",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).CalculateConversionAmount",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_calculateConversionAmount",
+   "name": "calculateConversionAmount",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1693",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs",
+    "rpc.BlockNumberOrHash",
+    "*quaiapi.StateOverride"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).Call",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_call",
+   "name": "call",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:887",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).ChainId",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_chainId",
+   "name": "chainId",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:103",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicQuaiAPI).ClientVersion",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_clientVersion",
+   "name": "clientVersion",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:206"
+   ],
+   "results": [
+    "string"
+   ],
+   "source": "internal/quaiapi/quai_api.go:83",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs",
+    "*rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).CreateAccessList",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_createAccessList",
+   "name": "createAccessList",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*quaiapi.accessListResult",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1163",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).EstimateFeeForQi",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_estimateFeeForQi",
+   "name": "estimateFeeForQi",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1022",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "quaiapi.TransactionArgs",
+    "*rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).EstimateGas",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_estimateGas",
+   "name": "estimateGas",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint64",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:901",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicQuaiAPI).GasPrice",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_gasPrice",
+   "name": "gasPrice",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:206"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:72",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.MixedcaseAddress",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetBalance",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBalance",
+   "name": "getBalance",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:122",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetBlockByHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBlockByHash",
+   "name": "getBlockByHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:744",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetBlockByNumber",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBlockByNumber",
+   "name": "getBlockByNumber",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:727",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetBlockOrCandidateByHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBlockOrCandidateByHash",
+   "name": "getBlockOrCandidateByHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:755",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "*quaiapi.BlockTemplateRequest"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetBlockTemplate",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBlockTemplate",
+   "name": "getBlockTemplate",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1198",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetBlockTransactionCountByHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBlockTransactionCountByHash",
+   "name": "getBlockTransactionCountByHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:1432",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetBlockTransactionCountByNumber",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getBlockTransactionCountByNumber",
+   "name": "getBlockTransactionCountByNumber",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:1423",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.MixedcaseAddress",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetCode",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getCode",
+   "name": "getCode",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:832",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetCoinbaseTxForWorkShareHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getCoinbaseTxForWorkShareHash",
+   "name": "getCoinbaseTxForWorkShareHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2160",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.AddressBytes",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetContractSize",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getContractSize",
+   "name": "getContractSize",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:971",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetDonorChainInfoForWorkshare",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getDonorChainInfoForWorkshare",
+   "name": "getDonorChainInfoForWorkshare",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2182",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.ID"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).GetFilterChanges",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getFilterChanges",
+   "name": "getFilterChanges",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "interface {}",
+    "error"
+   ],
+   "source": "quai/filters/api.go:921",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.ID"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).GetFilterLogs",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getFilterLogs",
+   "name": "getFilterLogs",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "[]*types.Log",
+    "error"
+   ],
+   "source": "quai/filters/api.go:872",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetHeaderByHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getHeaderByHash",
+   "name": "getHeaderByHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}"
+   ],
+   "source": "internal/quaiapi/quai_api.go:714",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetHeaderByNumber",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getHeaderByNumber",
+   "name": "getHeaderByNumber",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:698",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetKQuaiAndUpdateBit",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getKQuaiAndUpdateBit",
+   "name": "getKQuaiAndUpdateBit",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1673",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetLatestUTXOSetSize",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getLatestUTXOSetSize",
+   "name": "getLatestUTXOSetSize",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint64",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1071",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.MixedcaseAddress"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetLockedBalance",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getLockedBalance",
+   "name": "getLockedBalance",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:177",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address",
+    "common.Address"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetLockupsForContractAndMiner",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getLockupsForContractAndMiner",
+   "name": "getLockupsForContractAndMiner",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]map[string][]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:251",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.FilterCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).GetLogs",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getLogs",
+   "name": "getLogs",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "[]*types.Log",
+    "error"
+   ],
+   "source": "quai/filters/api.go:812",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "*bool"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetMiningInfo",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getMiningInfo",
+   "name": "getMiningInfo",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2335",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address",
+    "hexutil.Uint64",
+    "hexutil.Uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetOutPointsByAddressAndRange",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getOutPointsByAddressAndRange",
+   "name": "getOutPointsByAddressAndRange",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string][]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:303",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "[]common.Address",
+    "common.Hash",
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetOutpointDeltasForAddressesInRange",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getOutpointDeltasForAddressesInRange",
+   "name": "getOutpointDeltasForAddressesInRange",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]map[string]map[string][]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:343",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetOutpointsByAddress",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getOutpointsByAddress",
+   "name": "getOutpointsByAddress",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "[]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:200",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetPendingHeader",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getPendingHeader",
+   "name": "getPendingHeader",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1536",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetPendingWorkShares",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getPendingWorkShares",
+   "name": "getPendingWorkShares",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string][]map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1529",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address",
+    "[]string",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetProof",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getProof",
+   "name": "getProof",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*quaiapi.AccountResult",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:635",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetProtocolExpansionNumber",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getProtocolExpansionNumber",
+   "name": "getProtocolExpansionNumber",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1566",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetQuaiHeaderForDonorHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getQuaiHeaderForDonorHash",
+   "name": "getQuaiHeaderForDonorHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2152",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetRawTransactionByBlockHashAndIndex",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getRawTransactionByBlockHashAndIndex",
+   "name": "getRawTransactionByBlockHashAndIndex",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "hexutil.Bytes"
+   ],
+   "source": "internal/quaiapi/api.go:1465",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetRawTransactionByBlockNumberAndIndex",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getRawTransactionByBlockNumberAndIndex",
+   "name": "getRawTransactionByBlockNumberAndIndex",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "hexutil.Bytes"
+   ],
+   "source": "internal/quaiapi/api.go:1457",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetRawTransactionByHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getRawTransactionByHash",
+   "name": "getRawTransactionByHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1520",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.MixedcaseAddress",
+    "string",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetStorageAt",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getStorageAt",
+   "name": "getStorageAt",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Bytes",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:858",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetSubsidyChainHeight",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getSubsidyChainHeight",
+   "name": "getSubsidyChainHeight",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2298",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetSupplyAnalyticsForBlock",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getSupplyAnalyticsForBlock",
+   "name": "getSupplyAnalyticsForBlock",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:280",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint",
+    "common.Location"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionByBlockHashAndIndex",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getTransactionByBlockHashAndIndex",
+   "name": "getTransactionByBlockHashAndIndex",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction"
+   ],
+   "source": "internal/quaiapi/api.go:1449",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionByBlockNumberAndIndex",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getTransactionByBlockNumberAndIndex",
+   "name": "getTransactionByBlockNumberAndIndex",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction"
+   ],
+   "source": "internal/quaiapi/api.go:1441",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionByHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getTransactionByHash",
+   "name": "getTransactionByHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "*quaiapi.RPCTransaction",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1500",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.MixedcaseAddress",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).GetTransactionCount",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getTransactionCount",
+   "name": "getTransactionCount",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "*hexutil.Uint64",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1473",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetTransactionReceipt",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getTransactionReceipt",
+   "name": "getTransactionReceipt",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1807",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetUTXO",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getUTXO",
+   "name": "getUTXO",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:617",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetUncleByBlockHashAndIndex",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getUncleByBlockHashAndIndex",
+   "name": "getUncleByBlockHashAndIndex",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:783",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber",
+    "hexutil.Uint"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetUncleByBlockNumberAndIndex",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getUncleByBlockNumberAndIndex",
+   "name": "getUncleByBlockNumberAndIndex",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:764",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Hash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetUncleCountByBlockHash",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getUncleCountByBlockHash",
+   "name": "getUncleCountByBlockHash",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/quai_api.go:823",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.BlockNumber"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetUncleCountByBlockNumber",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getUncleCountByBlockNumber",
+   "name": "getUncleCountByBlockNumber",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/quai_api.go:814",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetWorkShareP2PThreshold",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getWorkShareP2PThreshold",
+   "name": "getWorkShareP2PThreshold",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint64"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1656",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address",
+    "common.Address",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).GetWrappedQiDeposit",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_getWrappedQiDeposit",
+   "name": "getWrappedQiDeposit",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:263",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Big",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).HashesPerQits",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_hashesPerQits",
+   "name": "hashesPerQits",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2126",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).ListRunningChains",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_listRunningChains",
+   "name": "listRunningChains",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "[]common.Location"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1562",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewBlockFilter",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_newBlockFilter",
+   "name": "newBlockFilter",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "rpc.ID"
+   ],
+   "source": "quai/filters/api.go:226",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.FilterCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewFilter",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_newFilter",
+   "name": "newFilter",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "rpc.ID",
+    "error"
+   ],
+   "source": "quai/filters/api.go:769",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewPendingTransactionFilter",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_newPendingTransactionFilter",
+   "name": "newPendingTransactionFilter",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "rpc.ID"
+   ],
+   "source": "quai/filters/api.go:135",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).NodeLocation",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_nodeLocation",
+   "name": "nodeLocation",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "[]hexutil.Uint64"
+   ],
+   "source": "internal/quaiapi/quai_api.go:108",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Big",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).QiToQuai",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_qiToQuai",
+   "name": "qiToQuai",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1571",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Big",
+    "rpc.BlockNumberOrHash"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).QuaiToQi",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_quaiToQi",
+   "name": "quaiToQi",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*hexutil.Big"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1600",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).ReceiveMinedHeader",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_receiveMinedHeader",
+   "name": "receiveMinedHeader",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1482",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).ReceiveRawWorkShare",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_receiveRawWorkShare",
+   "name": "receiveRawWorkShare",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1499",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).ReceiveTxFromPoolSharingClient",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_receiveTxFromPoolSharingClient",
+   "name": "receiveTxFromPoolSharingClient",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1610",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "*types.WorkObjectHeader"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).ReceiveWorkShare",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_receiveWorkShare",
+   "name": "receiveWorkShare",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1524",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).RewardAnalytics",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_rewardAnalytics",
+   "name": "rewardAnalytics",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2584",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTransactionPoolAPI).SendRawTransaction",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_sendRawTransaction",
+   "name": "sendRawTransaction",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:245"
+   ],
+   "results": [
+    "common.Hash",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1596",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "hexutil.Uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SetWorkShareP2PThreshold",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_setWorkShareP2PThreshold",
+   "name": "setWorkShareP2PThreshold",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1660",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes",
+    "hexutil.Bytes",
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SignAuxTemplate",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_signAuxTemplate",
+   "name": "signAuxTemplate",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "*quaiapi.SignAuxTemplateResponse",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1910",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SubmitAuxTemplate",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_submitAuxTemplate",
+   "name": "submitAuxTemplate",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:2049",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SubmitKawpowBlock",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_submitKawpowBlock",
+   "name": "submitKawpowBlock",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1441",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SubmitScryptBlock",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_submitScryptBlock",
+   "name": "submitScryptBlock",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1422",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SubmitShaBlock",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_submitShaBlock",
+   "name": "submitShaBlock",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "map[string]interface {}",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1461",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "hexutil.Uint64",
+    "hexutil.Uint64"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicBlockChainQuaiAPI).SuggestFinalityDepth",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_suggestFinalityDepth",
+   "name": "suggestFinalityDepth",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:216"
+   ],
+   "results": [
+    "hexutil.Uint64",
+    "error"
+   ],
+   "source": "internal/quaiapi/quai_api.go:1647",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "rpc.ID"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).UninstallFilter",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "quai_uninstallFilter",
+   "name": "uninstallFilter",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "bool"
+   ],
+   "source": "quai/filters/api.go:854",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "common.Address"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).Accesses",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "accesses",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:610",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "invalid argument 1: json: cannot unmarshal non-string into Go value of type common.InternalAddress"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.BlockTemplateUpdatesCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).BlockTemplateUpdates",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "blockTemplateUpdates",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:1182",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "invalid argument 1: json: cannot unmarshal number into Go value of type filters.BlockTemplateUpdatesCriteria"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [
+    "filters.FilterCriteria"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).Logs",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "logs",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:703",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "invalid argument 1: json: cannot unmarshal number into Go value of type filters.input"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewChainBlocks",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newChainBlocks",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:432",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewChainBlocksV2",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newChainBlocksV2",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:476",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewHeads",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newHeads",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:565",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewHeadsV2",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newHeadsV2",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:520",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewPendingTransactions",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newPendingTransactions",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:176",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewWorkshares",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newWorkshares",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:266",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).NewWorksharesV2",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "newWorksharesV2",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:349",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/quai/filters.(*PublicFilterAPI).PendingHeader",
+   "http": {
+    "probe": {
+     "code": -32000,
+     "message": "notifications not supported"
+    },
+    "served": false
+   },
+   "kind": "subscription",
+   "method": "quai_subscribe",
+   "name": "pendingHeader",
+   "namespace": "quai",
+   "public": true,
+   "registered_by": [
+    "quai/backend.go:319"
+   ],
+   "results": [
+    "*rpc.Subscription",
+    "error"
+   ],
+   "source": "quai/filters/api.go:1089",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "too many arguments, want at most 1"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/rpc.(*RPCService).Modules",
+   "http": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "kind": "method",
+   "method": "rpc_modules",
+   "name": "modules",
+   "namespace": "rpc",
+   "public": true,
+   "registered_by": [],
+   "results": [
+    "map[string]string"
+   ],
+   "source": "rpc/server.go:149",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": false
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTxPoolAPI).Content",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_content does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "txpool_content",
+   "name": "content",
+   "namespace": "txpool",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:251"
+   ],
+   "results": [
+    "map[string]map[string]map[string]*quaiapi.RPCTransaction"
+   ],
+   "source": "internal/quaiapi/api.go:78",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "common.Address"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTxPoolAPI).ContentFrom",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_contentFrom does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "txpool_contentFrom",
+   "name": "contentFrom",
+   "namespace": "txpool",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:251"
+   ],
+   "results": [
+    "map[string]map[string]*quaiapi.RPCTransaction"
+   ],
+   "source": "internal/quaiapi/api.go:105",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTxPoolAPI).GetRollingFeeInfo",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_getRollingFeeInfo does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "txpool_getRollingFeeInfo",
+   "name": "getRollingFeeInfo",
+   "namespace": "txpool",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:251"
+   ],
+   "results": [
+    "[]*hexutil.Big",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:174",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTxPoolAPI).Inspect",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_inspect does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "txpool_inspect",
+   "name": "inspect",
+   "namespace": "txpool",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:251"
+   ],
+   "results": [
+    "map[string]map[string]map[string]string"
+   ],
+   "source": "internal/quaiapi/api.go:139",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicTxPoolAPI).Status",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_status does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "txpool_status",
+   "name": "status",
+   "namespace": "txpool",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:251"
+   ],
+   "results": [
+    "map[string]hexutil.Uint"
+   ],
+   "source": "internal/quaiapi/api.go:128",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicWorkSharesAPI).GetWorkShareThreshold",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method workshare_getWorkShareThreshold does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "workshare_getWorkShareThreshold",
+   "name": "getWorkShareThreshold",
+   "namespace": "workshare",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:257"
+   ],
+   "results": [
+    "int",
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1826",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  },
+  {
+   "args": [
+    "hexutil.Bytes"
+   ],
+   "function": "github.com/dominant-strategies/go-quai/internal/quaiapi.(*PublicWorkSharesAPI).ReceiveSubWorkshare",
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method workshare_receiveSubWorkshare does not exist/is not available"
+    },
+    "served": false
+   },
+   "kind": "method",
+   "method": "workshare_receiveSubWorkshare",
+   "name": "receiveSubWorkshare",
+   "namespace": "workshare",
+   "public": true,
+   "registered_by": [
+    "internal/quaiapi/backend.go:257"
+   ],
+   "results": [
+    "error"
+   ],
+   "source": "internal/quaiapi/api.go:1830",
+   "ws": {
+    "probe": {
+     "code": -32602,
+     "message": "non-array args"
+    },
+    "served": true
+   },
+   "zone_only": true
+  }
+ ],
+ "outside": [
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method web3_clientVersion does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "web3_clientVersion",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method web3_clientVersion does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method web3_sha3 does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "web3_sha3",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method web3_sha3 does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_sendTransaction does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_sendTransaction",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_sendTransaction does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_accounts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_accounts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_accounts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_requestAccounts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_requestAccounts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_requestAccounts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_sign does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_sign",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_sign does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_signTransaction does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_signTransaction",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_signTransaction does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_signTypedData_v4 does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_signTypedData_v4",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_signTypedData_v4 does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_sign does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "personal_sign",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_sign does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_listAccounts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "personal_listAccounts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_listAccounts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_unlockAccount does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "personal_unlockAccount",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_unlockAccount does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_sendTransaction does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "personal_sendTransaction",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method personal_sendTransaction does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_syncing does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_syncing",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_syncing does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_syncing does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_syncing",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_syncing does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_feeHistory does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_feeHistory",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_feeHistory does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_feeHistory does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_feeHistory",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_feeHistory does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_maxPriorityFeePerGas does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_maxPriorityFeePerGas",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_maxPriorityFeePerGas does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_maxPriorityFeePerGas does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_maxPriorityFeePerGas",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_maxPriorityFeePerGas does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBlockReceipts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_getBlockReceipts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_getBlockReceipts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_getBlockReceipts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_getBlockReceipts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_getBlockReceipts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_protocolVersion does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_protocolVersion",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_protocolVersion does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_protocolVersion does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_protocolVersion",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_protocolVersion does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_accounts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_accounts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_accounts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_requestAccounts does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_requestAccounts",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_requestAccounts does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_sendTransaction does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_sendTransaction",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_sendTransaction does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_sign does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_sign",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_sign does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_signTransaction does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_signTransaction",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_signTransaction does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_mining does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_mining",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_mining does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_hashrate does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_hashrate",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_hashrate does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_hashrate does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_hashrate",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_hashrate does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_coinbase does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "eth_coinbase",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method eth_coinbase does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_nodeInfo does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "admin_nodeInfo",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_nodeInfo does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_peers does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "admin_peers",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method admin_peers does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_start does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "miner_start",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method miner_start does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_getRollingFeeInfoV2 does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "txpool_getRollingFeeInfoV2",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method txpool_getRollingFeeInfoV2 does not exist/is not available"
+    },
+    "served": false
+   }
+  },
+  {
+   "http": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_getRollingFeeInfo does not exist/is not available"
+    },
+    "served": false
+   },
+   "method": "quai_getRollingFeeInfo",
+   "ws": {
+    "probe": {
+     "code": -32601,
+     "message": "the method quai_getRollingFeeInfo does not exist/is not available"
+    },
+    "served": false
+   }
+  }
+ ],
+ "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+ "rpc_modules": {
+  "http": {
+   "net": "1.0",
+   "quai": "1.0",
+   "rpc": "1.0"
+  },
+  "ws": {
+   "debug": "1.0",
+   "eth": "1.0",
+   "net": "1.0",
+   "quai": "1.0",
+   "rpc": "1.0",
+   "txpool": "1.0",
+   "workshare": "1.0"
+  }
+ },
+ "scope": "go-quai v0.57.0 JSON-RPC registry of a zone node (quaiapi.GetAPIs and Quai.APIs), probed on the production node.Node built from makeConfigNode's default configuration for zone [0 0]; no handler body runs",
+ "unsubscribe": [
+  {
+   "http": {
+    "code": -32602,
+    "message": "non-array args"
+   },
+   "method": "quai_unsubscribe",
+   "ws": {
+    "code": -32602,
+    "message": "non-array args"
+   }
+  },
+  {
+   "http": {
+    "code": -32602,
+    "message": "non-array args"
+   },
+   "method": "eth_unsubscribe",
+   "ws": {
+    "code": -32602,
+    "message": "non-array args"
+   }
+  },
+  {
+   "http": {
+    "code": -32602,
+    "message": "non-array args"
+   },
+   "method": "nosuch_unsubscribe",
+   "ws": {
+    "code": -32602,
+    "message": "non-array args"
+   }
+  }
+ ]
+}

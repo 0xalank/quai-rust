@@ -31,6 +31,23 @@ use std::{
     collections::BTreeMap,
     sync::{Arc, OnceLock},
 };
+/// `World::proof`: Merkle proofs of an account and its storage.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldProof {
+    /// The encoded account-trie nodes on the account's path, root first.
+    pub account: Vec<Vec<u8>>,
+    /// The storage of an existing account; None when it does not exist.
+    pub storage: Option<StorageProof>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StorageProof {
+    /// The account's storage root.
+    pub root: Hash,
+    /// keccak256 of the account's code.
+    pub code_hash: Hash,
+    /// For each requested key: its value and the encoded nodes on its path.
+    pub keys: Vec<(Hash, Vec<Vec<u8>>)>,
+}
 /// Capacity of an in-memory snapshot and of explicit account exports.
 pub const MAX_ACCOUNTS: usize = 65_536;
 /// Per-account capacity of an in-memory snapshot and of storage exports.
@@ -677,6 +694,53 @@ impl World {
         let root = trie.root();
         let _ = self.root_cache.set(Commitment { trie, totals });
         Ok(root)
+    }
+    /// go-quai `StateDB.GetProof` and `GetStorageProof` (go-ethereum
+    /// `Trie.Prove`): the trie nodes on the path to `address`, root first,
+    /// and for an existing account its storage root and the nodes on the
+    /// path to each key. None for the storage of a missing account
+    /// (`StorageTrie` is nil).
+    pub fn proof(&self, address: &Address, keys: &[Hash]) -> Result<WorldProof, ReadError> {
+        self.root()?;
+        let trie = &self
+            .root_cache
+            .get()
+            .ok_or_else(|| ReadError::Unavailable("state commitment".into()))?
+            .trie;
+        let account = match &self.base {
+            Some(reader) => trie
+                .prove(reader.as_ref(), address)
+                .map_err(|e| trie_error(e, true))?,
+            None => trie
+                .prove(&mpt::NoNodes, address)
+                .map_err(|e| trie_error(e, false))?,
+        };
+        let storage = match self.account(address)? {
+            None => None,
+            Some(a) => {
+                let storage = a.storage_trie()?;
+                let proofs = keys
+                    .iter()
+                    .map(|key| {
+                        let proof = match &a.backing {
+                            Some(base) => storage
+                                .prove(base.reader.as_ref(), key)
+                                .map_err(|e| trie_error(e, true))?,
+                            None => storage
+                                .prove(&mpt::NoNodes, key)
+                                .map_err(|e| trie_error(e, false))?,
+                        };
+                        Ok((a.get(*key)?, proof))
+                    })
+                    .collect::<Result<Vec<_>, ReadError>>()?;
+                Some(StorageProof {
+                    root: storage.root(),
+                    code_hash: keccak(&a.code),
+                    keys: proofs,
+                })
+            }
+        };
+        Ok(WorldProof { account, storage })
     }
 }
 #[cfg(test)]

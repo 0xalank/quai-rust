@@ -618,6 +618,59 @@ impl Trie {
             }
         }
     }
+    /// go-ethereum `Trie.Prove` of a secure key (trie/proof.go): the
+    /// encoding of each node on the path to `keccak(key)`, root first, that
+    /// is the root or is referenced by hash (32 bytes or more); nodes
+    /// embedded in their parent are not repeated. A key that is not in the
+    /// trie gives the nodes up to where its path leaves the trie; an empty
+    /// trie gives none.
+    pub fn prove<R: ReadNodes + ?Sized>(
+        &self,
+        reader: &R,
+        key: &[u8],
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        if key.len() > 64 {
+            return Err(Error::Invalid("secure key length"));
+        }
+        self.prove_hashed(reader, keccak(key))
+    }
+    pub fn prove_hashed<R: ReadNodes + ?Sized>(
+        &self,
+        reader: &R,
+        key: Hash,
+    ) -> Result<Vec<Vec<u8>>, Error> {
+        let key = nibble_key(key);
+        let mut out = vec![];
+        let mut current = self.root.clone();
+        let mut depth = 0;
+        loop {
+            if matches!(current, Link::Empty) {
+                return Ok(out);
+            }
+            let n = load(&current, reader, depth)?;
+            let encoded = n.encoded();
+            if depth == 0 || encoded.len() >= 32 {
+                out.push(encoded.to_vec());
+            }
+            match &n.data {
+                Data::Leaf(..) => return Ok(out),
+                Data::Extension(p, c) => {
+                    if !key[depth..].starts_with(p) {
+                        return Ok(out);
+                    }
+                    depth += p.len();
+                    current = c.clone();
+                }
+                Data::Branch(c) => {
+                    if depth >= 64 {
+                        return Err(Error::Invalid("proof depth"));
+                    }
+                    current = c[key[depth] as usize].clone();
+                    depth += 1;
+                }
+            }
+        }
+    }
     pub fn update<R: ReadNodes + ?Sized>(
         &mut self,
         reader: &R,

@@ -7,7 +7,7 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 3,900,000** (2026-11-20), from the rolling replay
+Current value: **zone 4,400,000** (2026-11-20), from the rolling replay
 (`scripts/mainnet/rolling_replay.sh`), past MaxCodeSize (zone 3,490,000). The long replay executes mainnet zone blocks from the
 colosseum genesis, and every root equals go-quai: EVM state, ETX set, UTXO,
 receipts, outbound ETXs, gas and state counters, account count. It passed

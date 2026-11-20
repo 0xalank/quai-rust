@@ -77,6 +77,16 @@
     "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
     "version": "0.6.0"
   },
+  "libp2p-autonat 0.15.0": {
+    "file": "licenses/upstream/libp2p-autonat-0.15.0-LICENSE",
+    "name": "libp2p-autonat",
+    "path_in_vcs": "protocols/autonat",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/7b9a558e3188eaf20a14bd8388d5e9b6e2aa9a23/LICENSE",
+    "version": "0.15.0"
+  },
   "libp2p-connection-limits 0.6.0": {
     "file": "licenses/upstream/libp2p-connection-limits-0.6.0-LICENSE",
     "name": "libp2p-connection-limits",
@@ -96,6 +106,26 @@
     "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
     "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/e10ce4c1704a529161f62e8538e55a106e4ec2d6/LICENSE",
     "version": "0.43.2"
+  },
+  "libp2p-dcutr 0.14.1": {
+    "file": "licenses/upstream/libp2p-dcutr-0.14.1-LICENSE",
+    "name": "libp2p-dcutr",
+    "path_in_vcs": "protocols/dcutr",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "4682e735cbdfd8f2b59f5478591a4e8ae552fa68",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/4682e735cbdfd8f2b59f5478591a4e8ae552fa68/LICENSE",
+    "version": "0.14.1"
+  },
+  "libp2p-dns 0.44.0": {
+    "file": "licenses/upstream/libp2p-dns-0.44.0-LICENSE",
+    "name": "libp2p-dns",
+    "path_in_vcs": "transports/dns",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "d92dabcbb87c4796d46e3d312b7fa042af10279a",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/d92dabcbb87c4796d46e3d312b7fa042af10279a/LICENSE",
+    "version": "0.44.0"
   },
   "libp2p-gossipsub 0.49.5": {
     "file": "licenses/upstream/libp2p-gossipsub-0.49.5-DECLARED-MIT.txt",
@@ -148,6 +178,16 @@
     "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
     "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/d92dabcbb87c4796d46e3d312b7fa042af10279a/LICENSE",
     "version": "0.46.1"
+  },
+  "libp2p-relay 0.21.1": {
+    "file": "licenses/upstream/libp2p-relay-0.21.1-LICENSE",
+    "name": "libp2p-relay",
+    "path_in_vcs": "protocols/relay",
+    "repository": "https://github.com/libp2p/rust-libp2p",
+    "revision": "4682e735cbdfd8f2b59f5478591a4e8ae552fa68",
+    "sha256": "e10098b8c52fd18ad0f116aac2c0dba1e99ca125d6848640c00688e160a3ee7d",
+    "url": "https://raw.githubusercontent.com/libp2p/rust-libp2p/4682e735cbdfd8f2b59f5478591a4e8ae552fa68/LICENSE",
+    "version": "0.21.1"
   },
   "libp2p-request-response 0.29.0": {
     "file": "licenses/upstream/libp2p-request-response-0.29.0-LICENSE",

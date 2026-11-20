@@ -134,7 +134,7 @@ pub fn verify(v: &Value) -> Value {
         let locked = OutPoint { hash, index: 1 };
         let value = Utxo {
             denomination: 0,
-            address,
+            address: address.into(),
             lock: vec![],
         };
         let mut base = UtxoState::default();

@@ -1023,12 +1023,15 @@ fn address_index(
     let all = utxos.materialize().ok()?;
     let mut out: HashMap<Address, Vec<OutpointData>> = HashMap::new();
     for (p, u) in all.iter() {
-        out.entry(u.address).or_default().push(OutpointData {
-            tx_hash: p.hash,
-            index: p.index,
-            denomination: u.denomination,
-            lock: trim(&u.lock),
-        });
+        // go-quai's index key: `common.AddressBytes(utxo.Address)`.
+        out.entry(u.address.first20())
+            .or_default()
+            .push(OutpointData {
+                tx_hash: p.hash,
+                index: p.index,
+                denomination: u.denomination,
+                lock: trim(&u.lock),
+            });
     }
     Some(out)
 }
@@ -1319,7 +1322,7 @@ impl ChainView for ExportView {
             .map_err(read_error)?
             .map(|u| UtxoData {
                 denomination: u.denomination,
-                address: u.address,
+                address: u.address.last20(),
                 lock: trim(&u.lock),
             }))
     }
@@ -1363,7 +1366,9 @@ impl ChainView for ExportView {
                 let Some(u) = head.state.utxos.get(&point).map_err(read_error)? else {
                     continue;
                 };
-                if u.address[..16] != address[..16] {
+                // go-quai's chain indexer keys by the first 16 bytes of
+                // `[20]byte(out.Address)`, the first bytes of the address.
+                if u.address.as_bytes()[..16] != address[..16] {
                     continue;
                 }
                 out.push(OutpointData {
@@ -1508,7 +1513,10 @@ impl ChainView for ExportView {
                 tx_hash: p.hash,
                 index: p.index,
                 denomination: c.denomination,
-                address: owners.get(&p).copied().unwrap_or(c.address),
+                address: owners
+                    .get(&p)
+                    .copied()
+                    .unwrap_or_else(|| c.address.first20()),
                 lock: trim(&c.lock),
             });
         }

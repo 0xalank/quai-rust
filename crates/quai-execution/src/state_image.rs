@@ -139,8 +139,9 @@ pub fn encode(
     for (point, v) in entries.iter() {
         out.extend(point.hash);
         out.extend(point.index.to_be_bytes());
-        out.push(v.denomination);
-        out.extend(v.address);
+        // A 20-byte address keeps the image form from before longer
+        // addresses (`qi::encode_denomination_address`).
+        crate::qi::encode_denomination_address(v.denomination, &v.address, &mut out);
         blob(&mut out, &v.lock)?;
         if out.len() > MAX_BYTES - 416 {
             return Err("image byte budget".into());
@@ -325,8 +326,9 @@ pub fn decode(input: &[u8], expected: &Reference) -> Result<Restored, String> {
             return Err("state image UTXO order".into());
         }
         previous = Some(point);
-        let denomination = reader.take(1)?[0];
-        let address = reader.fixed()?;
+        let remaining = reader.bytes.get(reader.offset..).unwrap_or_default();
+        let (denomination, address, rest) = crate::qi::decode_denomination_address(remaining)?;
+        reader.take(remaining.len() - rest.len())?;
         let lock = reader.blob(32)?;
         entries.insert(
             point,
@@ -396,7 +398,7 @@ pub(crate) mod tests {
         qi[1] = 128;
         let value_qi = Utxo {
             denomination: 6,
-            address: qi,
+            address: qi.into(),
             lock: vec![1],
         };
         state.insert(point, value_qi.clone()).unwrap();

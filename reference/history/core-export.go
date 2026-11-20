@@ -84,6 +84,10 @@ func histBindContext(w *types.WorkObject) {
 	donor := types.NewBlockHeader(types.Kawpow, int32(t.Version()), t.PrevHash(), mr, t.SignatureTime()+1, t.Bits(), 0, t.Height())
 	h.SetAuxPow(types.NewAuxPow(types.Kawpow, donor, t.AuxPow2(), t.Sigs(), t.MerkleBranch(), tx))
 }
+
+// ha is a donor proof with a header and a coinbase transaction. go-quai's
+// decoder drops an AuxPow without either (types/wo.go:1652), so a header-only
+// AuxPow hashed here in memory would not survive a peer's decode.
 func ha(id types.PowID) *types.AuxPow {
 	a := new(types.AuxPow)
 	a.SetPowID(id)
@@ -91,6 +95,8 @@ func ha(id types.PowID) *types.AuxPow {
 	if id == types.Scrypt {
 		a.SetAuxPow2(make([]byte, 32))
 	}
+	t := types.DefaultKawpowAuxTemplate()
+	a.SetTransaction(types.NewAuxPowCoinbaseTx(id, 1, t.CoinbaseOut(), common.Hash{}, 1000))
 	return a
 }
 func hstore(hc *HeaderChain, w *types.WorkObject) {

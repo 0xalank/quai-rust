@@ -63,7 +63,7 @@ pub fn utxo_hash(point: OutPoint, value: &Utxo) -> Hash {
         trie::bytes(&point.index.to_be_bytes()),
         trie::list([
             trie::bytes(&denomination),
-            trie::bytes(&value.address),
+            trie::bytes(value.address.as_bytes()),
             trie::bytes(magnitude(&value.lock)),
         ]),
     ]))

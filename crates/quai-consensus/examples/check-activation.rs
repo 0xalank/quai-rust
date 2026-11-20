@@ -85,7 +85,7 @@ pub fn inputs(v: &Value) -> (State, History, CandidateIndex, Past) {
                     index: row["index"].as_u64().unwrap() as u16,
                 },
                 Utxo {
-                    address: hash20(&row["address"]),
+                    address: hash20(&row["address"]).into(),
                     denomination: row["denomination"].as_u64().unwrap() as u8,
                     lock: bytes(&row["lock"]),
                 },

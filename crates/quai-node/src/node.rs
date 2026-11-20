@@ -317,7 +317,9 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             inflight: 3,
             peers: peer_addrs,
             public: o.public,
-            handoff: o.gossip && o.public,
+            // Only a run that follows the head through gossip hands off;
+            // a run with --to fetches by number up to it.
+            handoff: o.gossip && o.public && o.to.is_none(),
         },
         *log,
     )?;

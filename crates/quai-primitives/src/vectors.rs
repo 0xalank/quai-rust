@@ -57,6 +57,38 @@ pub fn verify(bytes: &[u8]) -> Result<Value, String> {
             failures.push(json!({"id":vector["id"],"field":"missing-field accepted"}));
         }
     }
+    // AuxPow shapes through the decoder that peer data takes: go-quai keeps
+    // an AuxPow only with a donor header and a coinbase transaction
+    // (types/wo.go:1652) and drops any other.
+    let aux_shapes = corpus["aux_shapes"].as_array().map_or(&[][..], |v| v);
+    for vector in aux_shapes {
+        let decoded = Header::decode_auxiliary(&decode_hex(&string(vector, "input")?)?, schedule);
+        checks += 1;
+        match (decoded, vector["go_rejected"].as_bool()) {
+            (Err(_), Some(true)) => {}
+            (Ok(header), Some(false)) => {
+                let actual = [
+                    ("canonical", json!(encode_hex(&header.encode()))),
+                    (
+                        "block_hash",
+                        json!(header.block_hash().map(|h| encode_hex(&h)).ok()),
+                    ),
+                    ("aux", json!(header.wire().aux_pow.is_some())),
+                ];
+                for (field, value) in actual {
+                    checks += 1;
+                    if vector[field] != value {
+                        failures.push(json!({"id":vector["id"],"field":field}));
+                    }
+                }
+            }
+            (decoded, _) => failures.push(json!({
+                "id":vector["id"],
+                "field":"go_rejected",
+                "rust":decoded.err(),
+            })),
+        }
+    }
     for vector in corpus["targets"]
         .as_array()
         .ok_or("missing target vectors")?
@@ -72,6 +104,6 @@ pub fn verify(bytes: &[u8]) -> Result<Value, String> {
         }
     }
     Ok(
-        json!({"passed":failures.is_empty(),"header_vectors":corpus["headers"].as_array().unwrap().len(),"rejected_vectors":corpus["rejected"].as_array().unwrap().len(),"target_vectors":corpus["targets"].as_array().unwrap().len(),"checks":checks,"failures":failures,"runtime":"Rust only","consensus_validation":false}),
+        json!({"passed":failures.is_empty(),"header_vectors":corpus["headers"].as_array().unwrap().len(),"aux_shape_vectors":aux_shapes.len(),"rejected_vectors":corpus["rejected"].as_array().unwrap().len(),"target_vectors":corpus["targets"].as_array().unwrap().len(),"checks":checks,"failures":failures,"runtime":"Rust only","consensus_validation":false}),
     )
 }

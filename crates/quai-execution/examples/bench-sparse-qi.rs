@@ -55,7 +55,7 @@ fn value(n: u64) -> Utxo {
     address[1] = 128;
     Utxo {
         denomination: (n % 15) as u8,
-        address,
+        address: address.into(),
         lock: vec![],
     }
 }

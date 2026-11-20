@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "vectors_sha256": "583c401ba92fa4f4cd2c67b2db0c7a93de801a451fba5a7204cbd96e3394c733",
+  "vectors_sha256": "2f002127a48e57c54469239f64f340820c0839f38fe91aaa663be0d210d8c85a",
   "oracle_sources": {
     "reference/history/main.go": "7f41f11efa6f56209881a904f839f716d29aee612757ce4243da7e477edbf80d",
-    "reference/history/core-export.go": "c20812523db8a523a7f7ee52f9b7fd7e18e45383ad2dac2a155d5555585aae51",
+    "reference/history/core-export.go": "b1caa9e5b9fec39876cb04aae20b1b599a7e8b0c363182af05ad27c82e3205ea",
     "reference/consensus/core-export.go": "5a5c20d220b18482547b0f4ebef53ce5f433c0a03225d7f5fab11c7f9c8e0c53"
   },
   "driver_sha256": "ff218ecfc6c8297da2ef4b78241fc4334f057401786c51b101ef6b10702fec54",

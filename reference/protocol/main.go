@@ -164,10 +164,106 @@ func main() {
 		valid := new(big.Int).SetBytes(h).Cmp(new(big.Int).Div(common.Big2e256, difficulty)) <= 0
 		targets = append(targets, map[string]interface{}{"hash": hx(h), "difficulty": hx(d), "valid": valid})
 	}
-	report := map[string]interface{}{"schema": 1, "reference_revision": referenceRevision, "schedule": map[string]interface{}{"kawpow_fork": params.KawPowForkBlock, "transition_period": params.KawPowTransitionPeriod}, "headers": vectors, "rejected": bad, "targets": targets, "scope": "Bounded work-header codec/commitment and Blake3 target comparisons. Not ProgPoW/KAWPOW mining verification or complete block validation."}
+	report := map[string]interface{}{"schema": 1, "reference_revision": referenceRevision, "schedule": map[string]interface{}{"kawpow_fork": params.KawPowForkBlock, "transition_period": params.KawPowTransitionPeriod}, "headers": vectors, "rejected": bad, "targets": targets, "aux_shapes": auxShapes(), "scope": "Bounded work-header codec/commitment and Blake3 target comparisons. Not ProgPoW/KAWPOW mining verification or complete block validation."}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
 		panic(err)
 	}
+}
+
+// auxShapes: work headers whose AuxPow has or lacks a donor header and a
+// coinbase transaction, on both sides of KawPow and of its transition.
+// WorkObjectHeader.ProtoDecode keeps an AuxPow only with both
+// (types/wo.go:1652) and drops any other without checking it.
+func auxShapes() []interface{} {
+	t := types.DefaultKawpowAuxTemplate()
+	donor := func(id types.PowID) []byte {
+		return types.NewBlockHeader(id, 1, [32]byte{}, [32]byte{}, 1000, 0x1d00ffff, 0, 1).Bytes()
+	}
+	coinbase := func(id types.PowID) []byte {
+		return types.NewAuxPowCoinbaseTx(id, 1, t.CoinbaseOut(), common.Hash{}, 1000)
+	}
+	id := func(n uint32) *uint32 { return &n }
+	shapes := []struct {
+		name string
+		aux  *types.ProtoAuxPow
+	}{
+		{"complete-kawpow", &types.ProtoAuxPow{ChainId: id(1), Header: donor(types.Kawpow), Transaction: coinbase(types.Kawpow)}},
+		{"complete-sha", &types.ProtoAuxPow{ChainId: id(2), Header: donor(types.SHA_BTC), Transaction: coinbase(types.SHA_BTC)}},
+		{"complete-scrypt", &types.ProtoAuxPow{ChainId: id(4), Header: donor(types.Scrypt), Auxpow2: make([]byte, 32), Transaction: coinbase(types.Scrypt)}},
+		{"empty-transaction", &types.ProtoAuxPow{ChainId: id(1), Header: donor(types.Kawpow), Transaction: []byte{}}},
+		{"header-only", &types.ProtoAuxPow{ChainId: id(1), Header: donor(types.Kawpow)}},
+		{"header-only-sha", &types.ProtoAuxPow{ChainId: id(2), Header: donor(types.SHA_BTC), Signature: []byte{1, 2}}},
+		{"transaction-only", &types.ProtoAuxPow{ChainId: id(1), Transaction: coinbase(types.Kawpow)}},
+		{"neither", &types.ProtoAuxPow{ChainId: id(1)}},
+		{"empty-message", &types.ProtoAuxPow{}},
+		{"unknown-id-partial", &types.ProtoAuxPow{ChainId: id(9), Header: donor(types.Kawpow)}},
+		{"scrypt-partial-no-auxpow2", &types.ProtoAuxPow{ChainId: id(4), Header: donor(types.Scrypt)}},
+		{"empty-header", &types.ProtoAuxPow{ChainId: id(1), Header: []byte{}, Transaction: coinbase(types.Kawpow)}},
+		{"short-header", &types.ProtoAuxPow{ChainId: id(1), Header: donor(types.Kawpow)[:100], Transaction: coinbase(types.Kawpow)}},
+		{"unknown-id-complete", &types.ProtoAuxPow{ChainId: id(9), Header: donor(types.Kawpow), Transaction: coinbase(types.Kawpow)}},
+		{"scrypt-complete-no-auxpow2", &types.ProtoAuxPow{ChainId: id(4), Header: donor(types.Scrypt), Transaction: coinbase(types.Scrypt)}},
+	}
+	out := []interface{}{}
+	for _, prime := range []uint64{params.KawPowForkBlock - 1, params.KawPowForkBlock, params.KawPowForkBlock + params.KawPowTransitionPeriod - 1, params.KawPowForkBlock + params.KawPowTransitionPeriod, 2000000} {
+		for _, shape := range shapes {
+			wo := types.EmptyWorkObject(common.ZONE_CTX)
+			wh := wo.WorkObjectHeader()
+			wh.SetHeaderHash(common.HexToHash("0x11"))
+			wh.SetParentHash(common.HexToHash("0x22"))
+			wh.SetTxHash(common.HexToHash("0x33"))
+			wh.SetMixHash(common.HexToHash("0x44"))
+			wh.SetNumber(big.NewInt(1000))
+			wh.SetDifficulty(big.NewInt(1000000))
+			wh.SetPrimeTerminusNumber(new(big.Int).SetUint64(prime))
+			wh.SetNonce(types.EncodeNonce(7))
+			wh.SetTime(1700000000)
+			wh.SetLocation(common.Location{0, 0})
+			wh.SetPrimaryCoinbase(common.BytesToAddress(common.FromHex("0x00aa000000000000000000000000000000000001"), common.Location{0, 0}))
+			wh.SetData([]byte{1})
+			for _, share := range []*types.PowShareDiffAndCount{wh.ScryptDiffAndCount(), wh.ShaDiffAndCount()} {
+				share.SetDifficulty(big.NewInt(5))
+				share.SetCount(big.NewInt(1))
+				share.SetUncled(big.NewInt(0))
+			}
+			wh.SetShaShareTarget(big.NewInt(6))
+			wh.SetScryptShareTarget(big.NewInt(7))
+			wh.SetKawpowDifficulty(big.NewInt(8))
+			p, err := wh.ProtoEncode()
+			if err != nil {
+				panic(err)
+			}
+			p.AuxPow = shape.aux
+			raw, err := proto.Marshal(p)
+			if err != nil {
+				panic(err)
+			}
+			parsed := new(types.ProtoWorkObjectHeader)
+			if err = proto.Unmarshal(raw, parsed); err != nil {
+				panic(err)
+			}
+			v := map[string]interface{}{"id": fmt.Sprintf("aux-%s-%d", shape.name, prime), "input": hx(raw)}
+			decoded := new(types.WorkObjectHeader)
+			if err = decoded.ProtoDecode(parsed, common.Location{0, 0}); err != nil {
+				v["go_rejected"] = true
+				out = append(out, v)
+				continue
+			}
+			canonical, err := decoded.ProtoEncode()
+			if err != nil {
+				panic(err)
+			}
+			canonicalBytes, err := proto.Marshal(canonical)
+			if err != nil {
+				panic(err)
+			}
+			v["go_rejected"] = false
+			v["canonical"] = hx(canonicalBytes)
+			v["block_hash"] = decoded.Hash().Hex()
+			v["aux"] = decoded.AuxPow() != nil
+			out = append(out, v)
+		}
+	}
+	return out
 }

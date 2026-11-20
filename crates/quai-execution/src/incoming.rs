@@ -129,7 +129,7 @@ fn emit_utxos(
                     OutPoint { hash: id, index },
                     Utxo {
                         denomination: denomination as u8,
-                        address: to,
+                        address: to.into(),
                         lock: economy::magnitude(lock),
                     },
                 )
@@ -405,7 +405,7 @@ fn inner(
                     },
                     Utxo {
                         denomination: denom,
-                        address: t.to,
+                        address: t.to.into(),
                         lock: vec![],
                     },
                 )

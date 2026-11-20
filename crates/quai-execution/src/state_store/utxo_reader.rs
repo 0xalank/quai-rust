@@ -29,21 +29,13 @@ fn unavailable(v: impl std::fmt::Display) -> ReadError {
     ReadError::Unavailable(v.to_string())
 }
 fn decode(point: OutPoint, raw: &[u8]) -> Result<Utxo, ReadError> {
-    if raw.len() < 56 || raw[..34] != point_key(&point) {
+    if raw.len() < 34 || raw[..34] != point_key(&point) {
         return Err(unavailable("UTXO record key/width"));
     }
-    let denomination = raw[34];
-    let address = crate::slice::array(&raw[35..55])?;
-    let len = raw[55] as usize;
-    if denomination as usize >= crate::qi::DENOMINATIONS.len() || len > 32 || raw.len() != 56 + len
-    {
-        return Err(unavailable("UTXO record denomination/lock"));
+    match crate::qi::decode_utxo_body(&raw[34..]) {
+        Ok(v) if (v.denomination as usize) < crate::qi::DENOMINATIONS.len() => Ok(v),
+        _ => Err(unavailable("UTXO record denomination/address/lock")),
     }
-    Ok(Utxo {
-        denomination,
-        address,
-        lock: raw[56..].to_vec(),
-    })
 }
 impl Reader {
     pub fn new(

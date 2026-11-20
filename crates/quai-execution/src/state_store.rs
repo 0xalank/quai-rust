@@ -142,13 +142,12 @@ fn point_key(point: &OutPoint) -> Vec<u8> {
     key.extend(point.index.to_be_bytes());
     key
 }
+/// Outpoint, denomination, address and lock (`qi::encode_utxo_body`): a
+/// 20-byte address gives the record every store held before longer
+/// addresses, byte for byte.
 fn utxo_record(p: &OutPoint, v: &Utxo) -> io::Result<Vec<u8>> {
-    need(v.lock.len() <= 32, "UTXO lock width")?;
     let mut out = point_key(p);
-    out.push(v.denomination);
-    out.extend(v.address);
-    out.push(v.lock.len() as u8);
-    out.extend(&v.lock);
+    crate::qi::encode_utxo_body(v, &mut out).map_err(bad)?;
     Ok(out)
 }
 fn index_key(newest: bool) -> Vec<u8> {
@@ -666,29 +665,8 @@ fn restore_inner(
                 hash: crate::slice::array(&p[..32])?,
                 index: u16::from_be_bytes(crate::slice::array(&p[32..])?),
             };
-            let mut r = Cursor {
-                raw: value,
-                offset: 34,
-            };
-            let denomination = r.take(1)?[0];
-            let address = crate::slice::array(&r.take(20)?)?;
-            let len = r.take(1)?[0] as usize;
-            need(len <= 32, "UTXO lock bound")?;
-            let lock = r.take(len)?.to_vec();
-            r.done()?;
-            need(
-                entries
-                    .insert(
-                        point,
-                        Utxo {
-                            denomination,
-                            address,
-                            lock,
-                        },
-                    )
-                    .is_none(),
-                "duplicate UTXO",
-            )?;
+            let utxo = crate::qi::decode_utxo_body(&value[34..]).map_err(bad)?;
+            need(entries.insert(point, utxo).is_none(), "duplicate UTXO")?;
             Ok(())
         })?;
         need(entries.len() as u64 == raw_count, "missing raw UTXO index")?;
@@ -769,7 +747,7 @@ mod tests {
                     point(n),
                     Utxo {
                         denomination: (n % 15) as u8,
-                        address: [3; 20],
+                        address: [3; 20].into(),
                         lock: vec![],
                     },
                 )
@@ -805,7 +783,7 @@ mod tests {
         expected.remove(&point(0)).unwrap();
         let overwrite = Utxo {
             denomination: 14,
-            address: [7; 20],
+            address: [7; 20].into(),
             lock: vec![1],
         };
         changed.create_raw(point(1), overwrite.clone()).unwrap();
@@ -954,7 +932,7 @@ mod tests {
                     point(n),
                     Utxo {
                         denomination: n,
-                        address: [3; 20],
+                        address: [3; 20].into(),
                         lock: vec![],
                     },
                 )
@@ -1037,7 +1015,7 @@ mod tests {
         };
         let value = Utxo {
             denomination: 1,
-            address: [3; 20],
+            address: [3; 20].into(),
             lock: vec![],
         };
         let mut u = none.clone();

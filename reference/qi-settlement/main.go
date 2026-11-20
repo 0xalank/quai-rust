@@ -121,6 +121,27 @@ func addr(loc common.Location, n byte, qi bool) []byte {
 	a[19] = n
 	return a
 }
+
+// sized gives an output address of n bytes whose last 20 bytes (or last n,
+// for n < 20) are last20; a longer address starts with first and ledger, so
+// the rules that read the first 20 bytes (CalculateBlockQiTxGas, the input
+// address-reuse set) see another location and ledger than the rules that
+// read the last 20 (common.BytesToAddress).
+func sized(last20 []byte, n int, first, ledger byte) []byte {
+	if n <= 20 {
+		return append([]byte{}, last20[20-n:]...)
+	}
+	a := make([]byte, n)
+	for i := range a {
+		a[i] = 0x5a
+	}
+	copy(a[n-20:], last20)
+	a[0] = first
+	if n > 21 {
+		a[1] = ledger
+	}
+	return a
+}
 func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 	k := key(loc)
 	owner := crypto.PubkeyBytesToAddress(k.PubKey().SerializeUncompressed(), loc)
@@ -140,6 +161,35 @@ func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 	}
 	remoteR := common.Location{loc[0], (loc[1] + 1) % 16}
 	remoteP := common.Location{(loc[0] + 1) % 16, loc[1]}
+	// Output and UTXO addresses other than 20 bytes
+	// (core/state_processor.go:1999): kind "long-<case>-<length>".
+	if strings.HasPrefix(kind, "long-") {
+		cut := strings.LastIndex(kind, "-")
+		n, e := strconv.Atoi(kind[cut+1:])
+		must(e)
+		first := remoteP.BytePrefix()
+		switch kind[:cut] {
+		case "long-local":
+			out[0].Address = sized(addr(loc, 1, true), n, first, 0)
+		case "long-remote":
+			out[0].Address = sized(addr(remoteR, 1, true), n, loc.BytePrefix(), 128)
+		case "long-conversion":
+			data = append([]byte{0, 0}, addr(loc, 5, true)...)
+			out[0].Address = sized(addr(loc, 1, false), n, first, 128)
+		case "long-spend":
+			entry.Address = sized(owner.Bytes(), n, first, 0)
+		case "long-spend-first":
+			entry.Address = append(owner.Bytes(), make([]byte, n-20)...)
+		case "long-reuse":
+			entry.Address = sized(owner.Bytes(), n, first, 0)
+			out[0].Address = append([]byte{}, entry.Address[:20]...)
+		case "long-reuse-owner":
+			entry.Address = sized(owner.Bytes(), n, first, 0)
+			out[0].Address = owner.Bytes()
+		default:
+			panic("unknown long-address case " + kind)
+		}
+	}
 	switch kind {
 	case "local":
 	case "remote-region":
@@ -303,6 +353,10 @@ func run(kind string, loc common.Location, p uint64) map[string]interface{} {
 	}
 	fee, etxs, receipt, err, _ := core.ProcessQiTx(tx, chain{prime}, true, first, header, batch, db, gp, &used, signer, loc, *u(1337), factor, &r, &pbudget, delta, added, removed, false)
 	row["accepted"] = err == nil
+	if err == nil && strings.HasPrefix(kind, "long-") {
+		// The gas that prices the transaction in a block (Process).
+		row["block_qi_gas"] = types.CalculateBlockQiTxGas(tx, factor, loc)
+	}
 	var message interface{}
 	if err != nil {
 		message = err.Error()
@@ -375,5 +429,23 @@ func main() {
 		}
 	}
 	rows = append(rows, run("bounds-many", common.Location{0, 0}, 2444574))
+	// Long and short addresses on both sides of Polaris.
+	for _, loc := range []common.Location{{0, 0}, {1, 2}} {
+		for _, p := range []uint64{2444573, 2444574} {
+			for _, c := range []string{"local", "remote", "conversion"} {
+				for _, n := range []int{0, 19, 20, 21, 32, 64} {
+					rows = append(rows, run(fmt.Sprintf("long-%s-%d", c, n), loc, p))
+				}
+			}
+			for _, n := range []int{20, 21, 32, 64} {
+				rows = append(rows, run(fmt.Sprintf("long-spend-%d", n), loc, p))
+				rows = append(rows, run(fmt.Sprintf("long-reuse-owner-%d", n), loc, p))
+			}
+			for _, n := range []int{21, 32, 64} {
+				rows = append(rows, run(fmt.Sprintf("long-spend-first-%d", n), loc, p))
+				rows = append(rows, run(fmt.Sprintf("long-reuse-%d", n), loc, p))
+			}
+		}
+	}
 	must(json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"reference_revision": referenceRevision, "vectors": rows, "scope": "Actual ProcessQiTx with signature verification, real rawdb batch UTXO deltas and MuHash commitments. Rejected transactions roll back the block view; no full block admission or public network. The only normalized diagnostic bytes are process-local Go pointer values in the two ETX budget error messages; raw diagnostics remain in oracle stderr."}))
 }

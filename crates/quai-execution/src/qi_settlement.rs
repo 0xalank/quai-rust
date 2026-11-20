@@ -5,7 +5,7 @@ use crate::{
         word::{low_u64, Word},
     },
     gas,
-    qi::{self, OutPoint, Utxo, UtxoView, DENOMINATIONS},
+    qi::{self, OutPoint, Utxo, UtxoAddress, UtxoView, DENOMINATIONS},
     settlement::Error,
     utxo::UtxoState,
 };
@@ -136,7 +136,9 @@ pub fn apply_qi(
             .get(&p)
             .map_err(|e| Error::utxo(e, "Qi inputs"))?
             .ok_or(Error::Invalid("Qi inputs"))?;
-        addresses.insert(v.address);
+        // `common.AddressBytes(utxo.Address)`: the first 20 bytes of a
+        // longer address (the outputs below use the last 20).
+        addresses.insert(v.address.first20());
         *input_counts.entry(v.denomination).or_insert(0) += 1;
         removed.push(p);
     }
@@ -153,17 +155,18 @@ pub fn apply_qi(
     let mut used = intrinsic;
     let prefix = ctx.inputs.location[0] << 4 | ctx.inputs.location[1];
     for (index, output) in qi.outputs.iter().enumerate() {
-        if output.address.as_ref().is_some_and(|a| a.len() > 20) && ctx.prime_number < FORKS.polaris
-        {
-            return Err(Error::Unsupported(crate::evm::CapabilityError::Context(
-                "legacy long Qi output address",
-            )));
+        // core/state_processor.go:1999: fewer than 20 bytes fail always
+        // (they would panic the [20]byte gas conversion), more than 20 fail
+        // from Polaris on. Before Polaris a longer address keeps all its
+        // bytes in the UTXO and in its hash; the rules here use
+        // `common.BytesToAddress`, its last 20 bytes (the gas price of
+        // `CalculateBlockQiTxGas` uses the first 20).
+        let raw = output.address.as_deref().unwrap_or_default();
+        if raw.len() != 20 && ctx.prime_number >= FORKS.polaris {
+            return Err(Error::Invalid("Qi output address length"));
         }
-        let a: [u8; 20] = output
-            .address
-            .as_ref()
-            .and_then(|v| v.as_slice().try_into().ok())
-            .ok_or(Error::Invalid("Qi output address"))?;
+        let full = UtxoAddress::new(raw).ok_or(Error::Invalid("Qi output address length"))?;
+        let a = full.last20();
         let value = *DENOMINATIONS
             .get(output.denomination as usize)
             .ok_or(Error::Invalid("Qi output denomination"))?;
@@ -240,7 +243,7 @@ pub fn apply_qi(
         } else {
             let v = Utxo {
                 denomination: output.denomination,
-                address: a,
+                address: full,
                 lock: vec![],
             };
             created.push((

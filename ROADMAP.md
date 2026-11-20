@@ -165,7 +165,7 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        | KQuaiChange p 752,000 | kQuai table, holds, increase / 3 (exchange_controller.go:30-69; rewards.go:199) | controllers.rs:106, 149 | controllers, prime-transition (both) | equal (merged) |
        | KawPow p 1,171,500 | share fields, AuxPoW, PoW ids, share targets, KawPoW difficulty, entropy, payout slots, 20,000-block conversion hold (hc, hcv, poem.go, types/wo.go, sp:1168-1241, :2129, rewards.go:219-238, vm/evm.go:725, instructions.go:1118) | zone_header.rs, share_rules.rs, rules.rs, validation.rs, payouts.rs, economics.rs, etx.rs, qi_settlement.rs | work-headers, header, history, consensus, payouts, stateful, qi-settlement, settlement (both) | equal |
        | KawPow grace end p 1,301,100 | ProgPoW still valid at it (hc:727; progpow.go:525); its hash is blake3 of the empty AuxPow (types/wo.go:1451, 1474) | header.rs `block_hash` | work-headers (both, new) | fixed `ce6f8e9` |
-       | KawPow | AuxPow without donor header or transaction dropped on decode (types/wo.go:1652) | header.rs:102 keeps a header-only AuxPow, rejects one without header | none | gap: peer data only; the history corpus has header-only AuxPows that Go would drop |
+       | KawPow | AuxPow without donor header or transaction dropped on decode, before any other check (types/wo.go:1652) | header.rs `decode_auxiliary` drops it, as Go | work-headers `aux_shapes` (new: 15 shapes at prime 1,171,499, 1,171,500, 1,301,099, 1,301,100 and 2,000,000; 28 failed the old decode); history regenerated with coinbase transactions in the oracle's `ha()` | fixed (`phase1-gaps`) |
        | InclusionDepthChange p 1,330,000 | depth 3 → 4, target ramp, reward depth, payout discount (hcv:259; hc:359-380, 1277; sp:1119, 1263) | validation.rs:497; share_rules.rs:136; history.rs:307; payouts.rs | history, payouts (both) | equal |
        | BlocksPerYear z 6,307,200 | kQuai authority (state_transition.go:391), lockup multiple (protocol_params.go:389), rate override (slice.go:607, 1999) | settlement.rs:209; economic_state.rs; prime_forward.rs:106 (CB) | authority, incoming `*-zone-*` (new), prime-forward (both) | equal |
        | Singularity p 1,530,500 | uncles 16 → 32, SHA/scrypt shares 8 → 16 (hcv:241, 363-380); forfeiture (state/gen_allocs.go:23) | validation.rs:317, 474, 559; historical.rs:68 | history (before only; share limits none), historical (both) | equal (limits by reading) |
@@ -178,7 +178,7 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        | SecurityHardening | opETX rules, lockup restore, incoming ETX gas, Qi ETX denomination (instructions.go:904, 984-1029; vm/evm.go:232; state_transition.go:240-360; sp:927) | etx.rs; journal.rs:215; settlement.rs:405; incoming.rs:393 | stateful, incoming (pre-fork ETX gas new) (both) | equal |
        | SecurityHardening | CreateETX intrinsic check (vm/evm.go:752) | etx.rs:94 | none: one zone has no eligible ETX destination | equal by reading |
        | Polaris p 2,444,574 | PoW identity dedupe (hcv:254), suicide transaction (state_transition.go:468), founder forfeiture (gen_allocs.go:27) | validation.rs:500; settlement.rs:255; historical.rs:68 | polaris, settlement, historical (both) | equal |
-       | Polaris | Qi output address must be 20 bytes; before it longer ones pass (sp:1999) | qi_settlement.rs:156 stops `Unsupported` | none | gap: needs a variable-length UTXO address (Go keeps all bytes in the UTXO and its hash, crops ETX recipients to the last 20, gas to the first 20) |
+       | Polaris | Qi output address must be 20 bytes; before it longer ones pass, fewer than 20 never (sp:1999) | qi.rs `UtxoAddress` (all bytes; the last 20 where Go uses `BytesToAddress`, the first 20 where it uses `AddressBytes`); qi_settlement.rs; gas.rs `block_qi_gas`; state store, images, block store and RPC | qi-settlement `long-*` (new: lengths 0, 19, 20, 21, 32 and 64; creation, ETX, conversion, spending, reuse, block gas; both) | fixed (`phase1-gaps`) |
        Found by the RPC call work (branch `rpc-calls`, Go probes), fixed
        on branch `exec-findings` with a new Go oracle
        (`reference/precompiles`, `scripts/gen_precompile_vectors.py`,
@@ -257,8 +257,8 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        go-quai panics (division by zero, zero log, discount above 100,000)
        Rust stops with `Unsupported`. A stateless checkpoint of an older
        binary has no region rollups and cannot resume past the next prime
-       block; checkpoints with state resume. Open: legacy long Qi output
-       addresses before Polaris stop explicitly; `trie::MAX_LIST_ITEMS` (65,536 items / 64 MiB), the ETX
+       block; checkpoints with state resume. Long Qi output addresses
+       before Polaris: ported (step 4 table). Open: `trie::MAX_LIST_ITEMS` (65,536 items / 64 MiB), the ETX
        auxiliary entry bounds and the auxiliary.rs field caps are still
        Rust-only; the region inbound path assumes one slice (correct for
        expansion 0).
@@ -391,6 +391,34 @@ divergence from Go.
        end a ten-block batch (a bootstrap stalled 8 heights short); a peer
        could become two sources; share views were decoded as full work
        objects and refused.
+       Fixed (branch `phase1-gaps`, `36eaf17`): the sync by number asked
+       peers for batches past their head. go-quai answers WorkObjectBlocks
+       only with all ten blocks (p2p/node/api.go `GetWorkObjectsFrom`); the
+       first shadow run stopped at zone 11,212,903 because prime batch
+       2,480,940..=2,480,949 ended past the peers' prime head, and the
+       source compared a prime batch with the zone fetch limit. Each peer
+       now reports its prime, region and zone heads; a batch goes only to a
+       peer whose head covers its last block; a "missing" answer for a prime
+       or region batch within 10 blocks of the best head waits, with no
+       attempt and no strike; `run` hands off to gossip at the first height
+       that needs a batch past the heads, before the last partial batch, and
+       only without `--to`. Tests: simulated peers that answer as go-quai
+       does; the exact case fails the old logic with the shadow run's error.
+       Live, binary `36eaf17` (sha256 `0bed0aaf…`), `run --stateless
+       --shadow-bootstrap auto --no-store` in a fresh test directory, metrics
+       on another port, 38 min 25 s on public peers: T at zone 11,214,745,
+       1,000 below the best peer head, canonical for 8 of 8 peers; 17,982
+       heights adopted in 47 s; 944 heights by number, then the hand-off
+       before zone batch 11,215,690 (past the best head 11,215,753 less 64)
+       and gossip from 11,215,689 to the peers' head 11,216,237: 1,492
+       heights above T; the processor counted 1,550 blocks with every
+       stateless check, reorgs included; 0 failures, 0 rejected blocks;
+       755 blocks offered, 661 accepted, 93 ancestors fetched; 58 reorgs,
+       all of depth 1; workshares 5,792 valid, 23 valid without the parent
+       rules, 0 rejected; 0 divergences of any kind, 0 unavailable checks,
+       the canonical block 5 below the head equal to the peers' 70 of 70
+       times; 19 peer faults, retried; CPU 176 s, RSS median 166 MB, max
+       330 MB (60 s samples).
        Left: a stateful run at the head needs state near the head: peers
        serve no state (go-quai `GetTrieNode` is "todo"), and the rolling
        replay is at zone 1.45M of 11.2M.
@@ -1022,3 +1050,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-19 | Phase 3.1 | rpc-complete merged (`d59b30c`): 55 native methods; filters and WebSocket subscriptions 311/311 Go oracle steps, Qi and conversion handlers 385/385; Quais.js alpha.57 and alpha.58 (Pelagus) run against the node with no error; `quai_getLockedBalance` answers `0x0` as go-quai without its address index. The tested commit `d86ecf0` has the same Rust code (477/477 in 77 suites). Next agent: `phase1-gaps` (batches past the peers' head, long Qi addresses before Polaris, partial AuxPow decode). The genesis replay is paused at zone 100,000 to give the main replay the CPU |
 | 2026-11-19 | Phase 1, 2.4 | The rolling replay (`f5e0c58`) and the shadow run both stopped at their disk floors near 18:10Z: the replay after a clean checkpoint at zone 3,480,000, every root equal; the shadow run after 1,702 heights, level with the peers' head (11,214,438), no failure. `past.redb` holds 7.4 GB of the 7.6 GB replay data at zone 3.48M (about 2.1 KB per height; its 1-year window tops out near 13–14 GB). Both restarted at 19:52Z after the coordinator's build cache was deleted (35 GiB free) |
 | 2026-11-19 | Phase 1, 2.4 | Rolling replay (`f5e0c58`) passed MaxCodeSize at zone 3,490,000 (code size 32,768, new opcodes) and stopped at the disk floor after a clean checkpoint at zone 3,560,000, every root equal (25.9 blocks/s). Other sessions on this disk use space fast (one holds 9 GB of temp files), so with the user's approval the replay floor is now 20 GiB and the shadow run's 18 GiB. The paused `f5e0c58` genesis run was dropped: the next single-binary genesis run uses the binary after `phase1-gaps`. Shadow run so far: 2,653 heights in its last segment, level with the peers, 0 divergences of any kind |
+| 2026-11-19 | Phase 1.4, 1.6, 2.3 | Branch `phase1-gaps` (`36eaf17`, `3150f27`, `989ca34`, `2902280`, `570a63f`, and the commit of this row). (1) The sync by number clips batches at the peers' prime, region and zone heads; a "missing" prime or region batch near the head waits instead of failing; `run` hands off to gossip before the last partial batch and only without `--to`. Simulated go-quai peers: 5/5 peer-source tests; the exact case (zone 11,212,903, prime batch 2,480,940) fails the old logic with the first shadow run's error. Live, `run --stateless --shadow-bootstrap auto --no-store`, 38 min 25 s: T 11,214,745 (8 of 8 peers), 944 heights by number, hand-off before zone batch 11,215,690, gossip to the peers' head 11,216,237; 1,550 blocks with every stateless check, 0 failures, 0 rejected, 58 reorgs of depth 1, 5,792 workshares valid and 0 rejected, 0 divergences, 70/70 head comparisons. (2) Long Qi output addresses before Polaris as go-quai: every byte in the UTXO and its hash, the last 20 for `BytesToAddress` rules (owner, location, ledger, reuse, ETX recipient, conversion, `quai_getUTXO`), the first 20 for `AddressBytes` rules (input reuse set, `CalculateBlockQiTxGas`, address index, spent keys); 20-byte stored records byte for byte as before. Go oracle `reference/qi-settlement`: 757 old vectors reproduced exactly, 128 new (lengths 0, 19, 20, 21, 32, 64; creation, ETX, conversion, spending, reuse, block gas; both sides of Polaris); Rust 885/885, also through the persistent store. Resume of the rolling replay's mainnet checkpoint 3,560,000 (written by `quai-node-f5e0c58`, main) by the new binary to 3,565,000: replay PASS, every root equal; `quai-node-f5e0c58` resumed the new binary's checkpoint 3,565,000 to 3,566,000: PASS. (3) An AuxPow without donor header or coinbase transaction is dropped on decode as go-quai does; the history oracle's donor proofs got coinbase transactions first (old generator reproduced history.json exactly; in the new corpus only AuxPow-carrying encodings changed, every expected value equal; Rust history 7/7 before and after the fix). 75 new work-header vectors (15 shapes, prime 1,171,499 to 2,000,000): 28 failed the old decode, 75/75 now. `cargo test --release --locked --workspace --no-fail-fast` on `570a63f`: 77 suites, 482 passed, 0 failed, 0 ignored (2 h 46 min at host load up to 440, builds paused below 27 GiB free); fmt clean; clippy (`--release`, quai-primitives, quai-execution, quai-consensus, quai-node, quai-rpc): no errors, no warning on a changed line. Replay of the Go export 0-27,406 with `--state` from genesis in a fresh datadir with the final binary (`570a63f`, sha256 `34ecbc21…`): replay PASS, 27,406 zone blocks executed with all state roots equal (5,760 s with pauses, 858 CPU s, peak RSS 207 MiB, host load up to 440). During this work the rolling replay's disk guard stopped it at 20:43Z (23 GiB free, clean checkpoint 3,560,000); it ran again from 21:26Z. My builds and runs paused below 27 GiB free; the resume test cloned the rolling replay's files (APFS copy-on-write) into a test directory, which was deleted with the other test data |

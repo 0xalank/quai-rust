@@ -23,11 +23,16 @@
 //! - `txs`: transaction hash -> number, index (the newest block wins, as in
 //!   go-quai's `WriteTxLookupEntries`);
 //! - `created`: number -> the UTXOs the block created (outpoint,
-//!   denomination, address, lock);
+//!   denomination and address as `qi::encode_denomination_address` writes
+//!   them, lock);
 //! - `spent`: number -> the address-index entries the block removed;
 //! - `address`: address || outpoint -> (), the unspent outputs by address;
 //! - `outpoint`: outpoint -> address, for removals.
-use quai_execution::qi::OutPoint;
+//!
+//! The index address of an output is the first 20 bytes of its address, as
+//! go-quai's index keys it (`common.AddressBytes(utxo.Address)`); only a Qi
+//! transaction before Polaris could create an address longer than 20 bytes.
+use quai_execution::qi::{OutPoint, UtxoAddress};
 use quai_primitives::{transaction::Address, Hash};
 use redb::{
     Database, Durability, ReadTransaction, ReadableDatabase, ReadableTable, TableDefinition,
@@ -63,7 +68,8 @@ pub fn path(checkpoint_dir: &Path) -> PathBuf {
 pub struct Created {
     pub point: OutPoint,
     pub denomination: u8,
-    pub address: Address,
+    /// Every byte of the address; the index uses its first 20.
+    pub address: UtxoAddress,
     /// Big-endian lock height as the UTXO holds it.
     pub lock: Vec<u8>,
 }
@@ -208,8 +214,7 @@ fn encode_created(list: &[Created]) -> Vec<u8> {
     let mut out = (list.len() as u32).to_be_bytes().to_vec();
     for c in list {
         out.extend(outpoint_key(&c.point));
-        out.push(c.denomination);
-        out.extend(c.address);
+        quai_execution::qi::encode_denomination_address(c.denomination, &c.address, &mut out);
         out.push(c.lock.len() as u8);
         out.extend(&c.lock);
     }
@@ -221,8 +226,9 @@ fn decode_created(raw: &[u8]) -> io::Result<Vec<Created>> {
     let mut out = Vec::with_capacity(n.min(1 << 16));
     for _ in 0..n {
         let point = outpoint_of(r.take(34)?)?;
-        let denomination = r.u8()?;
-        let address: Address = r.take(20)?.try_into().map_err(bad)?;
+        let (denomination, address, rest) =
+            quai_execution::qi::decode_denomination_address(r.b).map_err(bad)?;
+        r.b = rest;
         let len = r.u8()? as usize;
         let lock = r.take(len)?.to_vec();
         out.push(Created {
@@ -451,10 +457,13 @@ impl BlockStore {
                 }
             }
             for c in &u.created {
-                addr.insert(address_key(&c.address, &c.point).as_slice(), ())
+                addr.insert(address_key(&c.address.first20(), &c.point).as_slice(), ())
                     .map_err(store_err)?;
-                outs.insert(outpoint_key(&c.point).as_slice(), c.address.as_slice())
-                    .map_err(store_err)?;
+                outs.insert(
+                    outpoint_key(&c.point).as_slice(),
+                    c.address.first20().as_slice(),
+                )
+                .map_err(store_err)?;
             }
             w.open_table(CREATED)
                 .map_err(store_err)?
@@ -517,7 +526,7 @@ impl BlockStore {
                     .map(|v| v.value().to_vec())
                 {
                     for c in decode_created(&raw)? {
-                        addr.remove(address_key(&c.address, &c.point).as_slice())
+                        addr.remove(address_key(&c.address.first20(), &c.point).as_slice())
                             .map_err(store_err)?;
                         outs.remove(outpoint_key(&c.point).as_slice())
                             .map_err(store_err)?;
@@ -573,10 +582,13 @@ impl BlockStore {
             let mut addr = w.open_table(ADDR).map_err(store_err)?;
             let mut outs = w.open_table(OUTS).map_err(store_err)?;
             for c in list {
-                addr.insert(address_key(&c.address, &c.point).as_slice(), ())
+                addr.insert(address_key(&c.address.first20(), &c.point).as_slice(), ())
                     .map_err(store_err)?;
-                outs.insert(outpoint_key(&c.point).as_slice(), c.address.as_slice())
-                    .map_err(store_err)?;
+                outs.insert(
+                    outpoint_key(&c.point).as_slice(),
+                    c.address.first20().as_slice(),
+                )
+                .map_err(store_err)?;
             }
         }
         w.commit().map_err(store_err)
@@ -757,9 +769,69 @@ mod tests {
         Created {
             point: point(i),
             denomination: 3,
-            address: [owner; 20],
+            address: [owner; 20].into(),
             lock: vec![],
         }
+    }
+    /// A 20-byte address keeps the record of the stores written before
+    /// longer addresses, byte for byte; a longer one round-trips, and the
+    /// index keys it by its first 20 bytes, as go-quai's index does.
+    #[test]
+    fn created_records_keep_their_layout_and_long_addresses() {
+        let mut c = created(1, 7);
+        c.lock = vec![1, 2];
+        let mut old = 1u32.to_be_bytes().to_vec();
+        old.extend(outpoint_key(&c.point));
+        old.push(3);
+        old.extend([7; 20]);
+        old.extend([2, 1, 2]);
+        assert_eq!(encode_created(std::slice::from_ref(&c)), old);
+        assert_eq!(decode_created(&old).unwrap(), vec![c]);
+        let mut long = [7u8; 32];
+        long[20..].copy_from_slice(&[9; 12]);
+        let l = Created {
+            point: point(2),
+            denomination: 14,
+            address: UtxoAddress::new(&long).unwrap(),
+            lock: vec![],
+        };
+        let raw = encode_created(std::slice::from_ref(&l));
+        assert_eq!(raw[4 + 34], 14 | 0x80);
+        assert_eq!(decode_created(&raw).unwrap(), vec![l.clone()]);
+        let path = tmp("long");
+        let mut s = BlockStore::open(&path, true).unwrap();
+        let b0 = block(0, [0; 32], vec![], None);
+        s.stage(b0.clone()).unwrap();
+        let b1 = block(
+            1,
+            b0.hash,
+            vec![[9; 32]],
+            Some(UtxoChanges {
+                created: vec![l.clone()],
+                removed: vec![],
+            }),
+        );
+        s.stage(b1.clone()).unwrap();
+        let b2 = block(
+            2,
+            b1.hash,
+            vec![],
+            Some(UtxoChanges {
+                created: vec![],
+                removed: vec![point(2)],
+            }),
+        );
+        s.stage(b2).unwrap();
+        s.flush(true).unwrap();
+        let r = s.reader().unwrap();
+        assert_eq!(r.created(1).unwrap(), Some(vec![l.clone()]));
+        assert!(r.outpoints(&[7; 20]).unwrap().is_empty());
+        assert_eq!(r.spent(2).unwrap(), Some(vec![(point(2), [7; 20])]));
+        drop(r);
+        s.rollback_to(1).unwrap();
+        let r = s.reader().unwrap();
+        assert_eq!(r.outpoints(&[7; 20]).unwrap(), vec![point(2)]);
+        assert!(r.outpoints(&l.address.last20()).unwrap().is_empty());
     }
     #[test]
     fn indexes_follow_appends_and_rollbacks() {

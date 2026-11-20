@@ -60,6 +60,40 @@ pub fn intrinsic_qi_gas(transaction: &Transaction, scaling_factor: f64) -> Resul
     }
     Ok(scaled as u64 / 15)
 }
+/// go-quai `types.CalculateBlockQiTxGas`, the gas that prices a Qi
+/// transaction in a block (its fee in Quai divided by this gas): the
+/// intrinsic gas plus `ETXGas` (21,000) for each output that leaves the zone
+/// or converts to Quai. Go judges both by `common.AddressBytes(output.Address)`,
+/// the first 20 bytes of the address (ProcessQiTx judges by the last 20, so
+/// the two differ for a longer address before Polaris). A shorter address
+/// panics Go's conversion; ProcessQiTx refuses it before a block prices the
+/// transaction.
+pub fn block_qi_gas(
+    transaction: &Transaction,
+    scaling_factor: f64,
+    location: [u8; 2],
+) -> Result<u64, String> {
+    let Kind::Qi(tx) = transaction.kind() else {
+        return Err("not a Qi transaction".into());
+    };
+    let scaling = if scaling_factor < 15.0 {
+        0.0
+    } else {
+        scaling_factor
+    };
+    let mut total = intrinsic_qi_gas(transaction, scaling)?;
+    let prefix = location[0] << 4 | location[1];
+    for output in &tx.outputs {
+        let address = output.address.as_deref().unwrap_or_default();
+        if address.len() < 20 {
+            return Err("Qi output address shorter than 20 bytes".into());
+        }
+        if address[0] != prefix || address[1] & 128 == 0 {
+            total = total.checked_add(21000).ok_or("Qi block gas overflow")?;
+        }
+    }
+    Ok(total)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -429,6 +429,9 @@ pub struct Stats {
     pub provided: Vec<String>,
     pub provider_walks: u64,
     pub provider_dials: u64,
+    /// Dials through a relay to peers that a Kademlia walk met with only
+    /// circuit addresses.
+    pub circuit_dials: u64,
     /// Topic label ("zone/blocks") to counts.
     pub gossip: BTreeMap<String, GossipCounts>,
     /// Verdict reasons ("reject: ...") to counts.
@@ -563,6 +566,27 @@ fn kad_progress(
         failures: stats.num_failures(),
         error,
     })
+}
+
+/// A dial that the circuit gate refused: every address it tried was a
+/// circuit to a peer the node had not chosen (a contact that a Kademlia
+/// walk met behind NAT). The circuit addresses, else None.
+fn refused_circuits(
+    peer: Option<PeerId>,
+    error: &libp2p::swarm::DialError,
+    allowed: &HashSet<PeerId>,
+) -> Option<(PeerId, Vec<Multiaddr>)> {
+    let peer = peer?;
+    let libp2p::swarm::DialError::Transport(tried) = error else {
+        return None;
+    };
+    let addresses: Vec<Multiaddr> = tried.iter().map(|(a, _)| a.clone()).collect();
+    let refused = !addresses.is_empty()
+        && !allowed.contains(&peer)
+        && addresses
+            .iter()
+            .all(|a| address::circuit_target(a) == Some(peer));
+    refused.then_some((peer, addresses))
 }
 
 /// State the API and the driver share.
@@ -1949,6 +1973,10 @@ impl Driver {
                 }
             }
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                let refused = refused_circuits(peer_id, &error, &lock(&self.circuits));
+                if let Some(contact) = refused {
+                    self.dial_circuits(vec![contact]);
+                }
                 let error = chain(&error);
                 *self
                     .stats
@@ -2119,6 +2147,45 @@ impl Driver {
         }
         if let Some(progress) = kad_progress(query, key, result, &stats, last) {
             self.emit(Event::Kad(progress));
+        }
+    }
+    /// Dial, through their relays, peers that a Kademlia walk met with only
+    /// circuit addresses (peers behind NAT; the walk's own dial was refused
+    /// by the circuit gate), while peer slots are free.
+    /// go-quai's go-libp2p hosts dial such peers through the relay and then
+    /// try DCUtR; here too a peer takes a slot only once a direct connection
+    /// exists. Without a relay client the node cannot dial circuits.
+    fn dial_circuits(&mut self, met: Vec<(PeerId, Vec<Multiaddr>)>) {
+        if !self.config.reachability || met.is_empty() {
+            return;
+        }
+        let pending = self
+            .swarm
+            .network_info()
+            .connection_counters()
+            .num_pending_outgoing() as usize;
+        let free = self
+            .config
+            .max_peers
+            .saturating_sub(self.slots_used() + pending);
+        let local = *self.swarm.local_peer_id();
+        let now = Instant::now();
+        let chosen: Vec<(PeerId, Vec<Multiaddr>)> = met
+            .into_iter()
+            .filter(|(p, _)| {
+                *p != local && !self.is_connected(p) && !lock(&self.shared.book).is_banned(p, now)
+            })
+            .take(free)
+            .collect();
+        for (peer, addresses) in chosen {
+            lock(&self.circuits).insert(peer);
+            let opts = DialOpts::peer_id(peer)
+                .condition(PeerCondition::DisconnectedAndNotDialing)
+                .addresses(addresses)
+                .build();
+            if self.swarm.dial(opts).is_ok() {
+                self.stats.circuit_dials += 1;
+            }
         }
     }
     /// Dial providers while the query still holds their addresses; the dial

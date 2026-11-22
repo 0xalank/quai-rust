@@ -705,3 +705,85 @@ fn a_connection_that_stops_answering_pings_is_closed() {
     rt.shutdown_background();
     silent_rt.shutdown_background();
 }
+
+/// A Kademlia server on loopback that knows `contacts` (go-quai's DHT
+/// protocol, server mode).
+async fn kad_server(contacts: Vec<(PeerId, Multiaddr)>) -> (PeerId, Multiaddr) {
+    let mut swarm = libp2p::SwarmBuilder::with_new_identity()
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default(),
+            noise::Config::new,
+            yamux::Config::default,
+        )
+        .unwrap()
+        .with_behaviour(|key| {
+            let local = key.public().to_peer_id();
+            let cfg = kad::Config::new(StreamProtocol::new(KAD_PROTOCOL));
+            kad::Behaviour::with_config(local, kad::store::MemoryStore::new(local), cfg)
+        })
+        .unwrap()
+        .build();
+    swarm.behaviour_mut().set_mode(Some(kad::Mode::Server));
+    for (peer, address) in contacts {
+        swarm.behaviour_mut().add_address(&peer, address);
+    }
+    swarm
+        .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .unwrap();
+    let address = loop {
+        if let SwarmEvent::NewListenAddr { address, .. } = swarm.select_next_some().await {
+            break address;
+        }
+    };
+    swarm.add_external_address(address.clone());
+    let id = *swarm.local_peer_id();
+    tokio::spawn(async move {
+        loop {
+            swarm.select_next_some().await;
+        }
+    });
+    (id, address)
+}
+
+/// A peer behind NAT, which a Kademlia walk meets with only a circuit
+/// address, is dialed through its relay while slots are free (go-libp2p
+/// dials such peers). The walk's own dial is refused by the circuit gate.
+#[tokio::test]
+async fn a_kademlia_contact_with_only_a_circuit_address_is_dialed_through_its_relay() {
+    let (relay, relay_address) = relay_server().await;
+    // The NATed peer: no TCP listener, a reservation on the relay.
+    let mut config = Config::read_only(DialPolicy::Loopback);
+    config.serve = true;
+    config.genesis_check = true;
+    config.reachability = true;
+    config.relays = vec![relay_address.clone()];
+    config.relay_after = Duration::ZERO;
+    let natted = PublicNode::launch(config, identity::Keypair::generate_ed25519()).unwrap();
+    let reserved = wait(&natted, 20, |e| match e {
+        Event::Reservation { relay: r, result } if r == relay => Some(result),
+        _ => None,
+    })
+    .await
+    .unwrap();
+    assert_eq!(reserved, Ok(()));
+    let circuit = relay_address
+        .with(Protocol::P2pCircuit)
+        .with_p2p(natted.id)
+        .unwrap();
+    // A DHT server that knows only the circuit address.
+    let (server, server_address) = kad_server(vec![(natted.id, circuit.clone())]).await;
+    let mut config = Config::read_only(DialPolicy::Loopback);
+    config.reachability = true;
+    let node = PublicNode::launch(config, identity::Keypair::generate_ed25519()).unwrap();
+    node.kad_add(server, server_address).await.unwrap();
+    node.closest_peers(natted.id.to_bytes()).await.unwrap();
+    let address = wait(&node, 30, |e| match e {
+        Event::Connected { peer, address } if peer == natted.id => Some(address),
+        _ => None,
+    })
+    .await
+    .unwrap();
+    assert!(address::is_circuit(&address), "{address}");
+    assert_eq!(node.stats().await.unwrap().circuit_dials, 1);
+}

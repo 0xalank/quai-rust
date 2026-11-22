@@ -47,7 +47,7 @@ by the coordinator.
 | G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; tip mode: a state version per canonical block, reorgs across commits and a compaction and crashes in a reorg tested on the private fixture |
 | G6–G7 | P2P and sync | Mainnet sync by height from public peers; stateless head-follow live with every check and go-quai's head choice |
 | G8 | Mainnet shadow sync | Shadow run (test tool) and divergence detector; 2 h 20 min live, 0 divergences; the 2-week run not started |
-| G9 | Live RPC, tx pool, wallets | Reads on replayed state; tx pool equal to Go (363/363 oracle steps); filters and WebSocket subscriptions (311/311 oracle steps) and the Qi and conversion methods (385/385 oracle calls) equal to Go; Quais.js alpha.57 and alpha.58 run against the node; a submitted transaction reaches miners only through sharing clients |
+| G9 | Live RPC, tx pool, wallets | Reads on replayed state; every read method and subscription that a default go-quai zone node serves (`docs/rpc-parity.md`: 123 of 123 class (a) names, `eth_` included); tx pool equal to Go (363/363 oracle steps); filters and WebSocket subscriptions (358/358 oracle steps), the Qi and conversion methods (385/385 oracle calls), the calls (602/602) and the other reads (349/349, and 6/6 work-object JSON) equal to Go; Quais.js alpha.57 and alpha.58 run against the node; a submitted transaction reaches miners only through sharing clients |
 | G10–G11 | Production tests, mining | Not started |
 
 `NETWORK_READINESS.md` keeps the detailed gate definitions.
@@ -616,13 +616,9 @@ Gate: Quais.js and Pelagus work against the Rust node.
        order (equal as JSON). A WebSocket syntax error answers "parse error"
        (Go: its JSON decoder's text); both then close. `quai_getFilterLogs`
        and `quai_getLogs` return logs in block order (Go: in the order its 8
-       goroutines finish). Not served: the subscriptions "newHeadsV2",
-       "newChainBlocks(V2)", "newWorkshares(V2)", "accesses",
-       "pendingHeader" and "blockTemplateUpdates" (they need appended-block,
-       gossip-workshare and unlock events from the processor, or a miner),
-       the `eth_` namespace, `quai_getPendingHeader` (a miner),
-       `txpool_getRollingFeeInfo` (the processor's per-block fee figures),
-       `quai_getProof`, `quai_clientVersion` and `web3_clientVersion`.
+       goroutines finish). The other gaps of this step are closed below
+       (parity with a default zone node); the mining methods
+       (`quai_getPendingHeader` and the rest of class (b)) are not served.
        `quai_getLockedBalance` of a Quai address answers 0x0, as go-quai
        does without `--node.index-address-utxos` (its default; the local
        node ran so). Pelagus reads it with each Quai
@@ -634,6 +630,74 @@ Gate: Quais.js and Pelagus work against the Rust node.
        a block that a reorg removed, or created below the store's base, are
        unavailable. `quai_estimateFeeForQi` needs state (the head's UTXO set
        size).
+       Parity with a default go-quai zone node (branch `rpc-parity`):
+       `docs/rpc-parity.md` lists every method and subscription that
+       go-quai v0.57.0 registers for a zone node, with its Go function and
+       file:line, whether a node with default flags serves it over HTTP and
+       over WebSocket, the Rust status and its class (Go oracle
+       `reference/rpc-inventory`, `scripts/gen_rpc_inventory.py`: the
+       rpc.API literals of quaiapi.GetAPIs and Quai.APIs, makeConfigNode's
+       configuration and the production node.Node, probed without running
+       a handler; `scripts/render_rpc_parity.py` writes the table and
+       `compatibility/rpc-parity.json`, which a quai-rpc unit test checks
+       against the served names). 175 names (153 methods, 22
+       subscriptions in `quai` and `eth`): class (a) 123, (b) 37, (c) 15,
+       none of (d) (go-quai registers no signer method). A default node
+       serves 85 over HTTP and 160 over WebSocket: `--rpc.ws-api` is empty
+       by default, so every public API, `eth_*`, `txpool_*`, `workshare_*`
+       and the public `debug_*` included, is served over WebSocket only;
+       `web3_clientVersion`, `eth_sendTransaction` and the signer methods
+       are not registered by any go-quai node (Quais.js alpha.57 and
+       alpha.58 call no `eth_` method).
+       Ported: the 67 class (a) names that a default node served and the
+       Rust node did not; 113 native method names and 7 subscription kinds
+       in each of `quai` and `eth` now. `quai_`: `clientVersion`,
+       `getRawTransactionByBlockNumberAndIndex` and `...HashAndIndex`,
+       `getBlockOrCandidateByHash`, `baseFee`, `getLatestUTXOSetSize`,
+       `suggestFinalityDepth` (Go's `int64` conversions and Euclidean
+       division), `hashesPerQits`, `getSupplyAnalyticsForBlock` and
+       `rewardAnalytics` (a default node has no supply index: zeros less
+       the burn balance, and "0"), `getKQuaiAndUpdateBit`,
+       `getContractSize`, `getLockupsForContractAndMiner`, `getProof`
+       (go-ethereum `Trie.Prove` over the account and storage tries:
+       `mpt::Trie::prove`, `World::proof`); `net_peerCount`,
+       `net_peerCountByDirection`, `rpc_modules`,
+       `txpool_getRollingFeeInfo`; the `eth_` namespace: the 20 names that
+       run a `quai_` method's Go function, and `PublicBlockChainAPI`'s own
+       18 (`RPCMarshalETHHeader` and `RPCMarshalETHBlock`, the legacy
+       256-byte receipt bloom, `common.AddressBytes` balances that sum Qi
+       outputs in any zone, `eth_estimateGas` without the conversion and
+       Qi branches, `eth_createAccessList` at "pending" by default); one
+       filter API per namespace, as in go-quai (an `eth_` filter is not a
+       `quai_` one; any `*_unsubscribe` cancels); the subscriptions
+       "newHeadsV2", "newChainBlocks", "newChainBlocksV2" and "accesses"
+       (`RPCMarshalWorkObject("v2")`, appended-block and unlock events).
+       Go oracles, each generator first rechecked unchanged: new
+       `reference/rpc-parity` (production handlers in GetAPIs order over a
+       chain with receipts, a side branch, one committed state, a prime
+       terminus, UTXO set sizes, the address index and coinbase lockup
+       records; 353 calls in 2 scenarios, and the v1 and v2 JSON of a
+       KawPow block with an AuxPow and of two earlier blocks): 349/349
+       equal, 4 identity answers (`*_clientVersion`), 6/6 work objects;
+       `reference/rpc-calls` scenario "eth": 602/602 (198 new);
+       `reference/filters` with both namespaces and scenario "events"
+       (appended blocks, unlocks, the eth filter API): 358/358 steps,
+       three runs byte-identical. Remaining differences
+       (`docs/rpc-parity.md`): the Rust node serves `eth_*` and `txpool_*`
+       over HTTP as well; `*_clientVersion` names the Rust node and
+       `rpc_modules` lists its namespaces; `quai-node run` does not yet
+       publish appended blocks, unlocks, its rolling fee window or its peer
+       counts, so "newChainBlocks(V2)" and "accesses" by unlock never fire
+       there, `txpool_getRollingFeeInfo` answers go-quai's "no transactions
+       processed" error and `net_peerCount` 0x0; "accesses" always matches
+       a Quai sender (go-quai only when the sender is cached, as in a block
+       it processed). `quai_getLockedBalance` real values: go-quai serves
+       them only with `--node.index-address-utxos`, so the default answer
+       (0x0) stays. Mining phase (class b) needs: the list at the end of
+       `docs/rpc-parity.md`. The shared go-quai checkout moved to v0.57.1
+       on 2026-11-19 at 21:37; the oracles run from a pinned clone
+       (`git clone --shared`, 33db82f2, under the worktree's `target/`),
+       and every fixture reproduces from it.
 2. [x] Tx pool and `sendRawTransaction` (`txpool` branch: `1be8b61`,
        `da7fc2a`, `6e32bff`, `65effe2`, `f83d499`, `d6e1b0d`, `0f9ddd5` and
        the commit of this text). `crates/quai-node/src/txpool` ports go-quai

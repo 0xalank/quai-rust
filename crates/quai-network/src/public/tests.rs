@@ -623,3 +623,85 @@ async fn relay_reservation_makes_a_node_reachable_through_a_circuit() {
         .any(|a| a.contains("p2p-circuit")));
     assert_eq!(dialer.stats().await.unwrap().circuits_out, 1);
 }
+
+/// A peer that stops answering (a sleep or a network change: no reset
+/// reaches this node, and the socket stays open) loses its connection after
+/// one ping time-out, and the peer lists and counts follow.
+#[test]
+fn a_connection_that_stops_answering_pings_is_closed() {
+    let quick = |mut config: Config| {
+        config.ping_interval = Duration::from_millis(500);
+        config.ping_timeout = Duration::from_secs(2);
+        config
+    };
+    // The silent peer runs on a runtime of one worker, which the test then
+    // blocks: its TCP socket stays open, but nothing answers.
+    let silent_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let mut config = quick(Config::read_only(DialPolicy::Loopback));
+    config.listen = vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()];
+    let silent = {
+        let _guard = silent_rt.enter();
+        PublicNode::launch(config, identity::Keypair::generate_ed25519()).unwrap()
+    };
+    let listen = silent_rt
+        .block_on(wait(&silent, 10, |e| match e {
+            Event::ListenAddr(a) => Some(a),
+            _ => None,
+        }))
+        .unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let node = {
+        let _guard = rt.enter();
+        PublicNode::launch(
+            quick(Config::read_only(DialPolicy::Loopback)),
+            identity::Keypair::generate_ed25519(),
+        )
+        .unwrap()
+    };
+    rt.block_on(async {
+        node.dial(listen.with_p2p(silent.id).unwrap())
+            .await
+            .unwrap();
+        wait(&node, 10, |e| match e {
+            Event::Connected { peer, .. } if peer == silent.id => Some(()),
+            _ => None,
+        })
+        .await
+        .unwrap();
+        // Pings pass while the peer answers.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert_eq!(node.connected_peers(), vec![silent.id]);
+        assert_eq!(node.peer_counts(), (1, 0, 1));
+    });
+    silent_rt.spawn(async { std::thread::sleep(Duration::from_secs(30)) });
+    rt.block_on(async {
+        let error = wait(&node, 15, |e| match e {
+            Event::DeadConnection { peer, error } if peer == silent.id => Some(error),
+            _ => None,
+        })
+        .await
+        .unwrap();
+        assert!(!error.is_empty());
+        wait(&node, 10, |e| match e {
+            Event::Disconnected { peer, .. } if peer == silent.id => Some(()),
+            _ => None,
+        })
+        .await
+        .unwrap();
+        assert!(!node.is_connected(&silent.id));
+        assert!(node.connected_peers().is_empty());
+        assert_eq!(node.peer_counts(), (0, 0, 0));
+        assert_eq!(node.stats().await.unwrap().dead_connections, 1);
+    });
+    drop(node);
+    rt.shutdown_background();
+    silent_rt.shutdown_background();
+}

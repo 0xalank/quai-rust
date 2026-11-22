@@ -525,6 +525,23 @@ func (b *backend) NodeCtx() int                  { return common.ZONE_CTX }
 func (b *backend) RpcVersion() string            { return "v1" }
 func (b *backend) Logger() *log.Logger           { return log.Global }
 
+func (b *backend) appended(name string) {
+	blk := b.chain.blocks[name]
+	b.chainFeed.Send(core.ChainEvent{Block: blk.wo, Hash: blk.wo.Hash(), Order: common.ZONE_CTX})
+	time.Sleep(pace)
+}
+
+func (b *backend) unlocked(name string, addrs []common.Address) {
+	unlocks := []common.Unlock{}
+	for _, a := range addrs {
+		internal, err := a.InternalAddress()
+		must(err)
+		unlocks = append(unlocks, common.Unlock{Addr: internal, Amt: u(1)})
+	}
+	b.unlocksFeed.Send(core.UnlocksEvent{Hash: b.chain.blocks[name].wo.Hash(), Unlocks: unlocks})
+	time.Sleep(pace)
+}
+
 // moveHead moves the head to `to` as SetCurrentHeader and
 // GeneratePendingHeader do: canonical entries of the old branch above the
 // common ancestor go, the new blocks become canonical oldest first and send
@@ -576,6 +593,16 @@ func (b *backend) moveHead(to string) []string {
 		names = append(names, blk.name)
 	}
 	head := rawdb.ReadWorkObject(b.db, target.wo.NumberU64(common.ZONE_CTX), target.wo.Hash(), types.BlockObject)
+	// The head of a running node carries the transactions that Process ran,
+	// with their senders cached; "accesses" matches a sender only through
+	// that cache (Transaction.From).
+	signer := types.LatestSigner(b.cfg)
+	for _, tx := range head.Transactions() {
+		if tx.Type() == types.QuaiTxType {
+			_, err := types.Sender(signer, tx)
+			must(err)
+		}
+	}
 	b.chainHeadFeed.Send(core.ChainHeadEvent{Block: head})
 	time.Sleep(pace)
 	return names
@@ -686,6 +713,9 @@ func newEnv(c *chain, name string, timeout time.Duration, limit int, head string
 	e := &env{name: name, timeout: timeout, limit: limit, start: head, chain: c, conns: map[int]*wsConn{}, real: map[string]string{}, place: map[string]string{}, framed: map[string]bool{}}
 	e.b = newBackend(c, head)
 	e.srv = rpc.NewServer(log.Global)
+	// Quai.APIs (quai/backend.go) makes one filter API for "eth" and another
+	// for "quai", each with its own filters and subscription count.
+	must(e.srv.RegisterName("eth", filters.NewPublicFilterAPI(e.b, timeout, limit)))
 	must(e.srv.RegisterName("quai", filters.NewPublicFilterAPI(e.b, timeout, limit)))
 	h := httptest.NewServer(e.srv)
 	ws := httptest.NewServer(e.srv.WebsocketHandler([]string{"*"}))
@@ -751,7 +781,8 @@ func (e *env) register(id string, kind string) string {
 // creates reports which ID kind a successful call returns.
 func creates(method string) string {
 	switch method {
-	case "quai_newFilter", "quai_newBlockFilter", "quai_newPendingTransactionFilter":
+	case "quai_newFilter", "quai_newBlockFilter", "quai_newPendingTransactionFilter",
+		"eth_newFilter", "eth_newBlockFilter", "eth_newPendingTransactionFilter":
 		return "F"
 	}
 	if strings.HasSuffix(method, "_subscribe") {
@@ -935,21 +966,43 @@ func (e *env) notifications(k int) {
 		return n
 	}
 	sort.Slice(places, func(i, j int) bool { return number(places[i]) < number(places[j]) })
-	for _, kind := range []string{"newHeads", "logs"} {
+	for _, kind := range []string{"newHeads", "logs", "eth"} {
 		if e.framed[kind] {
 			continue
 		}
 		for _, p := range places {
 			f := raw[p][0]
-			r, _ := decode(f).(obj)["params"].(obj)["result"].(obj)
+			m := decode(f).(obj)
+			if (kind == "eth") != (m["method"] == "eth_subscription") {
+				continue
+			}
+			r, _ := m["params"].(obj)["result"].(obj)
 			_, head := r["woHeader"]
-			if (kind == "newHeads") == head {
+			if kind == "eth" || (kind == "newHeads") == head {
 				e.framed[kind] = true
 				e.steps = append(e.steps, obj{"op": "frame", "via": "ws", "conn": k, "kind": kind, "text": e.maskText(f)})
 				break
 			}
 		}
 	}
+}
+
+// appended sends the ChainEvent that Slice.Append sends for a zone block
+// it writes (core/slice.go), whether or not it becomes the head.
+func (e *env) appended(name string) {
+	e.b.appended(name)
+	e.steps = append(e.steps, obj{"op": "chain", "block": name})
+}
+
+// unlocked sends the UnlocksEvent that HeaderChain.AppendBlock sends for a
+// block whose processing unlocked coinbase lockups (core/headerchain.go).
+func (e *env) unlocked(name string, addrs ...common.Address) {
+	e.b.unlocked(name, addrs)
+	list := []interface{}{}
+	for _, a := range addrs {
+		list = append(list, hx(a.Bytes()))
+	}
+	e.steps = append(e.steps, obj{"op": "unlocks", "block": name, "addresses": list})
 }
 
 func (e *env) sleep(ms int) {
@@ -1237,6 +1290,77 @@ func subscriptionsScenario(c *chain) obj {
 	return e.out()
 }
 
+// --- E: the eth namespace, v2 heads, appended blocks and accesses -------------
+
+// The "accesses" goroutine receives on unbuffered channels and the event
+// system sends without blocking (quai/filters/api.go, filter_system.go): an
+// event finds it only while it waits. Each event of this scenario is
+// followed by `calm` so that it waits again before the next one.
+const calm = 400 * time.Millisecond
+
+func eventsScenario(c *chain) obj {
+	e := newEnv(c, "events", 5*time.Minute, 1000, "b3")
+	defer e.close()
+	appended := func(name string) { e.appended(name); time.Sleep(calm) }
+	head := func(name string) { e.head(name); time.Sleep(calm) }
+	unlocked := func(name string, addrs ...common.Address) { e.unlocked(name, addrs...); time.Sleep(calm) }
+	alice := quaiKey("alice").addr
+	erin := qiKey("erin").addr
+	other := addr("0x01110000000000000000000000000000000000c1")
+	sub := func(k int, method string, params ...interface{}) {
+		e.ws(k, e.req(method, params...), false)
+	}
+	sub(0, "quai_subscribe", "newHeadsV2")
+	sub(0, "quai_subscribe", "newChainBlocks")
+	sub(0, "quai_subscribe", "newChainBlocksV2")
+	sub(0, "quai_subscribe", "accesses", a1.Hex())
+	sub(0, "quai_subscribe", "accesses", alice.Hex())
+	sub(0, "quai_subscribe", "accesses", a3.Hex())
+	sub(0, "quai_subscribe", "accesses", erin.Hex())
+	sub(0, "eth_subscribe", "newHeads")
+	sub(0, "eth_subscribe", "logs", obj{"address": a1.Hex()})
+	sub(0, "eth_subscribe", "accesses", a2.Hex())
+	sub(0, "eth_subscribe", "newChainBlocksV2")
+	sub(1, "eth_subscribe", "newHeadsV2")
+	// Errors.
+	e.ws(0, e.req("quai_subscribe", "accesses"), false)
+	e.ws(0, e.req("quai_subscribe", "accesses", "0x12"), false)
+	e.ws(0, e.req("quai_subscribe", "accesses", other.Hex()), false)
+	e.ws(0, e.req("quai_subscribe", "accesses", a1.Hex(), 1), false)
+	e.ws(0, e.req("quai_subscribe", "newChainBlocks", 1), false)
+	e.ws(0, e.req("eth_subscribe", "nope"), false)
+	time.Sleep(5 * calm)
+	// The eth filter API keeps its own filters.
+	f := e.http(e.req("eth_newBlockFilter")).(obj)["result"]
+	e.http(e.req("quai_getFilterChanges", f))
+	e.http(e.req("eth_getFilterChanges", f))
+	appended("b4")
+	head("b4")
+	e.notifications(0)
+	e.notifications(1)
+	appended("b5")
+	appended("b6")
+	appended("b7")
+	head("b7")
+	unlocked("b7", alice, a2)
+	e.notifications(0)
+	appended("c5")
+	appended("c6")
+	head("c6")
+	unlocked("c6", erin, a3, a1)
+	e.notifications(0)
+	e.notifications(1)
+	e.http(e.req("eth_getFilterChanges", f))
+	e.http(e.req("quai_getFilterChanges", f))
+	// Any namespace unsubscribes.
+	e.ws(0, e.req("eth_unsubscribe", "$S1"), false)
+	e.ws(0, e.req("quai_unsubscribe", "$S8"), false)
+	time.Sleep(calm)
+	head("c8")
+	e.notifications(0)
+	return e.out()
+}
+
 // --- D: the subscription limit ---------------------------------------------------
 
 func limitScenario(c *chain) obj {
@@ -1272,12 +1396,13 @@ func main() {
 		expiryScenario(c),
 		subscriptionsScenario(c),
 		limitScenario(c),
+		eventsScenario(c),
 	}
 	must(json.NewEncoder(os.Stdout).Encode(obj{
 		"reference_revision": referenceRevision,
 		"id_pattern":         idPattern,
 		"chain":              c.out(),
 		"scenarios":          scenarios,
-		"scope": "Production quai/filters PublicFilterAPI and EventSystem behind one rpc.Server (namespace quai) over HTTP (Server.ServeHTTP) and WebSocket (Server.WebsocketHandler), with raw gorilla/websocket clients, over a test chain in a rawdb memory database (work objects with Quai, external and Qi transactions, stored receipts with logs, uncles, a side branch from b4). Events as go-quai v0.57.0 core emits them: a head move rewrites the canonical index; each block that becomes canonical, oldest first, sends its logs (the stored receipts' logs with derived fields) on the logs feed when it has any; then one ChainHeadEvent carries the new head read back from the database; no RemovedLogsEvent and no ChainEvent (nothing in v0.57.0 sends them for a head move). Sends are paced by 50 ms; a notifications step waits for 500 ms without frames. IDs are replaced by $F<n> and $S<n> in order of first appearance; by_subscription lists every subscription that received a notification since the connection's previous notifications step (others received none); steps marked sorted had their multi-block log list sorted by block number and log index (Filter.Logs appends goroutine results in completion order). Fixed-seed keys; no network, no real funds.",
+		"scope":              "Production quai/filters PublicFilterAPI and EventSystem (one instance in namespace eth and one in quai, as Quai.APIs registers them) behind one rpc.Server over HTTP (Server.ServeHTTP) and WebSocket (Server.WebsocketHandler), with raw gorilla/websocket clients, over a test chain in a rawdb memory database (work objects with Quai, external and Qi transactions, stored receipts with logs, uncles, a side branch from b4). Events as go-quai v0.57.0 core emits them: a head move rewrites the canonical index; each block that becomes canonical, oldest first, sends its logs (the stored receipts' logs with derived fields) on the logs feed when it has any; then one ChainHeadEvent carries the new head read back from the database; no RemovedLogsEvent (nothing in v0.57.0 sends it). Scenario events also plays ChainEvent (Slice.Append, per appended block) and UnlocksEvent (HeaderChain.AppendBlock) as chain and unlocks steps. Sends are paced by 50 ms; a notifications step waits for 500 ms without frames. IDs are replaced by $F<n> and $S<n> in order of first appearance; by_subscription lists every subscription that received a notification since the connection's previous notifications step (others received none); steps marked sorted had their multi-block log list sorted by block number and log index (Filter.Logs appends goroutine results in completion order). Fixed-seed keys; no network, no real funds.",
 	}))
 }

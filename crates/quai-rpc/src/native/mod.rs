@@ -11,6 +11,8 @@
 //! `filters.rs`, driven by `ChainView::head_events`; the Qi and conversion
 //! quotes in `qi.rs`.
 pub mod args;
+pub mod chain;
+pub mod eth;
 pub mod fees;
 pub mod filters;
 pub mod json;
@@ -135,6 +137,67 @@ pub const METHODS: &[&str] = &[
     "quai_subscribe",
     "quai_unsubscribe",
     "net_listening",
+    // Ported after the inventory of docs/rpc-parity.md.
+    "quai_baseFee",
+    "quai_suggestFinalityDepth",
+    "quai_hashesPerQits",
+    "quai_clientVersion",
+    "rpc_modules",
+    "net_peerCount",
+    "net_peerCountByDirection",
+    "quai_getRawTransactionByBlockNumberAndIndex",
+    "quai_getRawTransactionByBlockHashAndIndex",
+    "quai_getBlockOrCandidateByHash",
+    "quai_getLatestUTXOSetSize",
+    "quai_getSupplyAnalyticsForBlock",
+    "quai_rewardAnalytics",
+    "quai_getKQuaiAndUpdateBit",
+    "quai_getContractSize",
+    "quai_getLockupsForContractAndMiner",
+    "quai_getProof",
+    "txpool_getRollingFeeInfo",
+    // The `eth` namespace (eth.rs): PublicBlockChainAPI ...
+    "eth_chainId",
+    "eth_blockNumber",
+    "eth_getBalance",
+    "eth_getProof",
+    "eth_getHeaderByNumber",
+    "eth_getHeaderByHash",
+    "eth_getBlockByNumber",
+    "eth_getBlockByHash",
+    "eth_getUncleByBlockNumberAndIndex",
+    "eth_getUncleByBlockHashAndIndex",
+    "eth_getUncleCountByBlockNumber",
+    "eth_getUncleCountByBlockHash",
+    "eth_getCode",
+    "eth_getStorageAt",
+    "eth_getTransactionReceipt",
+    "eth_call",
+    "eth_estimateGas",
+    "eth_createAccessList",
+    // ... and the names that run a `quai_` method's Go function.
+    "eth_clientVersion",
+    "eth_gasPrice",
+    "eth_getBlockTransactionCountByHash",
+    "eth_getBlockTransactionCountByNumber",
+    "eth_getRawTransactionByBlockHashAndIndex",
+    "eth_getRawTransactionByBlockNumberAndIndex",
+    "eth_getRawTransactionByHash",
+    "eth_getTransactionByBlockHashAndIndex",
+    "eth_getTransactionByBlockNumberAndIndex",
+    "eth_getTransactionByHash",
+    "eth_getTransactionCount",
+    "eth_sendRawTransaction",
+    "eth_receiveTxFromPoolSharingClient",
+    "eth_newPendingTransactionFilter",
+    "eth_newBlockFilter",
+    "eth_newFilter",
+    "eth_uninstallFilter",
+    "eth_getFilterChanges",
+    "eth_getFilterLogs",
+    "eth_getLogs",
+    "eth_subscribe",
+    "eth_unsubscribe",
 ];
 
 /// Answer one call. View calls do disk reads and proof-of-work, so they run
@@ -151,7 +214,14 @@ pub async fn handle(view: Arc<dyn ChainView>, method: &str, params: &Value) -> R
 }
 
 pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> {
+    let method = eth::alias(method);
     if let Some(r) = qi::dispatch(view, method, params) {
+        return r;
+    }
+    if let Some(r) = chain::dispatch(view, method, params) {
+        return r;
+    }
+    if let Some(r) = eth::dispatch(view, method, params) {
         return r;
     }
     match method {
@@ -758,10 +828,9 @@ fn balance(view: &dyn ChainView, address: &Address, original: &str, at: BlockRef
         }
         let mut total: u128 = 0;
         for o in view.outpoints_by_address(address)? {
-            let lock = o
-                .lock
-                .iter()
-                .fold(0u128, |a, b| a.saturating_mul(256) + *b as u128);
+            let lock = o.lock.iter().fold(0u128, |a, b| {
+                a.saturating_mul(256).saturating_add(*b as u128)
+            });
             if !o.lock.is_empty() && (head.number as u128) < lock {
                 continue;
             }
@@ -1405,8 +1474,9 @@ fn create_access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<
     out.insert("gasUsed".into(), json::u64_hex(traced.used_gas));
     Ok(Value::Object(out))
 }
-/// `PublicBlockChainQuaiAPI.EstimateGas` and `DoEstimateGas`.
-fn estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Value> {
+/// `PublicBlockChainQuaiAPI.EstimateGas`: a conversion and a Qi
+/// transaction have their own branches, then `DoEstimateGas`.
+fn estimate_gas(view: &dyn ChainView, args: CallArgs, at: BlockRef) -> R<Value> {
     let from_quai = !qi(&args.from());
     if from_quai && args.to.is_some_and(|t| qi(&t)) {
         return Err(RpcError::from(ViewError::Unavailable(
@@ -1422,6 +1492,11 @@ fn estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Val
         }
         _ => return Err(RpcError::go("unsupported tx type")),
     }
+    do_estimate_gas(view, args, at)
+}
+/// `DoEstimateGas` (internal/quaiapi/api.go), which
+/// `PublicBlockChainAPI.EstimateGas` (`eth_estimateGas`) calls directly.
+fn do_estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Value> {
     // The gas ceiling: the given gas, else the gas limit of the block
     // (HeaderByNumberOrHash).
     let mut hi = match args.gas {
@@ -1546,5 +1621,46 @@ mod tests {
         assert_eq!(revert_reason(&data).as_deref(), Some("no"));
         assert_eq!(revert_error(&data).message, "execution reverted: no");
         assert_eq!(revert_error(&[1, 2]).message, "execution reverted");
+    }
+}
+
+/// The Rust column of the parity table (compatibility/rpc-parity.json,
+/// docs/rpc-parity.md; scripts/render_rpc_parity.py) must say what this
+/// module serves.
+#[cfg(test)]
+mod parity_table_tests {
+    use serde_json::Value;
+
+    #[test]
+    fn rust_column_matches_the_served_methods() {
+        let table: Value =
+            serde_json::from_str(include_str!("../../../../compatibility/rpc-parity.json"))
+                .unwrap();
+        let rows = table["rows"].as_array().unwrap();
+        assert!(rows.len() > 100);
+        for row in rows {
+            let method = row["method"].as_str().unwrap();
+            let served = if row["kind"] == "subscription" {
+                super::METHODS.contains(&method)
+                    && super::filters::SUBSCRIPTIONS.contains(&row["name"].as_str().unwrap())
+            } else {
+                super::METHODS.contains(&method)
+            };
+            assert_eq!(row["rust"].as_bool(), Some(served), "{}", row["key"]);
+        }
+        for row in table["outside"].as_array().unwrap() {
+            let method = row["method"].as_str().unwrap();
+            assert_eq!(
+                row["rust"].as_bool(),
+                Some(super::METHODS.contains(&method)),
+                "{method}"
+            );
+        }
+        for method in super::METHODS {
+            // Every `*_unsubscribe` reaches one handler (rpc/handler.go).
+            let listed =
+                method.ends_with("_unsubscribe") || rows.iter().any(|r| r["method"] == *method);
+            assert!(listed, "{method} is not in the go-quai inventory");
+        }
     }
 }

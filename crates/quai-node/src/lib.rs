@@ -22,6 +22,7 @@ pub mod qex;
 pub mod replay;
 pub mod rpc_call;
 pub mod rpc_view;
+pub mod serve;
 pub mod spec;
 pub mod state;
 pub mod store;

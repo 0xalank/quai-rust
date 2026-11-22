@@ -41,6 +41,9 @@ pub const METHODS: &[&str] = &[
     "quai_getLockedBalance",
     "quai_getWrappedQiDeposit",
     "quai_listRunningChains",
+    "quai_baseFee",
+    "quai_suggestFinalityDepth",
+    "quai_hashesPerQits",
 ];
 
 fn crashed() -> RpcError {
@@ -56,6 +59,9 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<
         "quai_getOutpointDeltasForAddressesInRange" => outpoint_deltas(view, params),
         "quai_getLockedBalance" => locked_balance(view, params),
         "quai_getWrappedQiDeposit" => wrapped_qi_deposit(view, params),
+        "quai_baseFee" => base_fee(view, params),
+        "quai_suggestFinalityDepth" => finality_depth(view, params),
+        "quai_hashesPerQits" => hashes_per_qits(view, params),
         "quai_listRunningChains" => Args::new(params, 0).map(|_| {
             Value::Array(
                 view.running_chains()
@@ -565,17 +571,83 @@ fn estimate_fee_for_qi(view: &dyn ChainView, params: &Value) -> R<Value> {
     let fee_quai = Int::pos(U1024::from_u64(gas).wrapping_mul(&base_fee));
     let prime = prime_terminus(view, &head)?
         .ok_or_else(|| RpcError::go("cannot find prime terminus for the current block"))?;
-    let rate = rate(&prime);
-    let diff = difficulty(&head);
-    // quaiToQiFeeEstimate: round up when the Qi fee would buy less Quai.
-    let mut fee_qi = quai_to_qi(&head, rate, diff, fee_quai).ok_or_else(crashed)?;
-    if qi_to_quai(&head, rate, diff, fee_qi).ok_or_else(crashed)? < fee_quai {
-        fee_qi = fee_qi.add(Int::of(1));
-    }
+    let mut fee_qi = qi_fee_estimate(&head, rate(&prime), fee_quai)?;
     if fee_qi.is_zero() {
         fee_qi = Int::of(1);
     }
     Ok(fee_qi.json())
+}
+/// `quaiToQiFeeEstimate`: the Qi fee, rounded up when it would buy less
+/// Quai than `fee_quai`.
+fn qi_fee_estimate(head: &BlockData, rate: Uint, fee_quai: Int) -> R<Int> {
+    let diff = difficulty(head);
+    let fee_qi = quai_to_qi(head, rate, diff, fee_quai).ok_or_else(crashed)?;
+    if qi_to_quai(head, rate, diff, fee_qi).ok_or_else(crashed)? < fee_quai {
+        return Ok(fee_qi.add(Int::of(1)));
+    }
+    Ok(fee_qi)
+}
+
+/// `BaseFee`: the head's base fee in Quai (`txType` true), or in qits at
+/// its prime terminus's rate, at least one qit.
+fn base_fee(view: &dyn ChainView, params: &Value) -> R<Value> {
+    let a = Args::new(params, 1)?;
+    let quai = a.get(0, args::boolean)?;
+    let head = head_block(view)?;
+    let Some(fee) = head.object.header().wire().base_fee.clone() else {
+        // A nil base fee: null, and QuaiToQi panics on it.
+        return if quai {
+            Ok(Value::Null)
+        } else {
+            Err(crashed())
+        };
+    };
+    if quai {
+        return Ok(json::big_hex(&fee));
+    }
+    let prime =
+        prime_terminus(view, &head)?.ok_or_else(|| RpcError::go("prime terminus not found"))?;
+    let fee_qi = qi_fee_estimate(&head, rate(&prime), Int::pos(wide(&fee)))?;
+    Ok(if fee_qi.is_zero() { Int::of(1) } else { fee_qi }.json())
+}
+
+/// `SuggestFinalityDepth`: `qiValue * correlatedRisk / CalculateQiReward`
+/// of the head. Go converts both arguments to `int64` and divides
+/// Euclidean; `Uint64()` keeps the low 64 bits of the magnitude.
+fn finality_depth(view: &dyn ChainView, params: &Value) -> R<Value> {
+    let a = Args::new(params, 2)?;
+    let value = a.get(0, args::uint64)? as i64;
+    let risk = a.get(1, args::uint64)? as i64;
+    let head = head_block(view)?;
+    let reward = qi_reward(&head.header, difficulty(&head)).ok_or_else(crashed)?;
+    let product = value as i128 * risk as i128;
+    let mag = U1024::from_u128(product.unsigned_abs());
+    let mut q = mag.wrapping_div(&reward.mag);
+    if product < 0 && q.wrapping_mul(&reward.mag) != mag {
+        q = q.wrapping_add(&U1024::ONE);
+    }
+    let b = q.to_be_bytes();
+    let mut low = [0u8; 8];
+    low.copy_from_slice(&b[b.len() - 8..]);
+    Ok(json::u64_hex(u64::from_be_bytes(low)))
+}
+
+/// `HashesPerQits`: the amount times `params.OneOverKqi` of a block number
+/// ("latest" is the head; "pending" is `uint64(-2)`); a hash is an error.
+fn hashes_per_qits(view: &dyn ChainView, params: &Value) -> R<Value> {
+    let a = Args::new(params, 2)?;
+    let amount = a.get(0, args::big)?;
+    let at = a.get(1, args::block_ref)?;
+    if amount == [0; 32] {
+        return Ok(json::big_hex(&[]));
+    }
+    let number = match at {
+        BlockRef::Number(BlockNumber::Latest) => view.head(),
+        BlockRef::Number(n) => n.int64() as u64,
+        _ => return Err(RpcError::go("invalid block number or hash")),
+    };
+    let total = wide(&amount).wrapping_mul(&from_uint(economics::one_over_kqi(number)));
+    Ok(json::big_hex(&magnitude(total)))
 }
 
 // --- balances ---------------------------------------------------------------
@@ -586,8 +658,9 @@ const DENOMINATIONS: [u64; 15] = [
     1000000000,
 ];
 fn lock_height(lock: &[u8]) -> u128 {
-    lock.iter()
-        .fold(0u128, |a, b| a.saturating_mul(256) + *b as u128)
+    lock.iter().fold(0u128, |a, b| {
+        a.saturating_mul(256).saturating_add(*b as u128)
+    })
 }
 /// `GetLockedBalance`: the locked Quai index of a Quai address, or the
 /// locked outputs of a Qi address.

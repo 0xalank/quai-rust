@@ -1,9 +1,9 @@
 {
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "vectors_sha256": "571a5c22eee8850a3374ec434151ebf0605cd2dace9790bb01fec92d50b3f167",
-  "driver_sha256": "c7dd58725a37e0f973ea01b97678fd95c9d6d41e21f2eef75cc808315ac155e1",
+  "vectors_sha256": "963853f4c90224a961c41be5cab0ce26052e237271653a323680f70c1d5bacda",
+  "driver_sha256": "09f69e3dec5bb1d1f0947f4109932df7f86fbbf292f5b7d2b5f0b6e96a1a8240",
   "oracle_sources": {
-    "reference/filters/main.go": "b90664a5b6ec7651e5d8b721d394cd26ea6eb2ebac25561fa7b92cc1f278985b"
+    "reference/filters/main.go": "75b7b9f1e5690b4b8e76194cd5f34791e32c717dfab960b131468a9b4f0fcfce"
   },
   "go_sources": {
     "quai/filters/api.go": "3c58a435533a139a2c2398961cce6f80d427828ad13c2a86800c9ded587a2f1a",
@@ -34,5 +34,5 @@
   },
   "public_network": false,
   "runtime_go_dependency": false,
-  "scope": "Production quai/filters PublicFilterAPI and EventSystem behind one rpc.Server (namespace quai) over HTTP (Server.ServeHTTP) and WebSocket (Server.WebsocketHandler), with raw gorilla/websocket clients, over a test chain in a rawdb memory database (work objects with Quai, external and Qi transactions, stored receipts with logs, uncles, a side branch from b4). Events as go-quai v0.57.0 core emits them: a head move rewrites the canonical index; each block that becomes canonical, oldest first, sends its logs (the stored receipts' logs with derived fields) on the logs feed when it has any; then one ChainHeadEvent carries the new head read back from the database; no RemovedLogsEvent and no ChainEvent (nothing in v0.57.0 sends them for a head move). Sends are paced by 50 ms; a notifications step waits for 500 ms without frames. IDs are replaced by $F<n> and $S<n> in order of first appearance; by_subscription lists every subscription that received a notification since the connection's previous notifications step (others received none); steps marked sorted had their multi-block log list sorted by block number and log index (Filter.Logs appends goroutine results in completion order). Fixed-seed keys; no network, no real funds."
+  "scope": "Production quai/filters PublicFilterAPI and EventSystem (one instance in namespace eth and one in quai, as Quai.APIs registers them) behind one rpc.Server over HTTP (Server.ServeHTTP) and WebSocket (Server.WebsocketHandler), with raw gorilla/websocket clients, over a test chain in a rawdb memory database (work objects with Quai, external and Qi transactions, stored receipts with logs, uncles, a side branch from b4). Events as go-quai v0.57.0 core emits them: a head move rewrites the canonical index; each block that becomes canonical, oldest first, sends its logs (the stored receipts' logs with derived fields) on the logs feed when it has any; then one ChainHeadEvent carries the new head read back from the database; no RemovedLogsEvent (nothing in v0.57.0 sends it). Scenario events also plays ChainEvent (Slice.Append, per appended block) and UnlocksEvent (HeaderChain.AppendBlock) as chain and unlocks steps. Sends are paced by 50 ms; a notifications step waits for 500 ms without frames. IDs are replaced by $F<n> and $S<n> in order of first appearance; by_subscription lists every subscription that received a notification since the connection's previous notifications step (others received none); steps marked sorted had their multi-block log list sorted by block number and log index (Filter.Logs appends goroutine results in completion order). Fixed-seed keys; no network, no real funds."
 }

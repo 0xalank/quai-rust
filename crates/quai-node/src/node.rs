@@ -275,6 +275,26 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         _ => None,
     };
     let live_view = live_view.map(|(view, live)| (Arc::new(view), live));
+    // Peers' requests are answered from the block store from now on.
+    if let Some((view, _)) = &live_view {
+        node.serve_from(Arc::new(crate::serve::StoreServer::new(
+            view.share(),
+            chain.genesis_hash(),
+            chain.location(),
+        )));
+    }
+    // net_peerCount and net_peerCountByDirection read the network's counts.
+    if let Some((_, live)) = &live_view {
+        let node = node.clone();
+        live.node().set_peer_counter(Box::new(move || {
+            let (peers, incoming, outgoing) = node.peer_counts();
+            quai_rpc::view::PeerCounts {
+                peers: peers as u64,
+                incoming: incoming as u64,
+                outgoing: outgoing as u64,
+            }
+        }));
+    }
     let shutdown = {
         let stop = stop.clone();
         move || {
@@ -372,6 +392,11 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                     &mut detector,
                     Some(metrics.clone()),
                     stats.clone(),
+                    &crate::tip::CatchUp {
+                        genesis: chain.genesis_hash(),
+                        margin: o.margin,
+                        max_peers: o.max_peers,
+                    },
                 );
                 match followed {
                     Ok(t) => log.info(&format!(

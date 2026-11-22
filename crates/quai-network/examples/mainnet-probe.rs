@@ -544,6 +544,9 @@ fn collect(
                     emit(v.clone());
                     st.dial_failures.push(v);
                 }
+                Event::DeadConnection { peer, error } => {
+                    emit(json!({"event":"dead_connection","peer":peer.to_string(),"error":error}));
+                }
                 Event::Identified { peer, info } => {
                     let protocols: Vec<String> =
                         info.protocols.iter().map(|p| p.to_string()).collect();

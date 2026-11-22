@@ -1,0 +1,33 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "75bd0b391cf6431875fefe4aea43108b48e068c1b59424342ebaa6bfc9bef829",
+  "driver_sha256": "b7d67e633891f27074a6cc52e0fa9694582c63e761b8c42dac34035fd81849a6",
+  "oracle_sources": {
+    "reference/rpc-inventory/main.go": "e153b3e828fdb4e48335832698ed7dfd78999294cd6555b5559d0105c28e3a1d",
+    "reference/rpc-inventory/rpc-export.go": "090d70e8b757fa5f89683ba2163f020a1ca0365719d67757da907b25bdb13183",
+    "reference/rpc-inventory/utils-export.go": "f28d8a749558eeb5cc1bc29904dbe70ca804b9c4267f61889cc5ddc4249f7578"
+  },
+  "go_sources": {
+    "internal/quaiapi/backend.go": "36b1acb0c9f9627faf9f919d7f682c90b686137a6baf2416c69910d6a0b76e11",
+    "internal/quaiapi/api.go": "c6f3b8d53ac0204f8ccd5ef849f23456c02c3dec4f480bae46d39f40268d5e3b",
+    "internal/quaiapi/quai_api.go": "033048c2e5d698224bd7a7d0b7bcc79dc802e0d9a8e79069fb7c9994d0d3d97c",
+    "quai/backend.go": "caf69f4358cbc2f6a1d0cadc4e2d2a59f725e00f7db2e41fe7dc4a99b9f33659",
+    "quai/api.go": "2c11d13e8bca8f2cbd810d85fc8dec7229484a1a9d397b86834d61ac72b3c5bd",
+    "quai/filters/api.go": "3c58a435533a139a2c2398961cce6f80d427828ad13c2a86800c9ded587a2f1a",
+    "cmd/utils/cmd.go": "3f40a7749a29064ce9cb450b218cb60c7a385fa5fdbfc8e7da54f546e518def8",
+    "cmd/utils/flags.go": "889e7fde7bd67d7028b42aeeddd35e923693adbae3bcb2ccf0e5ff84982431e1",
+    "node/node.go": "1f731ddd136b1b7af38c50febb3812bf7ed05f172ae78bf9a23be4adb2f19be6",
+    "node/rpcstack.go": "4194d9d362d536cf7b109fb340fbd939d2628126dce702b96cd4974237b62874",
+    "node/defaults.go": "42776add0baf4896fd190ab3d1e3381423d8627f9d757b3e986b816b45b13f73",
+    "rpc/server.go": "2c172af24180ac34f97d4ec9fad277b690b8e4e7f23457b9b12847a2482ef48c",
+    "rpc/service.go": "f734058c4828a3eb702b99bf9d8bc953fd044def159af61829d4ddad80388869",
+    "rpc/handler.go": "de80c856ea23bce4b3187144400d441f8c0e755bb8b929750392a40ea769c88a",
+    "rpc/json.go": "975b8e28413be9c36b3edeecd5532d3b1d02977111505b6947eeb64f936ca553",
+    "rpc/errors.go": "f25452450f0e4e34a14ee02b807209689c38cf332e817dc70c51b7017ec35436",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false,
+  "scope": "go-quai v0.57.0 JSON-RPC registry of a zone node (quaiapi.GetAPIs and Quai.APIs), probed on the production node.Node built from makeConfigNode's default configuration for zone [0 0]; no handler body runs"
+}

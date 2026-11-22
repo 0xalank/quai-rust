@@ -9,7 +9,9 @@
 //! - head: this node's canonical block `DEPTH` blocks below its head differs
 //!   from the block most answering peers have there, for `PERSIST` or longer.
 //! - stall: the peers' chain is `STALL_BLOCKS` or more above this node's
-//!   head for `STALL_TIME` or longer.
+//!   head for `STALL_TIME` or longer; or no asked peer answers and the head
+//!   does not move for `STALL_TIME` (a sleep or a network change that the
+//!   node does not recover from).
 //!
 //! Each one is logged at warn level with the block, the check, the expected
 //! and the actual value, appended as one JSON line to
@@ -87,7 +89,14 @@ pub struct Detector {
     shares: HashMap<Hash, serde_json::Value>,
     order: VecDeque<Hash>,
     fork: Option<Episode>,
-    stall: Option<(Instant, bool)>,
+    stall: Option<Stall>,
+}
+/// A lag that may become a stall.
+struct Stall {
+    since: Instant,
+    /// The head when the lag started.
+    head: u64,
+    counted: bool,
 }
 impl Detector {
     /// `path`: the JSON lines file (None: logs and metrics only).
@@ -296,27 +305,53 @@ impl Detector {
         }
     }
     /// Whether the peers hold a block `STALL_BLOCKS` above the head.
+    /// `answers` holds the peers that answered (a block hash or none); a
+    /// request that failed is no answer.
     pub fn lag_verdict(&mut self, head: u64, answers: &[(PeerId, Option<Hash>)]) {
         let ahead = answers.iter().filter(|(_, h)| h.is_some()).count();
-        if ahead < 2 {
-            if let Some((since, _)) = self.stall.take() {
+        // Caught up: some peer answered, and fewer than two hold the block.
+        if ahead < 2 && !answers.is_empty() {
+            if let Some(s) = self.stall.take() {
                 self.log.info(&format!(
                     "head: caught up with the peers after {}s",
-                    since.elapsed().as_secs()
+                    s.since.elapsed().as_secs()
                 ));
             }
             return;
         }
-        let (since, counted) = self.stall.get_or_insert((Instant::now(), false));
-        if !*counted && since.elapsed() >= STALL_TIME {
-            *counted = true;
+        // Behind, or no peer answered. Without answers only a head that
+        // stays put is a stall: gossip can move the head while requests
+        // fail.
+        let s = self.stall.get_or_insert(Stall {
+            since: Instant::now(),
+            head,
+            counted: false,
+        });
+        if answers.is_empty() && head != s.head {
+            *s = Stall {
+                since: Instant::now(),
+                head,
+                counted: false,
+            };
+            return;
+        }
+        if !s.counted && s.since.elapsed() >= STALL_TIME {
+            s.counted = true;
             let detail = serde_json::json!({
                 "head": head,
                 "peers_with_block_at": head + STALL_BLOCKS,
-                "seconds": since.elapsed().as_secs(),
+                "seconds": s.since.elapsed().as_secs(),
                 "peers": answers_json(answers),
+                "no_peer_answered": answers.is_empty(),
             });
             self.diverged("stall", detail);
+        }
+    }
+    /// Start the current lag `ago` earlier (tests).
+    #[cfg(test)]
+    fn age_stall(&mut self, ago: Duration) {
+        if let Some(s) = &mut self.stall {
+            s.since -= ago;
         }
     }
 }
@@ -404,6 +439,57 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(l).unwrap();
             assert!(v["divergence"].is_string() && v["detail"].is_object());
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_lag_is_a_stall_with_peers_ahead_or_with_no_answer_and_a_still_head() {
+        let dir = std::env::temp_dir().join(format!("quai-node-stall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("divergences.jsonl");
+        let m = Arc::new(Metrics::new(0));
+        let mut d = Detector::new(
+            Some(path.clone()),
+            Some(m.clone()),
+            Log::new(crate::log::Level::Error),
+        );
+        let stalls = || m.divergences_stall.load(Ordering::Relaxed);
+        let p: Vec<PeerId> = (0..3).map(|_| PeerId::random()).collect();
+        // A peer without the block 10 above: caught up.
+        d.lag_verdict(100, &[(p[0], None)]);
+        assert!(d.stall.is_none());
+        // No peer answers, but the head moves: gossip follows the chain.
+        d.lag_verdict(100, &[]);
+        d.age_stall(STALL_TIME);
+        d.lag_verdict(101, &[]);
+        assert_eq!(stalls(), 0);
+        // No peer answers and the head stays: a stall, counted once (the
+        // case that the old verdict took for "caught up").
+        d.age_stall(STALL_TIME);
+        d.lag_verdict(101, &[]);
+        d.lag_verdict(101, &[]);
+        assert_eq!(stalls(), 1);
+        // An answer without the block ends it.
+        d.lag_verdict(101, &[(p[0], None), (p[1], None)]);
+        assert!(d.stall.is_none());
+        // Two peers ahead for STALL_TIME: a stall even while the head moves.
+        d.lag_verdict(200, &[(p[0], Some([1; 32])), (p[1], Some([1; 32]))]);
+        d.age_stall(STALL_TIME);
+        d.lag_verdict(205, &[(p[0], Some([1; 32])), (p[1], Some([1; 32]))]);
+        assert_eq!(stalls(), 2);
+        // One peer ahead and one without the block: caught up.
+        d.lag_verdict(205, &[(p[0], Some([1; 32])), (p[2], None)]);
+        assert!(d.stall.is_none());
+        let lines = std::fs::read_to_string(&path).unwrap();
+        let rows: Vec<serde_json::Value> = lines
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["divergence"], "stall");
+        assert_eq!(rows[0]["detail"]["no_peer_answered"], true);
+        assert_eq!(rows[0]["detail"]["head"], 101);
+        assert_eq!(rows[1]["detail"]["no_peer_answered"], false);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

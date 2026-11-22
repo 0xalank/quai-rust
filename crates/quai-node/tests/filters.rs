@@ -1,9 +1,11 @@
 //! Filters and WebSocket subscriptions against go-quai v0.57.0's production
-//! filter API, event system and JSON-RPC server (fixtures/protocol/
-//! filters.json, scripts/gen_filter_vectors.py). Go ran each scenario over
-//! a test chain with logs, a side branch and pending transactions, moving
-//! the head as its core does (each new canonical block's logs, then one
-//! head event). Here the same chain is a view whose head moves; the native
+//! filter API (one in "eth" and one in "quai"), event system and JSON-RPC
+//! server (fixtures/protocol/filters.json, scripts/gen_filter_vectors.py).
+//! Go ran each scenario over a test chain with logs, a side branch and
+//! pending transactions, moving the head as its core does (each new
+//! canonical block's logs, then one head event); scenario "events" also
+//! sends appended blocks (`ChainEvent`) and unlocks (`UnlocksEvent`). Here
+//! the same chain is a view whose head moves; the native
 //! RPC serves it on a loopback port, HTTP calls go through `App::handle` and
 //! WebSocket calls through real connections. Every answer, every frame and
 //! every subscription's notifications must equal Go's. Filter and
@@ -15,7 +17,7 @@ use quai_node::rpc_view::decode_receipts;
 use quai_primitives::{decode_hex, work::WorkObject, Hash};
 use quai_rpc::view::{
     AccountState, BlockData, CallError, CallRequest, CallResult, ChainView, OutpointData,
-    ReceiptData, TxPosition, UncleKind, UtxoData, ViewError, U256,
+    ReceiptData, TxPosition, UncleKind, Unlocks, UtxoData, ViewError, U256,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -85,6 +87,9 @@ struct View {
     chain: Arc<Chain>,
     canonical: Mutex<BTreeMap<u64, Hash>>,
     events: broadcast::Sender<Hash>,
+    /// Appended blocks (`ChainEvent`) and unlocks (`UnlocksEvent`).
+    appended: broadcast::Sender<Hash>,
+    unlocked: broadcast::Sender<Arc<Unlocks>>,
 }
 fn unavailable() -> ViewError {
     ViewError::Unavailable("not in the fixture".into())
@@ -92,10 +97,14 @@ fn unavailable() -> ViewError {
 impl View {
     fn new(chain: Arc<Chain>, head: Hash) -> Self {
         let (events, _) = broadcast::channel(64);
+        let (appended, _) = broadcast::channel(64);
+        let (unlocked, _) = broadcast::channel(64);
         let v = Self {
             chain,
             canonical: Mutex::new(BTreeMap::new()),
             events,
+            appended,
+            unlocked,
         };
         v.set_head(head);
         v
@@ -183,6 +192,12 @@ impl ChainView for View {
     }
     fn head_events(&self) -> Option<broadcast::Receiver<Hash>> {
         Some(self.events.subscribe())
+    }
+    fn chain_events(&self) -> Option<broadcast::Receiver<Hash>> {
+        Some(self.appended.subscribe())
+    }
+    fn unlock_events(&self) -> Option<broadcast::Receiver<Arc<Unlocks>>> {
+        Some(self.unlocked.subscribe())
     }
 }
 
@@ -358,8 +373,9 @@ async fn run(chain: Arc<Chain>, s: &Value) -> Result<usize, String> {
         view.clone(),
     )
     .unwrap();
-    // go-quai makes its filter API when the node starts.
+    // go-quai makes its filter APIs ("eth" and "quai") when the node starts.
     let api = app.filter_api().unwrap().clone();
+    let eth_api = app.filter_api_in("eth").unwrap().clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -412,8 +428,9 @@ async fn run(chain: Arc<Chain>, s: &Value) -> Result<usize, String> {
                     let want_v: Value = serde_json::from_str(want).unwrap();
                     let sub = want_v["params"]["subscription"].as_str().unwrap();
                     let real = &ids.real[sub];
+                    let method = want_v["method"].as_str().unwrap();
                     let prefix = format!(
-                        "{{\"jsonrpc\":\"2.0\",\"method\":\"quai_subscription\",\"params\":{{\"subscription\":\"{real}\",\"result\":"
+                        "{{\"jsonrpc\":\"2.0\",\"method\":\"{method}\",\"params\":{{\"subscription\":\"{real}\",\"result\":"
                     );
                     let matches = |t: &String| {
                         t.starts_with(&prefix)
@@ -440,17 +457,35 @@ async fn run(chain: Arc<Chain>, s: &Value) -> Result<usize, String> {
             }
             "head" => {
                 let head = chain.names[step["head"].as_str().unwrap()];
-                let before = api.handled();
+                let before = (api.handled(), eth_api.handled());
                 view.set_head(head);
                 view.events.send(head).unwrap();
                 let deadline = std::time::Instant::now() + Duration::from_secs(10);
-                while api.handled() == before {
+                while api.handled() == before.0 || eth_api.handled() == before.1 {
                     assert!(
                         std::time::Instant::now() < deadline,
                         "{at}: head not handled"
                     );
                     tokio::time::sleep(Duration::from_millis(5)).await;
                 }
+            }
+            "chain" => {
+                let block = chain.names[step["block"].as_str().unwrap()];
+                view.appended.send(block).unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            "unlocks" => {
+                let unlocks = Unlocks {
+                    block_hash: chain.names[step["block"].as_str().unwrap()],
+                    addresses: step["addresses"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(fixed)
+                        .collect(),
+                };
+                view.unlocked.send(Arc::new(unlocks)).unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
             "notifications" => {
                 let k = step["conn"].as_u64().unwrap();
@@ -459,7 +494,11 @@ async fn run(chain: Arc<Chain>, s: &Value) -> Result<usize, String> {
                 let mut other = vec![];
                 for text in conn.drain().await {
                     let v: Value = serde_json::from_str(&text).unwrap();
-                    if v["method"] == "quai_subscription" {
+                    let notice = v["method"]
+                        .as_str()
+                        .is_some_and(|m| m.ends_with("_subscription"))
+                        && v.get("id").is_none();
+                    if notice {
                         let sub = v["params"]["subscription"].as_str().unwrap();
                         let sub = ids.name.get(sub).cloned().unwrap_or(sub.to_string());
                         by.entry(sub)
@@ -552,7 +591,7 @@ fn filters_and_subscriptions_match_go() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
-    assert_eq!(total, 311);
+    assert_eq!(total, 358);
 }
 
 /// A head that moves back onto a block that is already canonical (a

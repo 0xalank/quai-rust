@@ -560,3 +560,287 @@ fn pool_follows_the_reorg() {
     p.finish(&log).unwrap();
     std::fs::remove_dir_all(data).unwrap();
 }
+
+/// The catch-up by number of tip mode (`tip::catch_up_from`), which a node
+/// far behind the peers runs after a sleep or a network change. On branch
+/// A at 12 while the peers hold branch B, it starts at 4 (8 below the head,
+/// shared), takes B's blocks 9..=16 and moves the head to B at its block 15,
+/// as go-quai's coordinator did. A source whose block at the start is not
+/// this node's stops at once.
+#[test]
+fn a_catch_up_by_number_takes_the_peers_branch() {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch("catch-up");
+    let mut p = opened(&data, false, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    p.enable_tip().unwrap();
+    for h in &a[1..=12] {
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
+    }
+    assert_eq!(p.tip().unwrap().head(), (ha[12], 12));
+    let (start, heads) = quai_node::tip::catch_up_start(&p).unwrap();
+    assert_eq!(start, (ha[4], 4));
+    assert_eq!(heads[2], (ha[4], 4));
+    let mut detector = quai_node::divergence::Detector::new(None, None, log);
+    let mut stats = quai_node::tip::TipStats::default();
+    let stop = AtomicBool::new(false);
+    // Another block at the start: nothing is offered.
+    let mut other = a[4].clone();
+    other.records[2].as_mut().unwrap().hash = [9; 32];
+    let mut source = Heights(vec![other, a[5].clone()].into());
+    let done = quai_node::tip::catch_up_from(
+        &mut p,
+        &mut source,
+        start,
+        &stop,
+        &log,
+        &mut detector,
+        &mut stats,
+        None,
+    )
+    .unwrap();
+    assert_eq!((done.offered, done.accepted), (0, 0));
+    assert!(done.end.contains("not this node's"), "{}", done.end);
+    assert_eq!(p.tip().unwrap().head(), (ha[12], 12));
+    // The peers' chain: branch B from the shared block 4.
+    let mut source = Heights(b[4..].iter().cloned().collect());
+    let done = quai_node::tip::catch_up_from(
+        &mut p,
+        &mut source,
+        start,
+        &stop,
+        &log,
+        &mut detector,
+        &mut stats,
+        None,
+    )
+    .unwrap();
+    // 5..=8 are known; B's 9..=16 are new, and the head moves at 15.
+    assert_eq!(done.offered, 12);
+    assert_eq!(done.accepted, 8);
+    assert_eq!(done.reorgs, 1);
+    assert_eq!(done.rejected, None);
+    assert_eq!(done.end, "the source ended");
+    assert_eq!(p.tip().unwrap().head(), (hb[16], 16));
+    assert_eq!(
+        (stats.accepted, stats.reorgs, stats.reorged_blocks),
+        (8, 1, 4)
+    );
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+/// The RPC's appended-block events (go-quai's `ChainEvent`) in tip mode:
+/// every checked block, canonical or not, in the order it was offered; a
+/// block the head choice did not take is still found by hash
+/// (`GetBlockOrCandidateByHash`). With state, the rolling fee window
+/// (`txpool_getRollingFeeInfo`) appears once a block with a Quai or Qi
+/// transaction executes.
+fn appended_blocks_reach_the_rpc(state: bool) {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch(&format!("appended-{state}"));
+    let mut p = opened(&data, state, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    let (view, live) = p.live_view().unwrap();
+    let mut chain = view.chain_events().unwrap();
+    assert_eq!(view.rolling_fee_info(), None);
+    p.enable_tip().unwrap();
+    for h in a[1..=16].iter().chain(&b[9..=12]) {
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
+    }
+    let mut seen = vec![];
+    while let Ok(h) = chain.try_recv() {
+        seen.push(h);
+    }
+    let want: Vec<Hash> = ha[1..=16].iter().chain(&hb[9..=12]).copied().collect();
+    assert_eq!(seen, want);
+    // B's blocks 9..=12 are not canonical; the view finds them by hash.
+    assert_eq!(p.tip().unwrap().head(), (ha[16], 16));
+    assert_eq!(view.block_by_number(10).unwrap().unwrap().hash, ha[10]);
+    let side = view.block_or_candidate(&hb[10]).unwrap().unwrap();
+    assert_eq!((side.hash, side.number), (hb[10], 10));
+    let pinned = view.pinned().unwrap();
+    assert_eq!(
+        pinned.block_or_candidate(&hb[11]).unwrap().unwrap().hash,
+        hb[11]
+    );
+    if state {
+        let with_fees = a[1..=16].iter().any(|h| {
+            let r = quai_consensus::history::Record::decode(&h.zone().block).unwrap();
+            r.object()
+                .transactions()
+                .iter()
+                .any(|t| !matches!(t.kind(), quai_primitives::transaction::Kind::External(_)))
+        });
+        assert_eq!(view.rolling_fee_info().is_some(), with_fees);
+    } else {
+        assert_eq!(view.rolling_fee_info(), None);
+    }
+    drop((view, live, chain, pinned));
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    std::fs::remove_dir_all(data).unwrap();
+}
+#[test]
+fn appended_blocks_reach_the_rpc_with_state() {
+    appended_blocks_reach_the_rpc(true);
+}
+#[test]
+fn appended_blocks_reach_the_rpc_without_state() {
+    appended_blocks_reach_the_rpc(false);
+}
+
+/// Answers to the peers' requests from the block store (`serve.rs`): zone
+/// hashes by number (the genesis at 0), a zone block by hash or number, ten
+/// blocks from a hash or none (go-quai `GetWorkObjectsFrom`), a block the
+/// head choice did not take, and go-quai's "not found" for other
+/// locations and for what the store does not hold.
+#[test]
+fn the_block_store_answers_peer_requests_as_go_quai() {
+    use prost::Message;
+    use quai_network::public::serve::Store;
+    use quai_primitives::schema::{
+        common::{ProtoHash, ProtoLocation},
+        quaiprotocol::{
+            quai_request_message as rq, quai_response_message as rs, QuaiRequestMessage,
+        },
+    };
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch("serve");
+    let mut p = opened(&data, false, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    let (view, live) = p.live_view().unwrap();
+    p.enable_tip().unwrap();
+    for h in a[1..=16].iter().chain(&b[9..=10]) {
+        p.offer(h.clone(), &log).unwrap();
+    }
+    // The tip publishes its head to the view when the processor finishes or
+    // checkpoints; publish it here as a run does.
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    let chain = Chain::for_environment("local").unwrap();
+    let server = quai_node::serve::StoreServer::new(view.share(), ha[0], chain.location());
+    let ask = |location: Vec<u8>, data: rq::Data, kind: rq::Request| {
+        server.answer(&QuaiRequestMessage {
+            id: 1,
+            location: Some(ProtoLocation { value: location }),
+            data: Some(data),
+            request: Some(kind),
+        })
+    };
+    let zone = chain.location().to_vec();
+    let num = |n: u64| {
+        rq::Data::Number(if n == 0 {
+            vec![]
+        } else {
+            n.to_be_bytes().to_vec()
+        })
+    };
+    let by_hash = |h: Hash| rq::Data::Hash(ProtoHash { value: h.to_vec() });
+    let hash_of = |wo: &quai_primitives::schema::block::ProtoWorkObject| -> Hash {
+        let raw = wo.encode_to_vec();
+        quai_consensus::history::Record::decode(&raw).unwrap().id()
+    };
+    for (n, want) in [(0u64, ha[0].to_vec()), (5, ha[5].to_vec()), (99, vec![])] {
+        let Some(rs::Response::BlockHash(h)) = ask(
+            zone.clone(),
+            num(n),
+            rq::Request::BlockHash(Default::default()),
+        ) else {
+            panic!("no block hash answer for {n}")
+        };
+        assert_eq!(h.value, want, "hash at {n}");
+    }
+    // A block by hash and by number.
+    for data in [by_hash(ha[3]), num(3)] {
+        let Some(rs::Response::WorkObjectBlockView(v)) = ask(
+            zone.clone(),
+            data,
+            rq::Request::WorkObjectBlock(Default::default()),
+        ) else {
+            panic!("no block answer")
+        };
+        assert_eq!(hash_of(v.work_object.as_ref().unwrap()), ha[3]);
+    }
+    // Ten blocks from a hash: 2..=11.
+    let Some(rs::Response::WorkObjectBlocksView(v)) = ask(
+        zone.clone(),
+        by_hash(ha[2]),
+        rq::Request::WorkObjectBlocks(Default::default()),
+    ) else {
+        panic!("no blocks answer")
+    };
+    let got: Vec<Hash> = v
+        .work_objects
+        .iter()
+        .map(|b| hash_of(b.work_object.as_ref().unwrap()))
+        .collect();
+    assert_eq!(got, ha[2..=11].to_vec());
+    // From 10 only seven blocks follow: none, as go-quai answers.
+    let Some(rs::Response::WorkObjectBlocksView(v)) = ask(
+        zone.clone(),
+        by_hash(ha[10]),
+        rq::Request::WorkObjectBlocks(Default::default()),
+    ) else {
+        panic!("no blocks answer")
+    };
+    assert!(v.work_objects.is_empty());
+    // A side-branch block the node appended is found by hash.
+    let Some(rs::Response::WorkObjectBlockView(v)) = ask(
+        zone.clone(),
+        by_hash(hb[10]),
+        rq::Request::WorkObjectBlock(Default::default()),
+    ) else {
+        panic!("no block answer")
+    };
+    assert_eq!(hash_of(v.work_object.as_ref().unwrap()), hb[10]);
+    // Unknown blocks, header views and dominant locations: not found.
+    for (location, data, kind) in [
+        (
+            zone.clone(),
+            by_hash([7; 32]),
+            rq::Request::WorkObjectBlock(Default::default()),
+        ),
+        (
+            zone.clone(),
+            by_hash(ha[3]),
+            rq::Request::WorkObjectHeader(Default::default()),
+        ),
+        (
+            vec![0],
+            by_hash(ha[3]),
+            rq::Request::WorkObjectBlock(Default::default()),
+        ),
+        (vec![], num(1), rq::Request::BlockHash(Default::default())),
+    ] {
+        let answer = ask(location, data.clone(), kind.clone());
+        let not_found = quai_network::public::serve::NotFound.answer(&QuaiRequestMessage {
+            id: 1,
+            location: None,
+            data: Some(data),
+            request: Some(kind),
+        });
+        assert_eq!(answer, not_found);
+    }
+    drop((server, view, live));
+    std::fs::remove_dir_all(data).unwrap();
+}

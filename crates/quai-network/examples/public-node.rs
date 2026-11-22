@@ -225,6 +225,9 @@ async fn main() -> Res<()> {
                     Event::Disconnected { peer, cause } => targets.contains(&peer).then(|| {
                         json!({"t": t, "event": "target_disconnected", "peer": peer.to_string(), "cause": cause})
                     }),
+                    Event::DeadConnection { peer, error } => targets.contains(&peer).then(|| {
+                        json!({"t": t, "event": "target_dead_connection", "peer": peer.to_string(), "error": error})
+                    }),
                     Event::DialFailed { peer, error } => {
                         s.dial_failures += 1;
                         // Every failed dial to a target, and the first 40 others.

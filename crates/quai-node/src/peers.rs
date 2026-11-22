@@ -30,7 +30,7 @@ use prost::Message;
 use quai_consensus::verifier::PINNED_SCHEDULE as SCHEDULE;
 use quai_network::{
     decode_envelope,
-    public::{Event, PublicNode, COLOSSEUM_BOOTNODES},
+    public::{PublicNode, COLOSSEUM_BOOTNODES},
     response,
     transport::WireStream,
     RequestBook,
@@ -1465,38 +1465,30 @@ impl BlockSource for PeerSource {
 /// Dial the configured and the public peers; every connected peer that
 /// answers the genesis check becomes a source.
 async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: crate::log::Log) {
-    let events = node.clone();
-    let candidates = shared.clone();
     // Numbers every synced peer has: the start of the head probes.
     let hints = [o.heads[0].1, o.heads[1].1, o.start];
-    tokio::spawn(async move {
-        let mut tried = HashSet::new();
-        while let Ok(event) = events.next().await {
-            if candidates.stop.load(Ordering::Relaxed) {
-                return;
-            }
-            if let Event::Connected { peer, .. } = event {
-                if !tried.insert(peer) {
-                    continue;
-                }
-                let (shared, node) = (candidates.clone(), events.clone());
-                tokio::spawn(async move {
-                    match shared.add(node, peer, hints).await {
-                        Ok(()) => log.info(&format!("peer {peer}: source")),
-                        Err(e) => log.debug(&format!("peer {peer}: not a source: {e}")),
-                    }
-                });
-            }
-        }
-    });
-    // Peers connected before this source started (by a bootstrap) send no
-    // new Connected event.
-    for peer in node.verified_peers() {
-        let (shared, node) = (shared.clone(), node.clone());
+    // Every connected peer, the ones a bootstrap or the gossip intake
+    // connected included, is tried once as a source. The peer list is
+    // polled: the node's event queue belongs to the gossip intake, which
+    // runs beside this source when the node catches up in tip mode.
+    {
+        let (node, shared) = (node.clone(), shared.clone());
         tokio::spawn(async move {
-            match shared.add(node, peer, hints).await {
-                Ok(()) => log.info(&format!("peer {peer}: source")),
-                Err(e) => log.debug(&format!("peer {peer}: not a source: {e}")),
+            let mut tried = HashSet::new();
+            while !shared.stop.load(Ordering::Relaxed) {
+                for peer in node.connected_peers() {
+                    if !tried.insert(peer) {
+                        continue;
+                    }
+                    let (shared, node) = (shared.clone(), node.clone());
+                    tokio::spawn(async move {
+                        match shared.add(node, peer, hints).await {
+                            Ok(()) => log.info(&format!("peer {peer}: source")),
+                            Err(e) => log.debug(&format!("peer {peer}: not a source: {e}")),
+                        }
+                    });
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         });
     }

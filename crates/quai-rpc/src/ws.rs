@@ -107,14 +107,14 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
                 text.push('\n');
                 let _ = conn.out.send(text).await;
             }
-            if let Some(api) = app.filter_api() {
-                for sub in created {
-                    api.activate(&sub);
+            for api in app.filter_apis() {
+                for sub in &created {
+                    api.activate(sub);
                 }
             }
         });
     }
-    if let Some(api) = app.filter_api() {
+    for api in app.filter_apis() {
         api.close(id);
     }
     // Let queued answers go out, then stop the writer.

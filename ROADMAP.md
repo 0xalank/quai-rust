@@ -51,9 +51,9 @@ by the coordinator.
 | G3 | EVM, Qi and ETX execution | Partial |
 | G4 | PoW, AuxPoW, workshares, fork choice | Partial |
 | G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; tip mode: a state version per canonical block, reorgs across commits and a compaction and crashes in a reorg tested on the private fixture |
-| G6–G7 | P2P and sync | Mainnet sync by height from public peers; stateless head-follow live with every check and go-quai's head choice |
-| G8 | Mainnet shadow sync | Shadow run (test tool) and divergence detector; 2 h 20 min live, 0 divergences; the 2-week run not started |
-| G9 | Live RPC, tx pool, wallets | Reads on replayed state; tx pool equal to Go (363/363 oracle steps); filters and WebSocket subscriptions (311/311 oracle steps) and the Qi and conversion methods (385/385 oracle calls) equal to Go; Quais.js alpha.57 and alpha.58 run against the node; a submitted transaction reaches miners only through sharing clients |
+| G6–G7 | P2P and sync | Mainnet sync by height from public peers; stateless head-follow live with every check and go-quai's head choice; dead connections closed by ping, a catch-up by number after a sleep or a network change (live: a 35-minute freeze closed in 2 minutes); peers' zone requests answered from the block store |
+| G8 | Mainnet shadow sync | Shadow run (test tool) and divergence detector; the 2-week run since 2026-11-19 16:04Z (binary `efb7a9e`), 0 divergences |
+| G9 | Live RPC, tx pool, wallets | Reads on replayed state; every read method and subscription that a default go-quai zone node serves (`docs/rpc-parity.md`: 123 of 123 class (a) names, `eth_` included); tx pool equal to Go (363/363 oracle steps); filters and WebSocket subscriptions (358/358 oracle steps), the Qi and conversion methods (385/385 oracle calls), the calls (602/602) and the other reads (349/349, and 6/6 work-object JSON) equal to Go; Quais.js alpha.57 and alpha.58 run against the node; a submitted transaction reaches miners only through sharing clients |
 | G10–G11 | Production tests, mining | Not started |
 
 `NETWORK_READINESS.md` keeps the detailed gate definitions.
@@ -337,10 +337,15 @@ divergence from Go.
        peers, 2 relay reservations, reached through a relay circuit, 859/859
        gossip messages accepted, 0 rejected. Chosen differences from Go (listed
        in `public/mod.rs`): no relay service, the DHT stays a client until the
-       node is public, scores per peer and not per topic. Open: the node
-       answers inbound requests with "not found" until it has validated state
-       (step 3, Phase 3.1), so two Rust public nodes fail each other's genesis
-       check; Kademlia contacts with only circuit addresses are not dialed.
+       node is public, scores per peer and not per topic. With a block store
+       the node answers the peers' zone requests from it (`e6b423d`: block
+       hashes by number, the genesis at 0, blocks by hash or number, ten
+       blocks from a hash as `GetWorkObjectsFrom`), so two Rust public nodes
+       pass each other's genesis check; prime, region and header views stay
+       "not found" (the store keeps the zone chain), and so does every
+       request to a run without a store. Every connection runs libp2p ping;
+       one that stops answering is closed (`ab7973a`). Open: Kademlia
+       contacts with only circuit addresses are not dialed.
 3. [x] Follow the live head. Send gossiped blocks and workshares through the
        same validation path.
        Done (`43e035d`): go-quai's head choice for slice [0 0]
@@ -428,6 +433,30 @@ divergence from Go.
        Left: a stateful run at the head needs state near the head: peers
        serve no state (go-quai `GetTrieNode` is "todo"), and the rolling
        replay is at zone 1.45M of 11.2M.
+       Fixed (branch `node-live`, `ab7973a`, `be6ca19`): the 2-week shadow
+       run stalled for 4 h at zone 11,247,721 after the Mac slept
+       (2026-11-21): the dead TCP connections stayed open (no reset;
+       gossipsub keeps a connection, and rust-yamux has no keep-alive),
+       tip mode fetched one block by number every 20 s and walked at most
+       256 missing ancestors by hash (the gap was 3,202 blocks), and the
+       stall check took failed requests for "no block there". Now: every
+       connection runs libp2p ping (15 s, 20 s time-out; go-quai's
+       go-libp2p hosts answer it) and a failure closes it; a gossip block
+       more than the hand-off margin plus 64 above the head, or peers ahead
+       at two checks with a head that did not move, starts a catch-up by
+       number: the sync's
+       peer source from the canonical block 8 below the head, every height
+       through the gossip path's checks and head choice, to the sync's
+       hand-off (`tip::catch_up_from`); the checks ask a different set of
+       4 peers each time, and with no peer in a slot or no answer twice
+       the node dials the boot peers and walks the DHT again; no answer
+       is no longer "caught up", and a head that stays put without
+       answers for 3 minutes is a stall (`no_peer_answered`). Tests: a
+       peer whose runtime is blocked loses its connection after one ping
+       time-out; on the fixture a node on branch A at 12 catches up from a
+       source on branch B, starts at the shared block 4 and moves to B at
+       its block 15 as go-quai did, and another block at the start stops
+       it; the stall verdict's cases.
 4. [ ] Run next to a Go node and compare heads and roots.
        Shadow run, a TEST TOOL and not for production (branch `head-follow`):
        `quai-node run --stateless --shadow-bootstrap <zone block hash|auto>`
@@ -622,13 +651,9 @@ Gate: Quais.js and Pelagus work against the Rust node.
        order (equal as JSON). A WebSocket syntax error answers "parse error"
        (Go: its JSON decoder's text); both then close. `quai_getFilterLogs`
        and `quai_getLogs` return logs in block order (Go: in the order its 8
-       goroutines finish). Not served: the subscriptions "newHeadsV2",
-       "newChainBlocks(V2)", "newWorkshares(V2)", "accesses",
-       "pendingHeader" and "blockTemplateUpdates" (they need appended-block,
-       gossip-workshare and unlock events from the processor, or a miner),
-       the `eth_` namespace, `quai_getPendingHeader` (a miner),
-       `txpool_getRollingFeeInfo` (the processor's per-block fee figures),
-       `quai_getProof`, `quai_clientVersion` and `web3_clientVersion`.
+       goroutines finish). The other gaps of this step are closed below
+       (parity with a default zone node); the mining methods
+       (`quai_getPendingHeader` and the rest of class (b)) are not served.
        `quai_getLockedBalance` of a Quai address answers 0x0, as go-quai
        does without `--node.index-address-utxos` (its default; the local
        node ran so). Pelagus reads it with each Quai
@@ -640,6 +665,86 @@ Gate: Quais.js and Pelagus work against the Rust node.
        a block that a reorg removed, or created below the store's base, are
        unavailable. `quai_estimateFeeForQi` needs state (the head's UTXO set
        size).
+       Parity with a default go-quai zone node (branch `rpc-parity`):
+       `docs/rpc-parity.md` lists every method and subscription that
+       go-quai v0.57.0 registers for a zone node, with its Go function and
+       file:line, whether a node with default flags serves it over HTTP and
+       over WebSocket, the Rust status and its class (Go oracle
+       `reference/rpc-inventory`, `scripts/gen_rpc_inventory.py`: the
+       rpc.API literals of quaiapi.GetAPIs and Quai.APIs, makeConfigNode's
+       configuration and the production node.Node, probed without running
+       a handler; `scripts/render_rpc_parity.py` writes the table and
+       `compatibility/rpc-parity.json`, which a quai-rpc unit test checks
+       against the served names). 175 names (153 methods, 22
+       subscriptions in `quai` and `eth`): class (a) 123, (b) 37, (c) 15,
+       none of (d) (go-quai registers no signer method). A default node
+       serves 85 over HTTP and 160 over WebSocket: `--rpc.ws-api` is empty
+       by default, so every public API, `eth_*`, `txpool_*`, `workshare_*`
+       and the public `debug_*` included, is served over WebSocket only;
+       `web3_clientVersion`, `eth_sendTransaction` and the signer methods
+       are not registered by any go-quai node (Quais.js alpha.57 and
+       alpha.58 call no `eth_` method).
+       Ported: the 67 class (a) names that a default node served and the
+       Rust node did not; 113 native method names and 7 subscription kinds
+       in each of `quai` and `eth` now. `quai_`: `clientVersion`,
+       `getRawTransactionByBlockNumberAndIndex` and `...HashAndIndex`,
+       `getBlockOrCandidateByHash`, `baseFee`, `getLatestUTXOSetSize`,
+       `suggestFinalityDepth` (Go's `int64` conversions and Euclidean
+       division), `hashesPerQits`, `getSupplyAnalyticsForBlock` and
+       `rewardAnalytics` (a default node has no supply index: zeros less
+       the burn balance, and "0"), `getKQuaiAndUpdateBit`,
+       `getContractSize`, `getLockupsForContractAndMiner`, `getProof`
+       (go-ethereum `Trie.Prove` over the account and storage tries:
+       `mpt::Trie::prove`, `World::proof`); `net_peerCount`,
+       `net_peerCountByDirection`, `rpc_modules`,
+       `txpool_getRollingFeeInfo`; the `eth_` namespace: the 20 names that
+       run a `quai_` method's Go function, and `PublicBlockChainAPI`'s own
+       18 (`RPCMarshalETHHeader` and `RPCMarshalETHBlock`, the legacy
+       256-byte receipt bloom, `common.AddressBytes` balances that sum Qi
+       outputs in any zone, `eth_estimateGas` without the conversion and
+       Qi branches, `eth_createAccessList` at "pending" by default); one
+       filter API per namespace, as in go-quai (an `eth_` filter is not a
+       `quai_` one; any `*_unsubscribe` cancels); the subscriptions
+       "newHeadsV2", "newChainBlocks", "newChainBlocksV2" and "accesses"
+       (`RPCMarshalWorkObject("v2")`, appended-block and unlock events).
+       Go oracles, each generator first rechecked unchanged: new
+       `reference/rpc-parity` (production handlers in GetAPIs order over a
+       chain with receipts, a side branch, one committed state, a prime
+       terminus, UTXO set sizes, the address index and coinbase lockup
+       records; 353 calls in 2 scenarios, and the v1 and v2 JSON of a
+       KawPow block with an AuxPow and of two earlier blocks): 349/349
+       equal, 4 identity answers (`*_clientVersion`), 6/6 work objects;
+       `reference/rpc-calls` scenario "eth": 602/602 (198 new);
+       `reference/filters` with both namespaces and scenario "events"
+       (appended blocks, unlocks, the eth filter API): 358/358 steps,
+       three runs byte-identical. Remaining differences
+       (`docs/rpc-parity.md`): the Rust node serves `eth_*` and `txpool_*`
+       over HTTP as well; `*_clientVersion` names the Rust node and
+       `rpc_modules` lists its namespaces; "accesses" always matches
+       a Quai sender (go-quai only when the sender is cached, as in a block
+       it processed). `quai_getLockedBalance` real values: go-quai serves
+       them only with `--node.index-address-utxos`, so the default answer
+       (0x0) stays. Mining phase (class b) needs: the list at the end of
+       `docs/rpc-parity.md`. The shared go-quai checkout moved to v0.57.1
+       on 2026-11-19 at 21:37; the oracles run from a pinned clone
+       (`git clone --shared`, 33db82f2, under the worktree's `target/`),
+       and every fixture reproduces from it.
+       The live node feeds these hooks (branch `node-live`, `332dfbd`):
+       every height of the sync and every block tip mode checks, canonical
+       or not, is an appended block ("newChainBlocks(V2)"; the last 512 stay
+       readable by hash for `quai_getBlockOrCandidateByHash`, as no store
+       holds a block the head choice did not take); each executed block's
+       coinbase unlocks go to "accesses"; go-quai's `calcTxStats` per block
+       (zone_execution `TxFees`) and `calcRollingFeeInfo` give
+       `txpool_getRollingFeeInfo`; the network gives `net_peerCount` and
+       `net_peerCountByDirection` (connected peers, peers with an inbound
+       and with an outbound connection, as p2p/node/stats.go). Tests: the
+       fee window over 7 blocks equals go-quai's two functions run
+       verbatim; on the fixture 20 appended events in offer order and a
+       side-branch block found by hash. Difference: go-quai processes the
+       state of every appended block, so its unlock events and fee window
+       also cover blocks the head choice did not take; this node executes
+       canonical blocks only.
 2. [x] Tx pool and `sendRawTransaction` (`txpool` branch: `1be8b61`,
        `da7fc2a`, `6e32bff`, `65effe2`, `f83d499`, `d6e1b0d`, `0f9ddd5` and
        the commit of this text). `crates/quai-node/src/txpool` ports go-quai
@@ -1062,3 +1167,7 @@ Mining, block templates and Stratum come last.
 | 2026-11-21 | Phase 1, 2.4 | All three runs stopped at their disk floors on 2026-11-20 09:02Z (free space fell 24 GB in 8 hours, about 10 GB of it ours), each after a clean checkpoint: the rolling replay at zone 4,780,880 and the single-binary genesis replay (`efb7a9e`) at zone 1,832,747, both with every root equal; the shadow run after 6,301 heights level with the peers (11,224,704), no failure. To keep the main replay going, the genesis run's data (regenerable; history in `results/rolling-replay/genesis-efb7a9e.jsonl`) and build caches were deleted; the rolling replay and the shadow run restarted on 2026-11-21 05:24Z. The `rpc-parity` agent stopped at an account weekly limit (resets 2026-11-25) with 2 commits and uncommitted work in its worktree |
 | 2026-11-21 | Phase 1, 2.4 | Rolling replay (`efb7a9e`): 2.2M heights from zone 4,780,880 to 6,980,880 in about 14 hours, every root equal, through KawPow (prime 1,171,500), the ProgPoW grace end and InclusionDepthChange. It stopped after 3 failed exports ("no usable peer") while the Mac was on another network (gateway 100.65.0.1). Shadow run finding: after that network change or a sleep, the node stayed at zone 11,247,721 for hours while the peers reported 11,250,923; gossip intake stopped and its stall check, which asks the peers, got no answers and counted nothing. No block failed a check. A restart caught up by number in about 90 s; `shadow_run.sh` now restarts the node on such a stall (`1b084a8`). Open (node): recover gossip intake after a network change, and count a lag with no peer answers |
 | 2026-11-21 | Phase 1, 2.4 | Rolling replay (`efb7a9e`): zone 6,980,880 to 7,580,880 (2026-11-22 01:16Z), every root equal, at about 52 zone blocks/s. It passed Singularity (prime 1,530,500, between zones 6,993,763 and 7,008,433), the monthly unlock at zone 7,257,600 (the first under the Singularity forfeiture rule, `historical.rs:68`) and QiWrappingChange (prime 1,570,000, between zones 7,146,950 and 7,174,549). Shadow run (`efb7a9e`, with the stall watchdog of `1b084a8`): level with the peers at zone 11,253,876; 0 divergences, 0 failures |
+| 2026-11-21 | Phase 3.1 | rpc-parity, the paused agent's work, reviewed and committed (`8308518`, `8ae0b08`, `4dc1d24`, `b605fdf`): `docs/rpc-parity.md` lists the 175 names go-quai v0.57.0 registers for a zone node; the node serves all 123 class (a) names, `eth_` included. Go oracles: rpc-parity 349/349 plus 4 identity answers, 6/6 v1 and v2 work objects; rpc-calls "eth" 602/602; filters with both namespaces 358/358. Review changes: saturating big-endian folds (a lock, a prime terminus) and one lint |
+| 2026-11-21 | Phase 2.2, 2.3 | Branch `node-live` (`ab7973a`, `be6ca19`, `9af4dd3`, `e6b423d`): libp2p ping closes dead connections; tip mode catches up by number; no answer is no longer "caught up"; the node dials the boot peers again when no peer answers; the block store answers peers' zone requests. Live, binary `332dfbd` (sha256 `e5fc5047…`), a second test node (stateless, a store, RPC on loopback): bootstrap at zone 11,254,270, sync by number, hand-off to gossip, level with the peers; then SIGSTOP for 35 minutes at 11,255,294 (a sleep: about 430 blocks). 13 s after SIGCONT a catch-up from 11,255,292 took 339 heights in 17.5 s; 2 minutes after the resume the node was level with the peers at 11,255,726. Whole run: 594 blocks accepted in tip mode, 0 rejected, 7 reorgs of depth 1, 720 workshares valid, 0 rejected, 0 divergences, 0 failures. Before the fix a 3,202-block gap stalled the shadow run for 4 h |
+| 2026-11-21 | Phase 3.1 | `node-live` `332dfbd`: appended blocks, unlocks, the rolling fee window and the peer counts reach the RPC of `quai-node run`; the fee window over 7 blocks equals go-quai's `calcTxStats` and `calcRollingFeeInfo` run verbatim. Live on the test node: `net_peerCount` 0x2e, `net_peerCountByDirection` incoming 0x0 and outgoing 0x2e, `txpool_getRollingFeeInfo` go-quai's "no transactions processed" (stateless: nothing executed) |
+| 2026-11-21 | Phase 2, 3 | Branch `node-live` (rpc-parity, the node fixes and the RPC hooks) merged into main. Tested `9af4dd3`: workspace 78 suites, 493 passed, 0 failed (release); quai-network with native-transport 46 passed, 0 failed; fmt clean; clippy 0 errors. Open: the 2-week shadow gate (ends about 2026-12-03), the stateful shadow run (needs the replay at the head), the proto-field unwraps in consensus (Phase 3.3), Kademlia contacts with only circuit addresses, mining |

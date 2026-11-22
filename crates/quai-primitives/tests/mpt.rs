@@ -205,3 +205,43 @@ fn leaf_scans_verify_hashed_keys_and_enforce_entry_and_byte_bounds() {
         .visit_leaves(&db, 100, 4000, &mut |_, _| Ok(()))
         .is_err());
 }
+/// `Trie::prove` keeps go-ethereum's `Trie.Prove` shape: the root first,
+/// every later node referenced by hash from the node before it, the same
+/// nodes from memory and from a node store, and none for an empty trie.
+#[test]
+fn proofs_follow_hash_links_from_the_root() {
+    use quai_primitives::transaction::keccak;
+    let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0u64..300)
+        .map(|i| {
+            let value = vec![(i % 251) as u8 + 1; [1, 2, 31, 40, 70][i as usize % 5]];
+            (i.to_be_bytes().to_vec(), trie::bytes(&value))
+        })
+        .collect();
+    let t = Trie::from_secure_pairs(&pairs).unwrap();
+    let mut db = Nodes::default();
+    flush(&t, &mut db);
+    let stored = Trie::from_root(t.root());
+    for i in 0u64..320 {
+        let key = i.to_be_bytes();
+        let proof = t.prove(&mpt::NoNodes, &key).unwrap();
+        assert_eq!(proof, stored.prove(&db, &key).unwrap(), "key {i}");
+        assert_eq!(keccak(&proof[0]), t.root());
+        for pair in proof.windows(2) {
+            let link = keccak(&pair[1]);
+            assert!(pair[0].windows(32).any(|w| w == link), "key {i}");
+            assert!(pair[1].len() >= 32);
+        }
+        if i < 300 {
+            let value = &pairs[i as usize].1;
+            let last = proof.last().unwrap();
+            assert!(
+                last.windows(value.len()).any(|w| w == value.as_slice()),
+                "key {i}"
+            );
+        }
+    }
+    assert!(Trie::default()
+        .prove(&mpt::NoNodes, b"x")
+        .unwrap()
+        .is_empty());
+}

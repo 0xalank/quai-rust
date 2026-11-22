@@ -1,0 +1,19 @@
+{
+  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
+  "vectors_sha256": "c01464135ee8ff4cb25a15253494368cff6ee837715c8e743a2a05b89143a606",
+  "driver_sha256": "18881216d4366ba9b8b6881a4898343fc495f5476002028e22e925a0d8a36813",
+  "oracle_sources": {
+    "reference/header-views/main.go": "159eb8972c53cbfa05b74058224725f87eca15ab327f1f7c86de93591c33544d"
+  },
+  "go_sources": {
+    "core/types/wo.go": "d3bdd57b251584ceb85015fda4ed124bc9ce6193a2a373af8d7b743ad753c3fb",
+    "core/types/proto_block.pb.go": "efab531d5d7c01b283d477c8e558219ad74fdc3fab555616572bfb7aff877177",
+    "p2p/protocol/handler.go": "b430274c1c0ba71f83d5e47c4a3e85c36ee9dd05760861781c487a3ecff5af87",
+    "p2p/node/api.go": "9da02e355951263f934db6d3574af48350b9bb11d195fdccdc4dcbac39253c97",
+    "p2p/pb/proto_services.go": "893fd06334b803cdd0dfcb3c5b288642b350c2b942ba14a9d7248427d23d3210",
+    "go.mod": "d9ba99fb88ccabf1f2afb4d483f52074eb1263739558f8a7238c1bd499ca2a4b",
+    "go.sum": "2e7ac49ce6173998eac88d8643659faa35444fd1003383572e261619812fa779"
+  },
+  "public_network": false,
+  "runtime_go_dependency": false
+}

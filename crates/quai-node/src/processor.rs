@@ -21,7 +21,7 @@
 //!
 //! Both modes keep the region rollups of recent blocks and the prime
 //! controller state; checkpoints carry them in their prime section.
-use crate::blockstore::{self, Accepted, BlockStore, Created, UtxoChanges};
+use crate::blockstore::{self, Accepted, BlockStore, Created, DominantView, UtxoChanges};
 use crate::checkpoint::{self, Checkpoint};
 use crate::log::Log;
 use crate::pow::{Done, Job, Pool};
@@ -945,6 +945,7 @@ impl Checker {
             parent: zone.parent(2).unwrap_or_default(),
             order,
             block: h.zone().block.clone(),
+            dominant: dominant_views(h),
             receipts,
             tx_hashes,
             uncle_kinds,
@@ -978,12 +979,24 @@ impl Checker {
             .iter()
             .map(|u| uncles::code(uncles::kind(u, uncles::pow_hash(&self.caches, u))))
             .collect();
+        // Its prime and region views, from the window's histories.
+        let dominant = (order as usize..2)
+            .filter_map(|c| {
+                let r = self.histories[c].get(&hash).ok()?;
+                Some(DominantView {
+                    ctx: c as u8,
+                    number: r.number(c).ok()?,
+                    block: r.bytes().to_vec(),
+                })
+            })
+            .collect();
         Ok(Accepted {
             number,
             hash,
             parent: zone.parent(2).unwrap_or_default(),
             order,
             block: zone.bytes().to_vec(),
+            dominant,
             receipts: None,
             tx_hashes,
             uncle_kinds,
@@ -1968,6 +1981,18 @@ impl Processor {
 }
 
 /// The genesis as the store keeps it.
+/// The prime and region views a height carries (a coincident block).
+fn dominant_views(h: &Height) -> Vec<DominantView> {
+    h.records[..2]
+        .iter()
+        .flatten()
+        .map(|r| DominantView {
+            ctx: r.context.index() as u8,
+            number: r.number,
+            block: r.block.clone(),
+        })
+        .collect()
+}
 fn genesis_block(slot: &Slot, receipts: bool, state: bool) -> Accepted {
     let zone = slot.height.zone();
     Accepted {
@@ -1976,6 +2001,7 @@ fn genesis_block(slot: &Slot, receipts: bool, state: bool) -> Accepted {
         parent: [0; 32],
         order: 0,
         block: zone.block.clone(),
+        dominant: dominant_views(&slot.height),
         // The genesis has no transactions: its receipts are known to be
         // none whenever the node keeps receipts (Go export or execution).
         receipts: (receipts || state).then(|| zone.receipts.clone()),

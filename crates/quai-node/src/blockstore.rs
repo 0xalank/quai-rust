@@ -51,6 +51,16 @@ const CREATED: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.create
 const SPENT: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.spent.v1");
 const ADDR: TableDefinition<&[u8], ()> = TableDefinition::new("blocks.address.v1");
 const OUTS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks.outpoint.v1");
+/// Prime and region views by context and hash ([ctx] ++ hash), kept after a
+/// reorg as zone blocks are.
+const DOM_BLOCKS: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks.dominant.v1");
+/// The canonical prime and region hashes by context and number
+/// ([ctx] ++ number).
+const DOM_CANON: TableDefinition<&[u8], &[u8]> =
+    TableDefinition::new("blocks.dominant.canonical.v1");
+/// The dominant (context, number) pairs each canonical zone height added,
+/// for rollbacks.
+const DOM_AT: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.dominant.at.v1");
 const ENTRY_VERSION: u8 = 1;
 
 fn bad(e: impl std::fmt::Display) -> io::Error {
@@ -92,6 +102,29 @@ pub struct Accepted {
     pub parent_entropy: Option<Hash>,
     /// With state: the UTXOs the block created and the outpoints it removed.
     pub utxos: Option<UtxoChanges>,
+    /// The prime and region views of a coincident block (go-quai keeps a
+    /// block in each context it is coincident in).
+    pub dominant: Vec<DominantView>,
+}
+/// A prime (0) or region (1) view of a zone block: its number in that
+/// context and its work object bytes as the source sent them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DominantView {
+    pub ctx: u8,
+    pub number: u64,
+    pub block: Vec<u8>,
+}
+fn dom_key(ctx: u8, hash: &Hash) -> [u8; 33] {
+    let mut k = [0u8; 33];
+    k[0] = ctx;
+    k[1..].copy_from_slice(hash);
+    k
+}
+fn dom_number_key(ctx: u8, number: u64) -> [u8; 9] {
+    let mut k = [0u8; 9];
+    k[0] = ctx;
+    k[1..].copy_from_slice(&number.to_be_bytes());
+    k
 }
 #[derive(Clone, Debug, Default)]
 pub struct UtxoChanges {
@@ -305,9 +338,10 @@ impl BlockStore {
             for t in [CANON, CREATED, SPENT] {
                 w.open_table(t).map_err(store_err)?;
             }
-            for t in [BLOCKS, ENTROPY, TXS, OUTS] {
+            for t in [BLOCKS, ENTROPY, TXS, OUTS, DOM_BLOCKS, DOM_CANON] {
                 w.open_table(t).map_err(store_err)?;
             }
+            w.open_table(DOM_AT).map_err(store_err)?;
             w.open_table(ADDR).map_err(store_err)?;
             let head = meta
                 .get("head")
@@ -425,6 +459,27 @@ impl BlockStore {
             .map_err(store_err)?
             .insert(a.number, a.hash.as_slice())
             .map_err(store_err)?;
+        if !a.dominant.is_empty() {
+            let mut blocks = w.open_table(DOM_BLOCKS).map_err(store_err)?;
+            let mut canon = w.open_table(DOM_CANON).map_err(store_err)?;
+            let mut at = vec![];
+            for d in &a.dominant {
+                blocks
+                    .insert(dom_key(d.ctx, &a.hash).as_slice(), d.block.as_slice())
+                    .map_err(store_err)?;
+                canon
+                    .insert(
+                        dom_number_key(d.ctx, d.number).as_slice(),
+                        a.hash.as_slice(),
+                    )
+                    .map_err(store_err)?;
+                at.extend(dom_number_key(d.ctx, d.number));
+            }
+            w.open_table(DOM_AT)
+                .map_err(store_err)?
+                .insert(a.number, at.as_slice())
+                .map_err(store_err)?;
+        }
         if let Some(e) = &a.parent_entropy {
             w.open_table(ENTROPY)
                 .map_err(store_err)?
@@ -497,6 +552,8 @@ impl BlockStore {
             let mut spent = w.open_table(SPENT).map_err(store_err)?;
             let mut addr = w.open_table(ADDR).map_err(store_err)?;
             let mut outs = w.open_table(OUTS).map_err(store_err)?;
+            let mut dom_canon = w.open_table(DOM_CANON).map_err(store_err)?;
+            let mut dom_at = w.open_table(DOM_AT).map_err(store_err)?;
             let mut n = top;
             while n > height {
                 let Some(hash) = canon
@@ -508,6 +565,23 @@ impl BlockStore {
                     continue;
                 };
                 let hash = hash_of(&hash)?;
+                // The prime and region numbers this block held leave the
+                // canonical chains with it.
+                if let Some(raw) = dom_at
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for key in raw.chunks_exact(9) {
+                        let held = dom_canon
+                            .get(key)
+                            .map_err(store_err)?
+                            .is_some_and(|v| v.value() == hash.as_slice());
+                        if held {
+                            dom_canon.remove(key).map_err(store_err)?;
+                        }
+                    }
+                }
                 if let Some(raw) = blocks.get(hash.as_slice()).map_err(store_err)? {
                     let entry = decode_entry(hash, raw.value())?;
                     for id in entry.tx_hashes {
@@ -659,6 +733,30 @@ impl StoreReader {
             .map(|v| hash_of(v.value()))
             .transpose()
     }
+    /// The canonical hash at `number` of the prime (0) or region (1) chain.
+    pub fn dominant_hash_at(&self, ctx: u8, number: u64) -> io::Result<Option<Hash>> {
+        let t = match self.txn.open_table(DOM_CANON) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        t.get(dom_number_key(ctx, number).as_slice())
+            .map_err(store_err)?
+            .map(|v| hash_of(v.value()))
+            .transpose()
+    }
+    /// The work object bytes of a prime (0) or region (1) view, canonical or
+    /// not.
+    pub fn dominant(&self, ctx: u8, hash: &Hash) -> io::Result<Option<Vec<u8>>> {
+        let t = match self.txn.open_table(DOM_BLOCKS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        Ok(t.get(dom_key(ctx, hash).as_slice())
+            .map_err(store_err)?
+            .map(|v| v.value().to_vec()))
+    }
     /// A stored block, canonical or not.
     pub fn block(&self, hash: &Hash) -> io::Result<Option<Stored>> {
         let t = self.txn.open_table(BLOCKS).map_err(store_err)?;
@@ -747,6 +845,7 @@ mod tests {
     }
     fn block(n: u64, parent: Hash, txs: Vec<Hash>, utxos: Option<UtxoChanges>) -> Accepted {
         Accepted {
+            dominant: vec![],
             number: n,
             hash: [n as u8 + 1; 32],
             parent,
@@ -905,5 +1004,68 @@ mod tests {
         let s = BlockStore::open(&path, true).unwrap();
         assert_eq!(s.head(), Some((1, b1.hash)));
         assert_eq!(s.base(), Some(0));
+    }
+
+    /// Prime and region views follow the zone chain: by number while their
+    /// zone block is canonical, by hash after a reorg removed it (as zone
+    /// blocks), and a number another branch reuses points to that branch.
+    #[test]
+    fn dominant_views_follow_appends_and_rollbacks() {
+        let path = tmp("dominant");
+        let mut s = BlockStore::open(&path, false).unwrap();
+        let view = |ctx: u8, number: u64, tag: u8| DominantView {
+            ctx,
+            number,
+            block: vec![tag; 3],
+        };
+        let b0 = block(0, [0; 32], vec![], None);
+        s.stage(b0.clone()).unwrap();
+        // Height 1 is a prime block (prime 1, region 1), height 2 a zone
+        // block, height 3 a region block (region 2).
+        let mut b1 = block(1, b0.hash, vec![], None);
+        b1.dominant = vec![view(0, 1, 0xa1), view(1, 1, 0xb1)];
+        let b2 = block(2, b1.hash, vec![], None);
+        let mut b3 = block(3, b2.hash, vec![], None);
+        b3.dominant = vec![view(1, 2, 0xb2)];
+        for b in [&b1, &b2, &b3] {
+            s.stage(b.clone()).unwrap();
+        }
+        s.flush(true).unwrap();
+        let r = s.reader().unwrap();
+        assert_eq!(r.dominant_hash_at(0, 1).unwrap(), Some(b1.hash));
+        assert_eq!(r.dominant_hash_at(1, 1).unwrap(), Some(b1.hash));
+        assert_eq!(r.dominant_hash_at(1, 2).unwrap(), Some(b3.hash));
+        assert_eq!(r.dominant_hash_at(0, 2).unwrap(), None);
+        assert_eq!(r.dominant(0, &b1.hash).unwrap(), Some(vec![0xa1; 3]));
+        assert_eq!(r.dominant(1, &b3.hash).unwrap(), Some(vec![0xb2; 3]));
+        assert_eq!(r.dominant(0, &b3.hash).unwrap(), None);
+        drop(r);
+        // A reorg to height 2 takes region 2 out of the canonical chain;
+        // its bytes stay readable by hash.
+        s.rollback_to(2).unwrap();
+        let r = s.reader().unwrap();
+        assert_eq!(r.dominant_hash_at(1, 2).unwrap(), None);
+        assert_eq!(r.dominant_hash_at(1, 1).unwrap(), Some(b1.hash));
+        assert_eq!(r.dominant(1, &b3.hash).unwrap(), Some(vec![0xb2; 3]));
+        drop(r);
+        // The other branch: its height 3 is region 2 as well.
+        let mut c3 = block(3, b2.hash, vec![], None);
+        c3.hash = [0xc3; 32];
+        c3.dominant = vec![view(1, 2, 0xc2)];
+        s.stage(c3.clone()).unwrap();
+        s.flush(true).unwrap();
+        // A rollback below both removes the prime number too.
+        let r = s.reader().unwrap();
+        assert_eq!(r.dominant_hash_at(1, 2).unwrap(), Some(c3.hash));
+        drop(r);
+        s.rollback_to(0).unwrap();
+        let r = s.reader().unwrap();
+        for (ctx, n) in [(0, 1), (1, 1), (1, 2)] {
+            assert_eq!(r.dominant_hash_at(ctx, n).unwrap(), None, "{ctx} {n}");
+        }
+        assert_eq!(r.dominant(0, &b1.hash).unwrap(), Some(vec![0xa1; 3]));
+        drop(r);
+        drop(s);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

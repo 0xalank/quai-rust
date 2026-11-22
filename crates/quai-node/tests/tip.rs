@@ -708,8 +708,9 @@ fn appended_blocks_reach_the_rpc_without_state() {
 /// Answers to the peers' requests from the block store (`serve.rs`): zone
 /// hashes by number (the genesis at 0), a zone block by hash or number, ten
 /// blocks from a hash or none (go-quai `GetWorkObjectsFrom`), a block the
-/// head choice did not take, and go-quai's "not found" for other
-/// locations and for what the store does not hold.
+/// head choice did not take, header views, the prime and region views of
+/// coincident blocks, and go-quai's "not found" for other locations and for
+/// what the store does not hold.
 #[test]
 fn the_block_store_answers_peer_requests_as_go_quai() {
     use prost::Message;
@@ -813,7 +814,65 @@ fn the_block_store_answers_peer_requests_as_go_quai() {
         panic!("no block answer")
     };
     assert_eq!(hash_of(v.work_object.as_ref().unwrap()), hb[10]);
-    // Unknown blocks, header views and dominant locations: not found.
+    // A header view: the block without transactions, manifest and
+    // interlink hashes (present and empty, as go-quai encodes them).
+    let Some(rs::Response::WorkObjectHeaderView(v)) = ask(
+        zone.clone(),
+        by_hash(ha[3]),
+        rq::Request::WorkObjectHeader(Default::default()),
+    ) else {
+        panic!("no header answer")
+    };
+    let wo = v.work_object.unwrap();
+    let body = wo.wo_body.as_ref().unwrap();
+    assert_eq!(body.transactions, Some(Default::default()));
+    assert_eq!(body.manifest, Some(Default::default()));
+    assert_eq!(body.interlink_hashes, Some(Default::default()));
+    assert_eq!(wo.wo_header, {
+        let raw = &a[3].zone().block;
+        quai_primitives::schema::block::ProtoWorkObject::decode(raw.as_slice())
+            .unwrap()
+            .wo_header
+    });
+    // The prime and region chains: every coincident view by number and by
+    // hash, as the height carried it.
+    let locations = [vec![], vec![zone[0]], zone.clone()];
+    let mut dominant = 0;
+    for h in &a[1..=16] {
+        for ctx in 0..2 {
+            let Some(r) = h.records[ctx].as_ref() else {
+                continue;
+            };
+            dominant += 1;
+            let Some(rs::Response::BlockHash(got)) = ask(
+                locations[ctx].clone(),
+                num(r.number),
+                rq::Request::BlockHash(Default::default()),
+            ) else {
+                panic!("no hash answer")
+            };
+            assert_eq!(
+                got.value,
+                r.hash.to_vec(),
+                "context {ctx} number {}",
+                r.number
+            );
+            let Some(rs::Response::WorkObjectBlockView(v)) = ask(
+                locations[ctx].clone(),
+                by_hash(r.hash),
+                rq::Request::WorkObjectBlock(Default::default()),
+            ) else {
+                panic!("no block answer")
+            };
+            assert_eq!(v.work_object.unwrap().encode_to_vec(), {
+                quai_primitives::schema::block::ProtoWorkObject::decode(r.block.as_slice())
+                    .unwrap()
+                    .encode_to_vec()
+            });
+        }
+    }
+    assert!(dominant > 0, "the fixture has coincident blocks");
+    // Unknown blocks and other locations: not found.
     for (location, data, kind) in [
         (
             zone.clone(),
@@ -821,16 +880,16 @@ fn the_block_store_answers_peer_requests_as_go_quai() {
             rq::Request::WorkObjectBlock(Default::default()),
         ),
         (
-            zone.clone(),
-            by_hash(ha[3]),
+            vec![0],
+            by_hash([7; 32]),
             rq::Request::WorkObjectHeader(Default::default()),
         ),
+        (vec![1], num(1), rq::Request::BlockHash(Default::default())),
         (
-            vec![0],
+            vec![0, 1],
             by_hash(ha[3]),
             rq::Request::WorkObjectBlock(Default::default()),
         ),
-        (vec![], num(1), rq::Request::BlockHash(Default::default())),
     ] {
         let answer = ask(location, data.clone(), kind.clone());
         let not_found = quai_network::public::serve::NotFound.answer(&QuaiRequestMessage {
@@ -842,5 +901,129 @@ fn the_block_store_answers_peer_requests_as_go_quai() {
         assert_eq!(answer, not_found);
     }
     drop((server, view, live));
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+/// Another Rust node fetches every context from this one (`serve.rs` over
+/// the network): node A holds the fixture chain in its block store and
+/// answers from it; node B uses the sync's request functions: A's genesis
+/// and zone head (`peer_head`), ten zone blocks by number (`fetch_range`,
+/// one WorkObjectBlocks batch), and each prime and region record by number
+/// and by hash (`peer_hash_at`, `peer_block`), every one equal to the
+/// fixture's. (The fixture's prime and region chains end inside their first
+/// ten-block batch, which go-quai, and so the sync scheduler, takes only
+/// whole; a mainnet sync hands that last batch to gossip.)
+#[test]
+fn a_node_fetches_every_context_from_another_rust_node() {
+    use prost::Message;
+    use quai_network::public::{Config as NetConfig, DialPolicy, Event, PublicNode};
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let a = heights(&doc, first);
+    let ha = go_hashes(&doc, first);
+    let log = Log::new(Level::Warn);
+    let data = scratch("fetch-from-rust");
+    let mut p = opened(&data, false, false, 1_000);
+    p.run(&mut Heights(a.iter().cloned().collect()), &log)
+        .unwrap();
+    let (view, live) = p.live_view().unwrap();
+    let chain = Chain::for_environment("local").unwrap();
+    assert_eq!(chain.location(), [0, 0]);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    // Node A: listens on loopback and answers from its store.
+    let mut config = NetConfig::read_only(DialPolicy::Loopback);
+    config.serve = true;
+    config.listen = vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()];
+    let server = {
+        let _guard = rt.enter();
+        std::sync::Arc::new(
+            PublicNode::launch(config, libp2p::identity::Keypair::generate_ed25519()).unwrap(),
+        )
+    };
+    server.serve_from(std::sync::Arc::new(quai_node::serve::StoreServer::new(
+        view.share(),
+        ha[0],
+        chain.location(),
+    )));
+    let decode = |b: &[u8]| quai_primitives::schema::block::ProtoWorkObject::decode(b).unwrap();
+    rt.block_on(async {
+        let listen = loop {
+            if let Event::ListenAddr(a) = server.next().await.unwrap() {
+                break a;
+            }
+        };
+        // Node B.
+        let client = std::sync::Arc::new(
+            PublicNode::launch(
+                NetConfig::read_only(DialPolicy::Loopback),
+                libp2p::identity::Keypair::generate_ed25519(),
+            )
+            .unwrap(),
+        );
+        client
+            .dial(listen.with_p2p(server.id).unwrap())
+            .await
+            .unwrap();
+        loop {
+            if let Event::Connected { peer, .. } = client.next().await.unwrap() {
+                if peer == server.id {
+                    break;
+                }
+            }
+        }
+        let peer = server.id;
+        // The genesis check and the zone head.
+        let head = quai_node::peers::peer_head(&client, peer, ha[0])
+            .await
+            .unwrap();
+        assert_eq!(head, 16);
+        // Zone 0..=9: one WorkObjectBlocks batch.
+        let zone = quai_node::peers::fetch_range(&client, &[peer], 2, 0, 9, log)
+            .await
+            .unwrap();
+        assert_eq!(zone.len(), 10);
+        for (b, want) in zone.iter().zip(&a) {
+            let w = want.zone();
+            assert_eq!((b.number, b.hash), (w.number, w.hash));
+            assert_eq!(decode(&b.raw), decode(&w.block), "zone {}", w.number);
+        }
+        // Every prime and region record, by number and by hash.
+        let mut dominant = 0;
+        for h in &a[1..] {
+            for ctx in 0..2 {
+                let Some(r) = h.records[ctx].as_ref() else {
+                    continue;
+                };
+                let hash = quai_node::peers::peer_hash_at(&client, peer, ctx, r.number)
+                    .await
+                    .unwrap();
+                assert_eq!(hash, Some(r.hash), "context {ctx} number {}", r.number);
+                let b = quai_node::peers::peer_block(&client, peer, ctx, r.hash)
+                    .await
+                    .unwrap();
+                assert_eq!((b.number, b.ctx), (r.number, ctx));
+                assert_eq!(
+                    decode(&b.raw),
+                    decode(&r.block),
+                    "context {ctx} number {}",
+                    r.number
+                );
+                dominant += 1;
+            }
+        }
+        assert!(dominant >= 6, "{dominant} prime and region records");
+        // Past the head: no block.
+        let none = quai_node::peers::peer_hash_at(&client, peer, 2, 17)
+            .await
+            .unwrap();
+        assert_eq!(none, None);
+    });
+    drop(server);
+    rt.shutdown_timeout(Duration::from_secs(5));
+    drop((view, live));
     std::fs::remove_dir_all(data).unwrap();
 }

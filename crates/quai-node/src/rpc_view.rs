@@ -133,6 +133,14 @@ trait Blocks: Send + Sync {
     fn created_entries(&self, _height: u64) -> Result<Option<Vec<blockstore::Created>>, ViewError> {
         Ok(None)
     }
+    /// The canonical prime (0) or region (1) hash at `number`; None: not kept.
+    fn dominant_hash_at(&self, _ctx: u8, _number: u64) -> Result<Option<Hash>, ViewError> {
+        Ok(None)
+    }
+    /// A prime (0) or region (1) view's work object bytes; None: not kept.
+    fn dominant(&self, _ctx: u8, _hash: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
+        Ok(None)
+    }
 }
 
 /// Where a zone record's bytes are.
@@ -270,6 +278,14 @@ fn store_error(e: std::io::Error) -> ViewError {
     ViewError::Unavailable(format!("block store: {e}"))
 }
 impl Blocks for StoreBlocks {
+    fn dominant_hash_at(&self, ctx: u8, number: u64) -> Result<Option<Hash>, ViewError> {
+        self.reader
+            .dominant_hash_at(ctx, number)
+            .map_err(store_error)
+    }
+    fn dominant(&self, ctx: u8, hash: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
+        self.reader.dominant(ctx, hash).map_err(store_error)
+    }
     fn hash_at(&self, height: u64) -> Result<Option<Hash>, ViewError> {
         if height > self.head {
             return Ok(None);
@@ -673,6 +689,19 @@ impl ExportView {
     /// The canonical zone hash at `number` in the published snapshot.
     pub fn hash_at(&self, number: u64) -> Option<Hash> {
         self.snap().blocks.hash_at(number).ok().flatten()
+    }
+    /// The canonical prime (0) or region (1) hash at `number`.
+    pub fn dominant_hash_at(&self, ctx: u8, number: u64) -> Option<Hash> {
+        self.snap()
+            .blocks
+            .dominant_hash_at(ctx, number)
+            .ok()
+            .flatten()
+    }
+    /// The work object bytes of a prime (0) or region (1) view this node
+    /// holds.
+    pub fn raw_dominant(&self, ctx: u8, hash: &Hash) -> Option<Vec<u8>> {
+        self.snap().blocks.dominant(ctx, hash).ok().flatten()
     }
     /// The work object bytes and number of a zone block this node holds:
     /// canonical, left behind by a reorg, or appended lately.

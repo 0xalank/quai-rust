@@ -311,7 +311,9 @@ const DEAD: usize = 4096;
 const CHECK_EVERY: Duration = Duration::from_secs(30);
 /// Peers asked per comparison (a different set each time).
 const CHECK_PEERS: usize = 4;
-/// A gossip block this far above the head starts a catch-up by number.
+/// A gossip block this far above the head, past the hand-off margin,
+/// starts a catch-up by number. The sync hands off to gossip `margin`
+/// below the best head, and the ancestor walk closes such a gap.
 const CATCH_UP_GAP: u64 = 64;
 /// A catch-up starts at the canonical block this far below the head,
 /// deeper than the reorgs seen at the head (at most 3).
@@ -498,7 +500,7 @@ pub fn follow(
                         m.note_peer_head(b.number);
                     }
                     let head = processor.tip().map_or(0, |t| t.head().1);
-                    if b.number > head + CATCH_UP_GAP {
+                    if b.number > head + catch.margin + CATCH_UP_GAP {
                         catch_up_due = true;
                     }
                     queue.push_back(b)

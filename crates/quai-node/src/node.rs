@@ -275,6 +275,14 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         _ => None,
     };
     let live_view = live_view.map(|(view, live)| (Arc::new(view), live));
+    // Peers' requests are answered from the block store from now on.
+    if let Some((view, _)) = &live_view {
+        node.serve_from(Arc::new(crate::serve::StoreServer::new(
+            view.share(),
+            chain.genesis_hash(),
+            chain.location(),
+        )));
+    }
     // net_peerCount and net_peerCountByDirection read the network's counts.
     if let Some((_, live)) = &live_view {
         let node = node.clone();

@@ -567,6 +567,8 @@ fn kad_progress(
 
 /// State the API and the driver share.
 struct Shared {
+    /// What inbound requests are answered from ([`PublicNode::serve_from`]).
+    store: RwLock<Arc<dyn serve::Store>>,
     connected: RwLock<BTreeSet<PeerId>>,
     /// Peers with an inbound and peers with an outbound connection.
     directions: RwLock<(BTreeSet<PeerId>, BTreeSet<PeerId>)>,
@@ -763,6 +765,7 @@ impl PublicNode {
             None
         };
         let shared = Arc::new(Shared {
+            store: RwLock::new(Arc::new(serve::NotFound)),
             connected: RwLock::new(BTreeSet::new()),
             directions: RwLock::new((BTreeSet::new(), BTreeSet::new())),
             verified: RwLock::new(BTreeSet::new()),
@@ -829,7 +832,6 @@ impl PublicNode {
             kad_mode: "client".into(),
             started: Instant::now(),
             stats: Stats::default(),
-            store: Arc::new(serve::NotFound),
             circuits,
         };
         let driver = tokio::spawn(driver.run(commands, done_rx, internal_rx, incoming));
@@ -889,6 +891,11 @@ impl PublicNode {
     }
     pub fn is_connected(&self, peer: &PeerId) -> bool {
         read(&self.shared.connected).contains(peer)
+    }
+    /// Answer inbound requests from `store` from now on (validated data;
+    /// the node starts with go-quai's "not found" answers).
+    pub fn serve_from(&self, store: Arc<dyn serve::Store>) {
+        *write(&self.shared.store) = store;
     }
     /// Every peer with an open connection, in a slot or not.
     pub fn connected_peers(&self) -> Vec<PeerId> {
@@ -1227,7 +1234,6 @@ struct Driver {
     kad_mode: String,
     started: Instant,
     stats: Stats,
-    store: Arc<dyn serve::Store>,
     /// Peers this node may reach through a relay circuit.
     circuits: Arc<Mutex<HashSet<PeerId>>>,
 }
@@ -1342,7 +1348,7 @@ impl Driver {
         tokio::spawn(serve::serve_stream(
             stream,
             peer,
-            self.store.clone(),
+            read(&self.shared.store).clone(),
             self.shared.book.clone(),
             self.shared.served.clone(),
         ));

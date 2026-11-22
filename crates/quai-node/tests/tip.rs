@@ -704,3 +704,143 @@ fn appended_blocks_reach_the_rpc_with_state() {
 fn appended_blocks_reach_the_rpc_without_state() {
     appended_blocks_reach_the_rpc(false);
 }
+
+/// Answers to the peers' requests from the block store (`serve.rs`): zone
+/// hashes by number (the genesis at 0), a zone block by hash or number, ten
+/// blocks from a hash or none (go-quai `GetWorkObjectsFrom`), a block the
+/// head choice did not take, and go-quai's "not found" for other
+/// locations and for what the store does not hold.
+#[test]
+fn the_block_store_answers_peer_requests_as_go_quai() {
+    use prost::Message;
+    use quai_network::public::serve::Store;
+    use quai_primitives::schema::{
+        common::{ProtoHash, ProtoLocation},
+        quaiprotocol::{
+            quai_request_message as rq, quai_response_message as rs, QuaiRequestMessage,
+        },
+    };
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch("serve");
+    let mut p = opened(&data, false, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    let (view, live) = p.live_view().unwrap();
+    p.enable_tip().unwrap();
+    for h in a[1..=16].iter().chain(&b[9..=10]) {
+        p.offer(h.clone(), &log).unwrap();
+    }
+    // The tip publishes its head to the view when the processor finishes or
+    // checkpoints; publish it here as a run does.
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    let chain = Chain::for_environment("local").unwrap();
+    let server = quai_node::serve::StoreServer::new(view.share(), ha[0], chain.location());
+    let ask = |location: Vec<u8>, data: rq::Data, kind: rq::Request| {
+        server.answer(&QuaiRequestMessage {
+            id: 1,
+            location: Some(ProtoLocation { value: location }),
+            data: Some(data),
+            request: Some(kind),
+        })
+    };
+    let zone = chain.location().to_vec();
+    let num = |n: u64| {
+        rq::Data::Number(if n == 0 {
+            vec![]
+        } else {
+            n.to_be_bytes().to_vec()
+        })
+    };
+    let by_hash = |h: Hash| rq::Data::Hash(ProtoHash { value: h.to_vec() });
+    let hash_of = |wo: &quai_primitives::schema::block::ProtoWorkObject| -> Hash {
+        let raw = wo.encode_to_vec();
+        quai_consensus::history::Record::decode(&raw).unwrap().id()
+    };
+    for (n, want) in [(0u64, ha[0].to_vec()), (5, ha[5].to_vec()), (99, vec![])] {
+        let Some(rs::Response::BlockHash(h)) = ask(
+            zone.clone(),
+            num(n),
+            rq::Request::BlockHash(Default::default()),
+        ) else {
+            panic!("no block hash answer for {n}")
+        };
+        assert_eq!(h.value, want, "hash at {n}");
+    }
+    // A block by hash and by number.
+    for data in [by_hash(ha[3]), num(3)] {
+        let Some(rs::Response::WorkObjectBlockView(v)) = ask(
+            zone.clone(),
+            data,
+            rq::Request::WorkObjectBlock(Default::default()),
+        ) else {
+            panic!("no block answer")
+        };
+        assert_eq!(hash_of(v.work_object.as_ref().unwrap()), ha[3]);
+    }
+    // Ten blocks from a hash: 2..=11.
+    let Some(rs::Response::WorkObjectBlocksView(v)) = ask(
+        zone.clone(),
+        by_hash(ha[2]),
+        rq::Request::WorkObjectBlocks(Default::default()),
+    ) else {
+        panic!("no blocks answer")
+    };
+    let got: Vec<Hash> = v
+        .work_objects
+        .iter()
+        .map(|b| hash_of(b.work_object.as_ref().unwrap()))
+        .collect();
+    assert_eq!(got, ha[2..=11].to_vec());
+    // From 10 only seven blocks follow: none, as go-quai answers.
+    let Some(rs::Response::WorkObjectBlocksView(v)) = ask(
+        zone.clone(),
+        by_hash(ha[10]),
+        rq::Request::WorkObjectBlocks(Default::default()),
+    ) else {
+        panic!("no blocks answer")
+    };
+    assert!(v.work_objects.is_empty());
+    // A side-branch block the node appended is found by hash.
+    let Some(rs::Response::WorkObjectBlockView(v)) = ask(
+        zone.clone(),
+        by_hash(hb[10]),
+        rq::Request::WorkObjectBlock(Default::default()),
+    ) else {
+        panic!("no block answer")
+    };
+    assert_eq!(hash_of(v.work_object.as_ref().unwrap()), hb[10]);
+    // Unknown blocks, header views and dominant locations: not found.
+    for (location, data, kind) in [
+        (
+            zone.clone(),
+            by_hash([7; 32]),
+            rq::Request::WorkObjectBlock(Default::default()),
+        ),
+        (
+            zone.clone(),
+            by_hash(ha[3]),
+            rq::Request::WorkObjectHeader(Default::default()),
+        ),
+        (
+            vec![0],
+            by_hash(ha[3]),
+            rq::Request::WorkObjectBlock(Default::default()),
+        ),
+        (vec![], num(1), rq::Request::BlockHash(Default::default())),
+    ] {
+        let answer = ask(location, data.clone(), kind.clone());
+        let not_found = quai_network::public::serve::NotFound.answer(&QuaiRequestMessage {
+            id: 1,
+            location: None,
+            data: Some(data),
+            request: Some(kind),
+        });
+        assert_eq!(answer, not_found);
+    }
+    drop((server, view, live));
+    std::fs::remove_dir_all(data).unwrap();
+}

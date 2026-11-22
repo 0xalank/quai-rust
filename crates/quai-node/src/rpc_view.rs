@@ -670,6 +670,24 @@ impl ExportView {
     pub fn set_pool(&mut self, pool: Arc<TxPoolService>) {
         self.pool = Some(pool);
     }
+    /// The canonical zone hash at `number` in the published snapshot.
+    pub fn hash_at(&self, number: u64) -> Option<Hash> {
+        self.snap().blocks.hash_at(number).ok().flatten()
+    }
+    /// The work object bytes and number of a zone block this node holds:
+    /// canonical, left behind by a reorg, or appended lately.
+    pub fn raw_block(&self, hash: &Hash) -> Option<(u64, Vec<u8>)> {
+        let snap = self.snap();
+        if let Ok(Some(number)) = snap.blocks.candidate_height(hash) {
+            if let Ok(raw) = snap.blocks.block(number, hash) {
+                return Some((number, raw.bytes));
+            }
+        }
+        self.node
+            .as_ref()
+            .and_then(|n| n.appended(hash))
+            .map(|(number, raw)| (number, raw.bytes))
+    }
     /// The size of the head's UTXO set (`rawdb.ReadUTXOSetSize` of the
     /// head), if the view keeps state.
     pub fn head_utxo_set_size(&self) -> Option<(Hash, u64)> {

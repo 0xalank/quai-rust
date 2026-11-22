@@ -47,6 +47,10 @@
 #   ALLOW_METERED     1 allows an iPhone hotspot (172.20.10.x)
 #   NICE              nice level of the node (default: 10)
 #   RESTART_DELAY     seconds before a restart (default: 30)
+#   STALL_SECONDS     restart the node when its head has not moved for this
+#                     long while the peers are more than STALL_GAP blocks
+#                     ahead (default: 900)
+#   STALL_GAP         see STALL_SECONDS (default: 10)
 #   MAX_RESTARTS      restarts within an hour before the script stops (default: 6)
 #   QUAI_NODE_BIN     binary to use. Without it the script builds quai-node
 #                     (CARGO_BUILD_JOBS, default 3) and pins a copy in
@@ -67,6 +71,8 @@ MIN_FREE_GB=${MIN_FREE_GB:-30}
 NICE=${NICE:-10}
 DELAY=${RESTART_DELAY:-30}
 MAX_RESTARTS=${MAX_RESTARTS:-6}
+STALL_SECONDS=${STALL_SECONDS:-900}
+STALL_GAP=${STALL_GAP:-10}
 LOCK="$WORK/lock"
 STOP="$WORK/STOP"
 LOGS="$WORK/logs"
@@ -81,7 +87,7 @@ esac
 
 log() { echo "shadow_run.sh: $(date -u +%Y-%m-%dT%H:%M:%SZ) $*" >&2; }
 is_number() { case "$1" in "" | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
-for v in "$DURATION" "$JOBS" "$MIN_FREE_GB" "$DELAY" "$MAX_RESTARTS"; do
+for v in "$DURATION" "$JOBS" "$MIN_FREE_GB" "$DELAY" "$MAX_RESTARTS" "$STALL_SECONDS" "$STALL_GAP"; do
 	is_number "$v" || { log "not a number: $v"; exit 2; }
 done
 case "$BOOT" in
@@ -203,11 +209,28 @@ while :; do
 		$STORE_ARG --jobs "$JOBS" > "$OUT" 2> "$ERR" &
 	CHILD=$!
 	REASON=
+	LAST_HEAD=
+	LAST_MOVE=$(date +%s)
 	while kill -0 "$CHILD" 2>/dev/null; do
 		sleep 10
 		if [ -z "$REASON" ]; then
+			# Stall watchdog: the head has not moved for STALL_SECONDS while the
+			# peers report a head more than STALL_GAP blocks higher (seen after a
+			# network change or a sleep: gossip intake stopped and the peers'
+			# answers stopped too, so the node's own stall check saw nothing).
+			NOW_HEAD=$(metric quai_node_head_height)
+			PEER_HEAD=$(metric quai_node_peer_head_height)
+			if is_number "$NOW_HEAD" && [ "$NOW_HEAD" != "$LAST_HEAD" ]; then
+				LAST_HEAD=$NOW_HEAD
+				LAST_MOVE=$(date +%s)
+			fi
 			if [ -e "$STOP" ]; then
 				REASON=STOP
+			elif is_number "$NOW_HEAD" && is_number "$PEER_HEAD" &&
+				[ "$PEER_HEAD" -gt $((NOW_HEAD + STALL_GAP)) ] &&
+				[ $(($(date +%s) - LAST_MOVE)) -ge "$STALL_SECONDS" ]; then
+				REASON=stall
+				log "stall: head $NOW_HEAD unchanged for $(($(date +%s) - LAST_MOVE))s while the peers report $PEER_HEAD; starting the node again"
 			elif metered; then
 				REASON=metered
 			elif [ "$(free_gb)" -lt "$MIN_FREE_GB" ]; then

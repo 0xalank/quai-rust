@@ -292,19 +292,20 @@ impl WorkObject {
     pub fn outbound_etxs(&self) -> &[Transaction] {
         &self.outbound
     }
-    /// Canonically padded manifest hashes, in committed order.
+    /// Canonically padded manifest hashes, in committed order. `decode`
+    /// pads each one to 32 bytes and always sets the list.
     pub fn manifest_hashes(&self) -> Vec<Hash> {
         self.wire
             .wo_body
             .as_ref()
-            .unwrap()
-            .manifest
-            .as_ref()
-            .unwrap()
-            .manifest
-            .iter()
-            .map(|h| h.value.as_slice().try_into().unwrap())
-            .collect()
+            .and_then(|b| b.manifest.as_ref())
+            .map(|m| {
+                m.manifest
+                    .iter()
+                    .filter_map(|h| h.value.as_slice().try_into().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
     /// Canonically padded interlink hashes, in committed order. `decode`
     /// pads each one to 32 bytes and always sets the list.
@@ -335,11 +336,12 @@ impl WorkObject {
             .collect()
     }
     pub fn uncle_root(&self) -> Hash {
-        let uncles = self.wire.wo_body.as_ref().unwrap().uncles.as_ref().unwrap();
-        if uncles.wo_headers.is_empty() {
-            crate::transaction::keccak(&trie::list([]))
-        } else {
-            *blake3::hash(&uncles.encode_to_vec()).as_bytes()
+        // `decode` always sets the uncle list.
+        match self.wire.wo_body.as_ref().and_then(|b| b.uncles.as_ref()) {
+            Some(uncles) if !uncles.wo_headers.is_empty() => {
+                *blake3::hash(&uncles.encode_to_vec()).as_bytes()
+            }
+            _ => crate::transaction::keccak(&trie::list([])),
         }
     }
     pub fn manifest_root(&self) -> Result<Hash, String> {

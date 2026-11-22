@@ -432,7 +432,9 @@ impl Catalog {
             selected: if select {
                 id
             } else {
-                expected.unwrap().selected
+                expected
+                    .ok_or_else(|| bad("admission without a selected head"))?
+                    .selected
             },
         };
         meta.insert(b"head".as_slice(), encode_head(next).as_slice())

@@ -104,6 +104,6 @@ pub fn verify(bytes: &[u8]) -> Result<Value, String> {
         }
     }
     Ok(
-        json!({"passed":failures.is_empty(),"header_vectors":corpus["headers"].as_array().unwrap().len(),"aux_shape_vectors":aux_shapes.len(),"rejected_vectors":corpus["rejected"].as_array().unwrap().len(),"target_vectors":corpus["targets"].as_array().unwrap().len(),"checks":checks,"failures":failures,"runtime":"Rust only","consensus_validation":false}),
+        json!({"passed":failures.is_empty(),"header_vectors":corpus["headers"].as_array().map_or(0, Vec::len),"aux_shape_vectors":aux_shapes.len(),"rejected_vectors":corpus["rejected"].as_array().map_or(0, Vec::len),"target_vectors":corpus["targets"].as_array().map_or(0, Vec::len),"checks":checks,"failures":failures,"runtime":"Rust only","consensus_validation":false}),
     )
 }

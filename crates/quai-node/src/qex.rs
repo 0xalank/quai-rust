@@ -329,8 +329,8 @@ impl SegmentReader {
                 head[1]
             ))
         })?;
-        let number = u64::from_be_bytes(head[2..10].try_into().unwrap());
-        let hash: Hash = head[10..42].try_into().unwrap();
+        let number = u64::from_be_bytes(std::array::from_fn(|i| head[2 + i]));
+        let hash: Hash = std::array::from_fn(|i| head[10 + i]);
         let block = self.bytes("block")?;
         let receipts = self.bytes("receipts")?;
         Ok(Some(RawRecord {
@@ -350,9 +350,19 @@ pub struct Height {
     pub zone_height: u64,
     pub records: [Option<RawRecord>; 3],
 }
+/// A zone record with no bytes: it fails decoding like any malformed one.
+static NO_ZONE: RawRecord = RawRecord {
+    context: Context::Zone,
+    number: 0,
+    hash: [0; 32],
+    block: Vec::new(),
+    receipts: Vec::new(),
+};
 impl Height {
+    /// The zone record. Every source of heights sets it; a height without one
+    /// gives an empty record, which the checks refuse at decoding.
     pub fn zone(&self) -> &RawRecord {
-        self.records[2].as_ref().unwrap()
+        self.records[2].as_ref().unwrap_or(&NO_ZONE)
     }
 }
 
@@ -467,7 +477,10 @@ impl ExportReader {
                 }
                 self.open_segment()?;
             }
-            match self.reader.as_mut().unwrap().next_record()? {
+            let Some(reader) = self.reader.as_mut() else {
+                return Err(ExportError("export segment reader not open".into()));
+            };
+            match reader.next_record()? {
                 Some(r) => {
                     self.records_in_segment += 1;
                     return Ok(Some(r));
@@ -508,11 +521,11 @@ impl ExportReader {
                 }
                 return Ok(None);
             };
-            if last.is_some_and(|c| r.context <= c) {
+            if let Some(previous) = last.filter(|c| r.context <= *c) {
                 return err(format!(
                     "zone height {expected}: {} record follows a {} record (want prime, region, zone order)",
                     r.context.name(),
-                    last.unwrap().name()
+                    previous.name()
                 ));
             }
             if r.context == Context::Zone && last == Some(Context::Prime) {
@@ -539,7 +552,9 @@ impl ExportReader {
                 break;
             }
         }
-        let zone = records[2].as_ref().unwrap();
+        let Some(zone) = records[2].as_ref() else {
+            return err(format!("zone height {expected}: no zone record"));
+        };
         if zone.number != expected {
             return err(format!(
                 "zone record number {} where zone height {expected} was expected",
@@ -627,7 +642,11 @@ impl ExportWriter {
             *count += 1;
         }
         self.next_height += 1;
-        if self.next_height - self.current.as_ref().unwrap().0 == self.span {
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|c| self.next_height - c.0 == self.span)
+        {
             self.flush()?;
         }
         Ok(())

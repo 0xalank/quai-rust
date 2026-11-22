@@ -16,6 +16,10 @@ pub struct Header {
     wire: WorkHeader,
     activated: bool,
     transition: bool,
+    /// Fields `decode` requires, kept typed for the hashes.
+    coinbase: [u8; 20],
+    mix: Hash,
+    nonce: u64,
 }
 fn magnitude(value: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     let value = value.ok_or("required integer missing")?;
@@ -130,10 +134,25 @@ impl Header {
             wire.scrypt_share_target = None;
             wire.kawpow_difficulty = None;
         }
+        // `fixed` sized the coinbase and mix hash above; the nonce is present.
+        let coinbase = wire
+            .primary_coinbase
+            .as_ref()
+            .and_then(|v| v.value.as_slice().try_into().ok())
+            .ok_or("required bytes message missing")?;
+        let mix = wire
+            .mix_hash
+            .as_ref()
+            .and_then(|v| v.value.as_slice().try_into().ok())
+            .ok_or("required bytes message missing")?;
+        let nonce = wire.nonce.ok_or("required nonce/time missing")?;
         Ok(Self {
             wire,
             activated,
             transition,
+            coinbase,
+            mix,
+            nonce,
         })
     }
     pub fn wire(&self) -> &WorkHeader {
@@ -157,7 +176,7 @@ impl Header {
         if self.activated {
             let mut hasher = blake3::Hasher::new();
             hasher.update(first.as_bytes());
-            hasher.update(&self.wire.primary_coinbase.as_ref().unwrap().value);
+            hasher.update(&self.coinbase);
             *hasher.finalize().as_bytes()
         } else {
             *first.as_bytes()
@@ -166,9 +185,9 @@ impl Header {
     /// Commitment for legacy/transition headers, not the ProgPoW mining algorithm.
     pub fn legacy_hash(&self) -> Hash {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(&self.wire.mix_hash.as_ref().unwrap().value);
+        hasher.update(&self.mix);
         hasher.update(&self.seal_hash());
-        hasher.update(&self.wire.nonce.unwrap().to_be_bytes());
+        hasher.update(&self.nonce.to_be_bytes());
         *hasher.finalize().as_bytes()
     }
     /// core/types/wo.go `WorkObjectHeader.Hash`: the ProgPoW hash before
@@ -199,6 +218,11 @@ impl Header {
         self.block_hash()
     }
     pub fn blake3_target_valid(&self) -> Result<bool, String> {
-        crate::meets_blake3_target(&self.legacy_hash(), self.wire.difficulty.as_ref().unwrap())
+        let difficulty = self
+            .wire
+            .difficulty
+            .as_deref()
+            .ok_or("required integer missing")?;
+        crate::meets_blake3_target(&self.legacy_hash(), difficulty)
     }
 }

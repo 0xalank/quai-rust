@@ -75,8 +75,9 @@ fn work(verifier: &mut Verifier, job: Job, location: &[u8]) -> Done {
             let w = uncle.wire();
             // Pre-KAWPOW entropy also needs the strong proof of full-target shares.
             if w.aux_pow.is_none()
-                && quai_primitives::meets_blake3_target(&hash, w.difficulty.as_deref().unwrap())
-                    .unwrap_or(false)
+                && w.difficulty.as_deref().is_some_and(|d| {
+                    quai_primitives::meets_blake3_target(&hash, d).unwrap_or(false)
+                })
             {
                 let _ = verifier.verify_header_proof(uncle);
             }
@@ -135,7 +136,9 @@ impl Pool {
     }
     pub fn submit(&self, job: Job) {
         // A send error means every worker has stopped; `wait` reports it.
-        let _ = self.jobs.as_ref().unwrap().send(job);
+        if let Some(jobs) = &self.jobs {
+            let _ = jobs.send(job);
+        }
     }
     /// Block until the result for `seq` is available.
     pub fn wait(&mut self, seq: u64) -> Result<Done, Error> {

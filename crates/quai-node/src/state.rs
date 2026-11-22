@@ -229,8 +229,9 @@ impl StateReplay {
         self.confirmed.insert(id, Arc::new(confirmed));
         self.log.push_back(id);
         if self.log.len() > KEEP {
-            let old = self.log.pop_front().unwrap();
-            self.confirmed.remove(&old);
+            if let Some(old) = self.log.pop_front() {
+                self.confirmed.remove(&old);
+            }
         }
         self.executed += 1;
         Ok(())

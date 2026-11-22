@@ -38,14 +38,21 @@ impl Window {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
+    // A writer that panicked leaves whole entries: the window stays usable.
+    fn read(&self) -> std::sync::RwLockReadGuard<'_, Inner> {
+        self.inner.read().unwrap_or_else(|e| e.into_inner())
+    }
+    fn write(&self) -> std::sync::RwLockWriteGuard<'_, Inner> {
+        self.inner.write().unwrap_or_else(|e| e.into_inner())
+    }
     /// The trusted genesis stays in every context for the whole replay.
     pub fn set_genesis(&self, genesis: Arc<Record>, snapshots: [Arc<Snapshot>; 3]) {
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.write();
         w.genesis = Some((genesis, snapshots));
     }
     /// Add a checked record and its append snapshot in one context.
     pub fn insert(&self, context: usize, record: Arc<Record>, snapshot: Arc<Snapshot>) {
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.write();
         let id = record.id();
         if context == 2 {
             w.zone_bytes += record.bytes().len();
@@ -60,7 +67,9 @@ impl Window {
             if !over {
                 break;
             }
-            let old = w.order[context].pop_front().unwrap();
+            let Some(old) = w.order[context].pop_front() else {
+                break;
+            };
             if let Some(r) = w.records[context].remove(&old) {
                 if context == 2 {
                     w.zone_bytes -= r.bytes().len();
@@ -71,14 +80,14 @@ impl Window {
     }
     /// Keep the zone view of a prime-coincident block beyond the zone window.
     pub fn pin_prime_view(&self, record: Arc<Record>) {
-        let mut w = self.inner.write().unwrap();
+        let mut w = self.write();
         w.prime_views.push_back((record.id(), record));
         while w.prime_views.len() > PRIME_VIEWS {
             w.prime_views.pop_front();
         }
     }
     fn record(&self, context: usize, id: &Hash) -> Option<Arc<Record>> {
-        let w = self.inner.read().unwrap();
+        let w = self.read();
         if let Some(r) = w.records[context].get(id) {
             return Some(r.clone());
         }
@@ -97,7 +106,7 @@ impl Window {
         None
     }
     fn snapshot(&self, context: usize, id: &Hash) -> Option<Arc<Snapshot>> {
-        let w = self.inner.read().unwrap();
+        let w = self.read();
         if let Some(s) = w.snapshots[context].get(id) {
             return Some(s.clone());
         }
@@ -107,13 +116,13 @@ impl Window {
         }
     }
     pub fn len(&self, context: usize) -> usize {
-        self.inner.read().unwrap().order[context].len()
+        self.read().order[context].len()
     }
     /// Records and snapshots per context, oldest first, and the pinned prime
     /// views, for a checkpoint. The genesis is not included.
     #[allow(clippy::type_complexity)]
     pub fn export(&self) -> ([Vec<(Arc<Record>, Arc<Snapshot>)>; 3], Vec<Arc<Record>>) {
-        let w = self.inner.read().unwrap();
+        let w = self.read();
         let windows = std::array::from_fn(|c| {
             w.order[c]
                 .iter()

@@ -556,7 +556,8 @@ fn prefix(length: usize, short: u8, long: u8) -> Vec<u8> {
         vec![short + length as u8]
     } else {
         let raw = length.to_be_bytes();
-        let start = raw.iter().position(|b| *b != 0).unwrap();
+        // The first nonzero byte of a length of 56 or more.
+        let start = (length.leading_zeros() / 8) as usize;
         let mut out = vec![long + (raw.len() - start) as u8];
         out.extend_from_slice(&raw[start..]);
         out

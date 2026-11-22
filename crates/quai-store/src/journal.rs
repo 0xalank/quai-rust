@@ -228,7 +228,13 @@ impl ScratchJournal {
         f.write_all(b)?;
         f.sync_all()?;
         fs::rename(temp, path)?;
-        File::open(path.parent().unwrap())?.sync_all()
+        let dir = path.parent().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "journal path without a directory",
+            )
+        })?;
+        File::open(dir)?.sync_all()
     }
     /// Saves an immutable candidate. Its parent must already exist in this private
     /// store. Content-addressing detects corrupt snapshots before any head change.

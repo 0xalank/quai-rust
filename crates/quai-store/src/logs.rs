@@ -104,11 +104,14 @@ impl Index {
                             .entry(field(value, "address")?.to_ascii_lowercase())
                             .or_default()
                             .push(position);
-                        for (slot, topic) in value["topics"].as_array().unwrap().iter().enumerate()
-                        {
+                        let topics = value["topics"]
+                            .as_array()
+                            .ok_or("log topics are not a list")?;
+                        for (slot, topic) in topics.iter().enumerate() {
+                            let topic = topic.as_str().ok_or("log topic is not a string")?;
                             index
                                 .topics
-                                .entry((slot, topic.as_str().unwrap().to_ascii_lowercase()))
+                                .entry((slot, topic.to_ascii_lowercase()))
                                 .or_default()
                                 .push(position);
                         }
@@ -231,7 +234,10 @@ impl Snapshot {
         };
         if from > to
             || to - from > 10_000
-            || from < *self.canonical.first_key_value().unwrap().0
+            || self
+                .canonical
+                .first_key_value()
+                .is_none_or(|(first, _)| from < *first)
             || to > head
         {
             return Err(ReadMiss::Coverage);
@@ -321,16 +327,23 @@ impl Snapshot {
                 continue;
             }
             let value = &entry.value;
+            // The index checked both when it took the entry.
             if !addresses.is_empty()
-                && !addresses.contains(&value["address"].as_str().unwrap().to_ascii_lowercase())
+                && !value["address"]
+                    .as_str()
+                    .is_some_and(|a| addresses.contains(&a.to_ascii_lowercase()))
             {
                 continue;
             }
-            let actual = value["topics"].as_array().unwrap();
+            let Some(actual) = value["topics"].as_array() else {
+                continue;
+            };
             if topics.len() > actual.len()
                 || topics.iter().enumerate().any(|(slot, choices)| {
                     !choices.is_empty()
-                        && !choices.contains(&actual[slot].as_str().unwrap().to_ascii_lowercase())
+                        && !actual[slot]
+                            .as_str()
+                            .is_some_and(|t| choices.contains(&t.to_ascii_lowercase()))
                 })
             {
                 continue;

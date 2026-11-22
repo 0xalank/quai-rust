@@ -9,7 +9,11 @@ fn main() {
         .and_then(|bytes| quai_primitives::vectors::verify(&bytes));
     match result {
         Ok(report) => {
-            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            // A JSON value always serializes.
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_else(|_| report.to_string())
+            );
             if report["passed"] != true {
                 std::process::exit(1);
             }

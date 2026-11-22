@@ -80,10 +80,14 @@ fn decode_txs(mut raw: &[u8]) -> io::Result<Vec<Transaction>> {
         raw = b;
         Ok(a)
     };
-    let count = u32::from_be_bytes(take(4)?.try_into().unwrap()) as usize;
+    let word = |b: &[u8]| -> io::Result<usize> {
+        let b: [u8; 4] = b.try_into().map_err(|_| bad("transaction list word"))?;
+        Ok(u32::from_be_bytes(b) as usize)
+    };
+    let count = word(take(4)?)?;
     let mut out = Vec::with_capacity(count.min(1 << 16));
     for _ in 0..count {
-        let len = u32::from_be_bytes(take(4)?.try_into().unwrap()) as usize;
+        let len = word(take(4)?)?;
         out.push(Transaction::decode(take(len)?).map_err(bad)?);
     }
     if !raw.is_empty() {
@@ -110,7 +114,7 @@ fn decode_created(raw: &[u8]) -> io::Result<Vec<(OutPoint, u8)>> {
     if raw.len() < 4 {
         return Err(bad("truncated created-key list"));
     }
-    let count = u32::from_be_bytes(raw[..4].try_into().unwrap()) as usize;
+    let count = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]) as usize;
     let body = &raw[4..];
     if body.len()
         != count
@@ -124,8 +128,8 @@ fn decode_created(raw: &[u8]) -> io::Result<Vec<(OutPoint, u8)>> {
         .map(|c| {
             (
                 OutPoint {
-                    hash: c[..32].try_into().unwrap(),
-                    index: u16::from_be_bytes(c[32..34].try_into().unwrap()),
+                    hash: std::array::from_fn(|i| c[i]),
+                    index: u16::from_be_bytes([c[32], c[33]]),
                 },
                 c[34],
             )
@@ -297,7 +301,7 @@ impl StateStore {
             commitment = Some(c);
             Ok(meta)
         })?;
-        let commitment = commitment.unwrap();
+        let commitment = commitment.ok_or_else(|| bad("genesis state commitment"))?;
         if !empty_commitment_check(&commitment) {
             return Err(bad("genesis state is not empty"));
         }
@@ -370,7 +374,7 @@ impl StateStore {
                     Ok(meta)
                 })?;
         self.version = commit.version.id;
-        self.commitment = commitment.unwrap();
+        self.commitment = commitment.ok_or_else(|| bad("state commitment"))?;
         Ok(())
     }
     /// Copy the last committed version into `state-<height>.redb` without
@@ -412,10 +416,11 @@ static FAULTS: Mutex<Vec<(PathBuf, String, u64)>> = Mutex::new(Vec::new());
 /// Test hook: the next `fault(dir, point, height)` returns an error, as if
 /// the process stopped there. Scoped to one directory.
 pub fn inject_fault(dir: &Path, point: &str, height: u64) {
-    FAULTS
-        .lock()
-        .unwrap()
-        .push((dir.to_path_buf(), point.into(), height));
+    FAULTS.lock().unwrap_or_else(|e| e.into_inner()).push((
+        dir.to_path_buf(),
+        point.into(),
+        height,
+    ));
 }
 /// Fault points in the checkpoint write. `QUAI_NODE_TEST_FAULT=<point>@<height>`
 /// ends the process there (exit status 75), to test that a killed

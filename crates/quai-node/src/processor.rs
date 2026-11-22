@@ -395,8 +395,9 @@ impl Checker {
         self.orders.insert(id, order);
         self.order_log.push_back(id);
         if self.order_log.len() > 4096 {
-            let old = self.order_log.pop_front().unwrap();
-            self.orders.remove(&old);
+            if let Some(old) = self.order_log.pop_front() {
+                self.orders.remove(&old);
+            }
         }
     }
     fn remember_rollup(&mut self, id: Hash, rollup: Arc<Vec<Transaction>>) {
@@ -404,18 +405,29 @@ impl Checker {
             self.rollup_log.push_back(id);
         }
         if self.rollup_log.len() > state::KEEP {
-            let old = self.rollup_log.pop_front().unwrap();
-            self.rollups.remove(&old);
+            if let Some(old) = self.rollup_log.pop_front() {
+                self.rollups.remove(&old);
+            }
         }
     }
     fn genesis(&mut self, slot: Slot) -> Result<(), Fail> {
         let expected = self.chain.genesis_hash();
         for c in CONTEXTS {
-            let raw = slot.height.records[c.index()].as_ref().unwrap();
+            let (Some(raw), Some(decoded)) = (
+                slot.height.records[c.index()].as_ref(),
+                slot.records[c.index()].as_ref(),
+            ) else {
+                return Err(fail(
+                    c,
+                    "genesis record",
+                    "a record in every context",
+                    "none",
+                ));
+            };
             if raw.hash != expected {
                 return Err(fail(c, "genesis hash", hex(&expected), hex(&raw.hash)));
             }
-            let record = match slot.records[c.index()].as_ref().unwrap() {
+            let record = match decoded {
                 Ok(r) => r,
                 Err(e) => {
                     return Err(fail(
@@ -712,10 +724,15 @@ impl Checker {
         let b = record.object().header().wire();
         let size = share_rules::number(b.quai_state_size.as_deref().unwrap_or_default())
             .map_err(|e| describe(&e))?;
+        let root = |v: &Option<quai_primitives::schema::common::ProtoHash>| {
+            v.as_ref()
+                .map(|h| h32(&h.value))
+                .ok_or("zone head without its state roots")
+        };
         Ok((
-            h32(&b.evm_root.as_ref().unwrap().value),
-            h32(&b.etx_set_root.as_ref().unwrap().value),
-            h32(&b.utxo_root.as_ref().unwrap().value),
+            root(&b.evm_root)?,
+            root(&b.etx_set_root)?,
+            root(&b.utxo_root)?,
             size,
         ))
     }
@@ -727,7 +744,11 @@ impl Checker {
             let Some(raw) = &h.records[c.index()] else {
                 continue;
             };
-            let record = match slot.records[c.index()].as_ref().unwrap() {
+            // Each record of the height was decoded with the slot.
+            let Some(decoded) = slot.records[c.index()].as_ref() else {
+                return Err(fail(c, "decode", "a decoded record", "none"));
+            };
+            let record = match decoded {
                 Ok(r) => r,
                 Err(e) => {
                     return Err(fail(
@@ -854,10 +875,15 @@ impl Checker {
         // Commit to the window.
         let mut next = checked.next;
         for c in &CONTEXTS[order as usize..] {
-            let r = checked.records[c.index()].clone().unwrap();
-            self.heads[c.index()] = Some((r.id(), r.number(c.index()).unwrap()));
-            self.window
-                .insert(c.index(), r, Arc::new(next[c.index()].take().unwrap()));
+            let missing = || fail(*c, "window", "a checked record and its snapshot", "none");
+            let (Some(r), Some(snapshot)) =
+                (checked.records[c.index()].clone(), next[c.index()].take())
+            else {
+                return Err(missing());
+            };
+            let number = r.number(c.index()).map_err(|_| missing())?;
+            self.heads[c.index()] = Some((r.id(), number));
+            self.window.insert(c.index(), r, Arc::new(snapshot));
         }
         if order == 0 {
             self.window.pin_prime_view(zone.clone());
@@ -1157,9 +1183,8 @@ fn stored_receipts(zone: &Record, bytes: &[u8]) -> Result<(), Fail> {
         .wire()
         .location
         .as_ref()
-        .unwrap()
-        .value
-        .clone();
+        .map(|l| l.value.clone())
+        .ok_or_else(|| bad("location", "missing".into()))?;
     let origin: Option<[u8; 2]> = location.as_slice().try_into().ok();
     let mut types = HashMap::new();
     for tx in zone.object().transactions() {
@@ -1231,7 +1256,7 @@ fn stored_receipts(zone: &Record, bytes: &[u8]) -> Result<(), Fail> {
         .wire()
         .receipt_hash
         .as_ref()
-        .unwrap()
+        .ok_or_else(|| bad("receipt root", "missing".into()))?
         .value;
     if root.as_slice() != committed.as_slice() {
         return Err(fail(
@@ -1562,7 +1587,7 @@ impl Processor {
             }
             None => {
                 let state = if settings.state {
-                    let dir = dir.as_ref().unwrap();
+                    let dir = dir.as_ref().ok_or("state replay needs a data directory")?;
                     let profile = state::profile_for(&chain)
                         .map_err(|e| format!("state replay profile: {}", describe(&e)))?;
                     let past_path = dir.join("past.redb");

@@ -153,7 +153,10 @@ impl<'a> R<'a> {
         Ok(self.take(1)?[0])
     }
     fn u64(&mut self) -> io::Result<u64> {
-        Ok(u64::from_be_bytes(self.take(8)?.try_into().unwrap()))
+        let b = self.take(8)?;
+        Ok(u64::from_be_bytes(
+            b.try_into().map_err(|_| bad("checkpoint integer"))?,
+        ))
     }
     fn len(&mut self) -> io::Result<usize> {
         let n = self.u64()?;
@@ -163,7 +166,9 @@ impl<'a> R<'a> {
         Ok(n as usize)
     }
     fn hash(&mut self) -> io::Result<Hash> {
-        Ok(self.take(32)?.try_into().unwrap())
+        self.take(32)?
+            .try_into()
+            .map_err(|_| bad("checkpoint hash"))
     }
     fn bytes(&mut self) -> io::Result<Vec<u8>> {
         let n = self.len()?;
@@ -476,7 +481,9 @@ pub fn list(dir: &Path) -> io::Result<Vec<(u64, PathBuf)>> {
             continue;
         };
         if digits.len() == 10 && digits.bytes().all(|b| b.is_ascii_digit()) {
-            out.push((digits.parse().unwrap(), entry.path()));
+            if let Ok(height) = digits.parse() {
+                out.push((height, entry.path()));
+            }
         }
     }
     out.sort_by_key(|c| std::cmp::Reverse(c.0));

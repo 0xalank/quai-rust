@@ -1,5 +1,6 @@
 //! PoEM scores of supplied candidate components. Scores are not fork authority.
 use crate::{
+    fields,
     history::{History, Record},
     placement::{self, CandidateIndex, Prepared, Profile, Route},
     rules::{self, Entropy, EntropyInput, Uint},
@@ -99,11 +100,14 @@ fn base_entropy(record: &Record, hash: Hash, context: usize) -> Result<Entropy, 
     rules::entropy(&EntropyInput {
         hash,
         difficulty: record.difficulty()?,
-        expansion: b.expansion_number.unwrap() as u8,
+        expansion: fields::some(b.expansion_number, "missing expansion number")? as u8,
         parent_entropy: arr(&b.parent_entropy)?,
         parent_delta: arr(&b.parent_delta_entropy)?,
         parent_uncled_delta: arr(&b.parent_uncled_delta_entropy)?,
-        uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap())?,
+        uncled_entropy: share_rules::uint(fields::bytes(
+            &b.uncled_entropy,
+            "missing uncled entropy",
+        )?)?,
         postfork_share_count: if context == 2 && record.prime() >= FORKS.kawpow {
             Some(uncles.len() as u32)
         } else {

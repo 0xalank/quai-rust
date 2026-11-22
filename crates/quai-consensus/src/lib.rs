@@ -55,6 +55,7 @@ pub mod share_rules;
 
 pub mod history;
 
+pub(crate) mod fields;
 pub mod validation;
 
 pub mod choice_window;

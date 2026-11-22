@@ -1,5 +1,5 @@
 //! Bounded genesis construction and hierarchy initialization. No canonical commit.
-use crate::{history::Record, rules::Uint, share_rules, Error};
+use crate::{fields, history::Record, rules::Uint, share_rules, Error};
 use crypto_bigint::{Encoding, U512};
 use prost::Message;
 use quai_primitives::{
@@ -26,8 +26,12 @@ fn magnitude(n: Uint) -> Vec<u8> {
 fn ph(h: Hash) -> c::ProtoHash {
     c::ProtoHash { value: h.to_vec() }
 }
-fn constant(s: &str) -> Hash {
-    quai_primitives::decode_hex(s).unwrap().try_into().unwrap()
+/// A compiled-in 32-byte hash.
+fn constant(s: &str) -> Result<Hash, Error> {
+    quai_primitives::decode_hex(s)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or(Error::Invalid("genesis constant"))
 }
 /// Reconstructs pinned Genesis.ToBlock fields, including the empty placeholder
 /// transaction. Allocation files/state are not executed, trusted or committed.
@@ -40,8 +44,8 @@ pub fn build_genesis(spec: &GenesisSpec) -> Result<Record, Error> {
     }
     let root =
         quai_primitives::trie::ordered_root(&[]).map_err(|_| Error::Invalid("empty root"))?;
-    let mu = constant("0x544eb3142c000f0ad2c76ac41f4222abbababed830eeafee4b6dc56b52d5cac0");
-    let uncles = constant("0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347");
+    let mu = constant("0x544eb3142c000f0ad2c76ac41f4222abbababed830eeafee4b6dc56b52d5cac0")?;
+    let uncles = constant("0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347")?;
     let mut extra = spec.extra.clone();
     extra.extend_from_slice(&spec.allocation_hash);
     let h = b::ProtoHeader {
@@ -196,16 +200,9 @@ pub fn genesis_difficulty(
     default_genesis: Option<Hash>,
 ) -> Result<U512, Error> {
     let h = parent.object().header().wire();
-    if expansion == 0
-        && parent
-            .header()
-            .wire()
-            .location
-            .as_ref()
-            .unwrap()
-            .value
-            .is_empty()
-        || h.expansion_number.unwrap() > 0 && default_genesis == Some(parent.id())
+    if expansion == 0 && fields::location(&parent.header().wire().location)?.is_empty()
+        || fields::some(h.expansion_number, "missing expansion number")? > 0
+            && default_genesis == Some(parent.id())
     {
         return Ok(parent.difficulty()?.resize());
     }

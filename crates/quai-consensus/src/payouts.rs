@@ -3,6 +3,7 @@
 use crate::bigdiv::Quotient as _;
 use crate::{
     economics::{self, RewardQuote},
+    fields,
     history::{History, Record},
     rules::{self, Uint},
     share_rules::{self, Triple},
@@ -170,13 +171,14 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
         };
         for header in headers {
             let h = header.wire();
-            if share_rules::number(h.number.as_deref().unwrap())? != target_number {
+            if share_rules::number(fields::bytes(&h.number, "missing number")?)? != target_number {
                 continue;
             }
             let mut entropy = Uint::ZERO;
             if block.prime < FORKS.kawpow {
                 let pow = hash(&header)?;
-                let difficulty = share_rules::uint(h.difficulty.as_deref().unwrap())?;
+                let difficulty =
+                    share_rules::uint(fields::bytes(&h.difficulty, "missing difficulty")?)?;
                 if difficulty == Uint::ZERO {
                     return Err(Error::Invalid("zero share difficulty"));
                 }
@@ -191,7 +193,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                 };
                 total = total.wrapping_add(&wide(entropy));
             } else {
-                let coinbase = &h.primary_coinbase.as_ref().unwrap().value;
+                let coinbase = fields::hash(&h.primary_coinbase, "missing primary coinbase")?;
                 if !crate::validation::internal_address(coinbase, &location) {
                     continue;
                 }
@@ -205,14 +207,7 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
     let mut out = vec![];
     for (header, entropy) in shares {
         let h = header.wire();
-        let to: [u8; 20] = h
-            .primary_coinbase
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let to = fields::address20(&h.primary_coinbase, "missing primary coinbase")?;
         let qi = to[1] & 128 != 0;
         let mut reward;
         if block.prime < FORKS.kawpow {
@@ -250,7 +245,9 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                     crate::auxiliary::coinbase::Coinbase::decode(aux.transaction())
                         .map(|v| v.signature_time);
                 let signature = signature_result.clone().unwrap_or(0);
-                let timestamp = u32::from_le_bytes(aux.header()[68..72].try_into().unwrap());
+                // A donor header has 80 or 120 bytes (canonical_pow).
+                let d = aux.header();
+                let timestamp = u32::from_le_bytes([d[68], d[69], d[70], d[71]]);
                 reward = if block.prime < FORKS.inclusion_depth_change {
                     if signature_result.is_err() || signature.wrapping_add(18) < timestamp {
                         narrow(

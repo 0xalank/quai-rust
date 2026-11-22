@@ -12,22 +12,27 @@ pub use quorum::Quorum;
 #[derive(Clone, Debug)]
 pub struct Auxiliary {
     wire: ProtoAuxPow,
+    /// The proof ID; `canonical_pow` sets it (1 to 4).
+    id: u8,
 }
 impl Auxiliary {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
-        Ok(Self {
-            wire: canonical_pow(bytes)
-                .map_err(|_| Error::Unsupported("bounded auxiliary semantic domain"))?,
-        })
+        let wire = canonical_pow(bytes)
+            .map_err(|_| Error::Unsupported("bounded auxiliary semantic domain"))?;
+        let id = wire
+            .chain_id
+            .ok_or(Error::Unsupported("bounded auxiliary semantic domain"))? as u8;
+        Ok(Self { wire, id })
     }
     pub fn encode(&self) -> Vec<u8> {
         self.wire.encode_to_vec()
     }
     pub fn id(&self) -> u8 {
-        self.wire.chain_id.unwrap() as u8
+        self.id
     }
+    /// The donor header; `canonical_pow` refuses an AuxPow without one.
     pub fn header(&self) -> &[u8] {
-        self.wire.header.as_ref().unwrap()
+        self.wire.header.as_deref().unwrap_or_default()
     }
     pub fn signature(&self) -> &[u8] {
         self.wire.signature.as_deref().unwrap_or_default()

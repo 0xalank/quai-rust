@@ -1,5 +1,6 @@
 //! Proof-to-header binding and bounded body commitments. Full admission fails closed.
 use crate::{
+    fields,
     pow::{Algorithm, LightCache},
     rules, Error, VerifiedPow,
 };
@@ -201,7 +202,9 @@ impl Verifier {
             return;
         }
         while self.proofs.len() >= WORK_MEMO_ENTRIES || self.proof_bytes + cost > WORK_MEMO_BYTES {
-            let old = self.proofs.pop_front().unwrap();
+            let Some(old) = self.proofs.pop_front() else {
+                break;
+            };
             self.proof_bytes -= old.key.len() + std::mem::size_of::<ProofEntry>();
         }
         self.proof_bytes += cost;
@@ -213,7 +216,9 @@ impl Verifier {
             return;
         }
         while self.work.len() >= WORK_MEMO_ENTRIES || self.work_bytes + cost > WORK_MEMO_BYTES {
-            let old = self.work.pop_front().unwrap();
+            let Some(old) = self.work.pop_front() else {
+                break;
+            };
             self.work_bytes -= old.key.len() + std::mem::size_of::<WorkEntry>();
         }
         self.work_bytes += cost;
@@ -231,7 +236,9 @@ impl Verifier {
             });
             self.key = Some(key);
         }
-        Ok(self.cache.as_deref().unwrap())
+        self.cache
+            .as_deref()
+            .ok_or(Error::Unavailable("proof-of-work cache"))
     }
     /// Compute and remember the native inclusion work of one share for a node
     /// scope. Returns the work hash. Nothing here admits the share: inclusion
@@ -293,8 +300,12 @@ impl Verifier {
         // where historical block IDs/seals omit some fields. The quorum is
         // immutable for this verifier. Errors and inclusion-only work never enter.
         let key = header.encode();
-        if let Some(index) = self.proofs.iter().position(|v| v.key == key) {
-            let entry = self.proofs.remove(index).unwrap();
+        let hit = self
+            .proofs
+            .iter()
+            .position(|v| v.key == key)
+            .and_then(|index| self.proofs.remove(index));
+        if let Some(entry) = hit {
             let proof = entry.value.clone();
             self.proofs.push_back(entry);
             self.proof_hits = self.proof_hits.saturating_add(1);
@@ -307,10 +318,10 @@ impl Verifier {
     }
     fn verify_header_proof_uncached(&mut self, header: &Header) -> Result<VerifiedPow, Error> {
         let wire = header.wire();
-        let p = wire.prime_terminus_number.as_ref().unwrap();
-        let mut height = [0; 8];
-        height[8 - p.len()..].copy_from_slice(p);
-        let height = u64::from_be_bytes(height);
+        let height = crate::share_rules::number(fields::bytes(
+            &wire.prime_terminus_number,
+            "missing prime terminus number",
+        )?)?;
         if let Some(bytes) = &wire.aux_pow {
             self.verify_auxiliary_components(header, false)?;
             let aux = crate::auxiliary::Auxiliary::decode(bytes)?;
@@ -320,26 +331,19 @@ impl Verifier {
                 nonce,
                 donor_height,
                 mix,
-                wire.difficulty.as_ref().unwrap(),
+                fields::bytes(&wire.difficulty, "missing difficulty")?,
             );
         }
         if !rules::pow_id_valid(height, None, false) {
             return Err(Error::Invalid("block proof-ID policy"));
         }
-        let mix: Hash = wire
-            .mix_hash
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let mix: Hash = fields::hash32(&wire.mix_hash, "missing mix hash")?;
         self.cache(Algorithm::Progpow, height)?.verify(
             header.seal_hash(),
-            wire.nonce.unwrap(),
+            fields::some(wire.nonce, "missing nonce")?,
             height,
             mix,
-            wire.difficulty.as_ref().unwrap(),
+            fields::bytes(&wire.difficulty, "missing difficulty")?,
         )
     }
     /// Admit signed auxiliary bindings for a block or workshare role. This does
@@ -350,10 +354,10 @@ impl Verifier {
         workshare: bool,
     ) -> Result<crate::auxiliary::Admission, Error> {
         let w = header.wire();
-        let p = w.prime_terminus_number.as_ref().unwrap();
-        let mut b = [0; 8];
-        b[8 - p.len()..].copy_from_slice(p);
-        let height = u64::from_be_bytes(b);
+        let height = crate::share_rules::number(fields::bytes(
+            &w.prime_terminus_number,
+            "missing prime terminus number",
+        )?)?;
         let aux = crate::auxiliary::Auxiliary::decode(
             w.aux_pow
                 .as_ref()
@@ -365,7 +369,11 @@ impl Verifier {
         let quorum = self
             .quorum
             .get_or_insert_with(crate::auxiliary::Quorum::pinned);
-        aux.admit(header.seal_hash(), w.time.unwrap(), quorum)
+        aux.admit(
+            header.seal_hash(),
+            fields::some(w.time, "missing time")?,
+            quorum,
+        )
     }
     /// Recompute a share's native work and mix. The historical unpaid donor
     /// exception is derived from node scope here, never supplied by a proof.
@@ -382,42 +390,54 @@ impl Verifier {
         memo_key.extend_from_slice(node_location);
         let header_bytes = header.encode();
         memo_key.extend_from_slice(&header_bytes);
-        if let Some(index) = self.work.iter().position(|entry| entry.key == memo_key) {
-            let entry = self.work.remove(index).unwrap();
+        let hit = self
+            .work
+            .iter()
+            .position(|entry| entry.key == memo_key)
+            .and_then(|index| self.work.remove(index));
+        if let Some(entry) = hit {
             let value = entry.value.clone();
             self.work.push_back(entry);
             self.work_hits = self.work_hits.saturating_add(1);
             return Ok(value);
         }
         self.work_misses = self.work_misses.saturating_add(1);
-        let hash = if let Some(index) = self
+        let reused = self
             .proofs
             .iter()
             .position(|entry| entry.key == header_bytes)
-        {
+            .and_then(|index| self.proofs.remove(index));
+        let hash = if let Some(entry) = reused {
             // A successful block proof has already checked this exact header's
             // mix, target, auxiliary bindings and mandatory quorum signature.
             // Inclusion permits a weaker target and, only for foreign donor
             // work, a signature exception; it adds no stronger proof condition.
             // The converse is forbidden: inclusion work never fills `proofs`.
-            let entry = self.proofs.remove(index).unwrap();
             let hash = entry.value.hash();
             self.proofs.push_back(entry);
             self.full_proof_inclusion_reuses = self.full_proof_inclusion_reuses.saturating_add(1);
             hash
         } else {
             let w = header.wire();
-            let height = crate::share_rules::number(w.prime_terminus_number.as_ref().unwrap())?;
+            let height = crate::share_rules::number(fields::bytes(
+                &w.prime_terminus_number,
+                "missing prime terminus number",
+            )?)?;
             if let Some(bytes) = &w.aux_pow {
                 let aux = crate::auxiliary::Auxiliary::decode(bytes)?;
                 let external = !crate::validation::internal_address(
-                    w.primary_coinbase.as_ref().unwrap().value.as_slice(),
+                    fields::hash(&w.primary_coinbase, "missing primary coinbase")?,
                     node_location,
                 );
                 let quorum = self
                     .quorum
                     .get_or_insert_with(crate::auxiliary::Quorum::pinned);
-                aux.admit_inclusion(header.seal_hash(), w.time.unwrap(), quorum, external)?;
+                aux.admit_inclusion(
+                    header.seal_hash(),
+                    fields::some(w.time, "missing time")?,
+                    quorum,
+                    external,
+                )?;
                 if aux.id() == 1 {
                     let (seal, nonce, donor_height, mix) = aux.kawpow_input()?;
                     let (actual, hash) = self.cache(Algorithm::Kawpow, donor_height)?.compute(
@@ -435,17 +455,10 @@ impl Verifier {
                     crate::donor::scrypt(aux.header())?
                 }
             } else {
-                let mix: Hash = w
-                    .mix_hash
-                    .as_ref()
-                    .unwrap()
-                    .value
-                    .as_slice()
-                    .try_into()
-                    .unwrap();
+                let mix: Hash = fields::hash32(&w.mix_hash, "missing mix hash")?;
                 let (actual, hash) = self.cache(Algorithm::Progpow, height)?.compute(
                     header.seal_hash(),
-                    w.nonce.unwrap(),
+                    fields::some(w.nonce, "missing nonce")?,
                     height,
                 )?;
                 if actual != mix {

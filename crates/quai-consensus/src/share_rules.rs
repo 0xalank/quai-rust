@@ -61,9 +61,8 @@ pub fn number(bytes: &[u8]) -> Result<u64, Error> {
     if n.bits_vartime() > 64 {
         return Err(Error::Unsupported("history number exceeds u64"));
     }
-    Ok(u64::from_be_bytes(
-        n.to_be_bytes()[24..].try_into().unwrap(),
-    ))
+    let b = n.to_be_bytes();
+    Ok(u64::from_be_bytes(std::array::from_fn(|i| b[24 + i])))
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Triple {
@@ -261,8 +260,11 @@ pub enum Classification {
 /// A controlled-hash projection for differentials; runtime inclusion uses native recomputed work.
 pub fn classify(header: &Header, pow: Hash, p2p_threshold: u16) -> Result<Classification, Error> {
     let wh = header.wire();
-    let prime = number(wh.prime_terminus_number.as_ref().unwrap())?;
-    let difficulty = uint(wh.difficulty.as_ref().unwrap())?;
+    let prime = number(crate::fields::bytes(
+        &wh.prime_terminus_number,
+        "missing prime terminus number",
+    )?)?;
+    let difficulty = uint(crate::fields::bytes(&wh.difficulty, "missing difficulty")?)?;
     if difficulty == Uint::ZERO {
         return Ok(Classification::Invalid);
     }

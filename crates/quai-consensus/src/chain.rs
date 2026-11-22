@@ -66,8 +66,8 @@ impl Chain {
             return Ok(c.clone());
         }
         let c = Arc::new(Self::new(ChainSpec::colosseum())?);
-        let _ = CHAIN.set(c);
-        Ok(CHAIN.get().unwrap().clone())
+        // A value another thread set first is the same.
+        Ok(CHAIN.get_or_init(|| c).clone())
     }
     /// A reviewed private profile as a chain. Its fingerprint stays the
     /// profile fingerprint, which binds permits and stored branches.
@@ -86,8 +86,8 @@ impl Chain {
             return Ok(c.clone());
         }
         let c = Arc::new(Self::from_private(PrivateChain::hierarchy_template()?));
-        let _ = CHAIN.set(c);
-        Ok(CHAIN.get().unwrap().clone())
+        // A value another thread set first is the same.
+        Ok(CHAIN.get_or_init(|| c).clone())
     }
     /// The chain for an export environment name.
     pub fn for_environment(environment: &str) -> Result<Arc<Self>, Error> {

@@ -1,6 +1,7 @@
 //! Bounded coordinator ancestry/constraint/PCRC components on imported views.
 //! Eligibility reports never establish validated history or canonical authority.
 use crate::{
+    fields,
     frontier::Frontier,
     history::Record,
     placement::{self, Profile, Termini},
@@ -153,11 +154,11 @@ impl CoordinatorView {
         sub_parent: Hash,
         dominant: Hash,
     ) -> Result<bool, Error> {
-        if location.is_empty() {
+        let Some(&last) = location.last() else {
             return Err(Error::Invalid("PCRC subordinate location"));
-        }
+        };
         let l = self.key(location)?;
-        let index = *location.last().unwrap() as usize;
+        let index = last as usize;
         Ok(self.termini(&l, sub_parent)?.dominant[index] == dominant)
     }
     /// Source IsAncestor equality and parent-chain semantics. Missing middle
@@ -376,7 +377,7 @@ impl CoordinatorView {
     {
         let mut map = self.normalize_constraints(input)?;
         let leader = &self.entry(leader_location, leader)?.record;
-        let leader_loc = &leader.header().wire().location.as_ref().unwrap().value;
+        let leader_loc = fields::hash(&leader.header().wire().location, "missing location")?;
         if self.profile(leader_loc)?.genesis.contains(&leader.id()) {
             return Ok(map);
         }
@@ -396,14 +397,14 @@ impl CoordinatorView {
         for iteration in 0..ANCESTOR_DISTANCE {
             if !seen.insert((
                 self.key(&Self::context_location(
-                    &parent.header().wire().location.as_ref().unwrap().value,
+                    fields::hash(&parent.header().wire().location, "missing location")?,
                     current_order,
                 )?)?,
                 parent.id(),
             )) {
                 return Err(Error::Invalid("cyclic constraint ancestry"));
             }
-            let pl = &parent.header().wire().location.as_ref().unwrap().value;
+            let pl = fields::hash(&parent.header().wire().location, "missing location")?;
             if parent_order < current_order || iteration == 0 {
                 let key = self.key(&Self::context_location(pl, parent_order)?)?;
                 let existing = map.get(&key).copied();
@@ -417,7 +418,7 @@ impl CoordinatorView {
                             let ancestor = self.is_ancestor(
                                 t,
                                 parent.id(),
-                                &h.header().wire().location.as_ref().unwrap().value,
+                                fields::hash(&h.header().wire().location, "missing location")?,
                                 0,
                             )?;
                             let progeny = self.is_ancestor(parent.id(), t, &[], 0)?;
@@ -442,7 +443,10 @@ impl CoordinatorView {
                             map.insert(vec![], current.id());
                             map.insert(
                                 self.key(&Self::context_location(
-                                    &current.header().wire().location.as_ref().unwrap().value,
+                                    fields::hash(
+                                        &current.header().wire().location,
+                                        "missing location",
+                                    )?,
                                     1,
                                 )?)?,
                                 current.id(),
@@ -463,7 +467,7 @@ impl CoordinatorView {
                             let ancestor = self.is_ancestor(
                                 t,
                                 parent.id(),
-                                &h.header().wire().location.as_ref().unwrap().value,
+                                fields::hash(&h.header().wire().location, "missing location")?,
                                 1,
                             )?;
                             let progeny = self.is_ancestor(parent.id(), t, &region, 1)?;
@@ -485,7 +489,7 @@ impl CoordinatorView {
             }
             current = parent;
             current_order = parent_order.min(current_order);
-            let cl = &current.header().wire().location.as_ref().unwrap().value;
+            let cl = fields::hash(&current.header().wire().location, "missing location")?;
             let loc = Self::context_location(cl, current_order)?;
             let p = parent.parents[current_order as usize];
             let profile = self.profile(&loc)?;

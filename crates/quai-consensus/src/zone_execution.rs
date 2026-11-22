@@ -1,7 +1,7 @@
 //! Serial zone execution composition. A successful report checks execution
 //! commitments, never header/proof/hierarchy admission or canonical publication.
 use crate::{
-    economics,
+    economics, fields,
     history::{History, Record},
     payouts,
     private_profile::PrivateChain,
@@ -155,9 +155,6 @@ fn execution(error: settlement::Error) -> Error {
 fn uint(v: &Option<Vec<u8>>) -> Result<Uint, Error> {
     share_rules::uint(v.as_deref().ok_or(invalid("missing execution integer"))?)
 }
-fn hash(v: &Option<quai_primitives::schema::common::ProtoHash>) -> Hash {
-    v.as_ref().unwrap().value.as_slice().try_into().unwrap()
-}
 fn add(a: Uint, b: Uint) -> Result<Uint, Error> {
     let n: U1024 = a.resize();
     let n = n.wrapping_add(&b.resize());
@@ -202,7 +199,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
 ) -> Result<Executed, Error> {
     let body = block.object.header().wire();
     let wh = block.header.wire();
-    if wh.location.as_ref().unwrap().value != profile.location {
+    if fields::location(&wh.location)? != &profile.location[..] {
         return Err(invalid("execution location"));
     }
     block
@@ -222,7 +219,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
         != if genesis {
             empty
         } else {
-            hash(&parent.object.header().wire().evm_root)
+            fields::hash32(&parent.object.header().wire().evm_root, "missing evm root")?
         }
         || state
             .world
@@ -232,7 +229,10 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
             != if genesis {
                 empty
             } else {
-                hash(&parent.object.header().wire().etx_set_root)
+                fields::hash32(
+                    &parent.object.header().wire().etx_set_root,
+                    "missing etx set root",
+                )?
             }
         || if genesis {
             !state.utxos.is_empty()
@@ -241,21 +241,31 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                     .lockups_is_empty()
                     .map_err(|e| state_error(e, Error::ResourceLimit("genesis lockups")))?
         } else {
-            state.utxos.root() != hash(&parent.object.header().wire().utxo_root)
+            state.utxos.root()
+                != fields::hash32(
+                    &parent.object.header().wire().utxo_root,
+                    "missing utxo root",
+                )?
         }
     {
         return Err(invalid("execution parent state binding"));
     }
-    let prime = history.get(&hash(&body.prime_terminus_hash))?;
+    let prime = history.get(&fields::hash32(
+        &body.prime_terminus_hash,
+        "missing prime terminus hash",
+    )?)?;
     let exchange = uint(&prime.object.header().wire().exchange_rate)?;
     let quote = economics::reward_quote(&block.header, exchange, uint(&body.avg_tx_fees)?)?;
-    let eligible = hash(&prime.object.header().wire().etx_eligible_slices);
+    let eligible = fields::hash32(
+        &prime.object.header().wire().etx_eligible_slices,
+        "missing etx eligible slices",
+    )?;
     let parent_size = if genesis {
         Uint::ZERO
     } else {
         uint(&parent.object.header().wire().quai_state_size)?
     };
-    let gas_limit = body.gas_limit.unwrap();
+    let gas_limit = fields::some(body.gas_limit, "missing gas limit")?;
     let base_fee = uint(&body.base_fee)?;
     let mut block_hashes = BTreeMap::new();
     let mut cursor = parent.clone();
@@ -275,21 +285,14 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                 address: [0; 20],
                 caller: [0; 20],
                 origin: [0; 20],
-                coinbase: wh
-                    .primary_coinbase
-                    .as_ref()
-                    .unwrap()
-                    .value
-                    .as_slice()
-                    .try_into()
-                    .unwrap(),
+                coinbase: fields::address20(&wh.primary_coinbase, "missing primary coinbase")?,
                 etx_sender: [0; 20],
                 location: profile.location,
                 tx_type: 0,
                 value: Word::ZERO,
                 gas_price: Word::ZERO,
                 block_number: Uint::from_u64(block.numbers[2]),
-                timestamp: Uint::from_u64(parent.header.wire().time.unwrap()),
+                timestamp: Uint::from_u64(fields::some(parent.header.wire().time, "missing time")?),
                 difficulty: block.difficulty()?,
                 base_fee,
                 chain_id: profile.chain_id,
@@ -542,17 +545,17 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
         let checks =
             [
                 (
-                    c.block.cumulative_gas == body.gas_used.unwrap(),
+                    c.block.cumulative_gas == fields::some(body.gas_used, "missing gas used")?,
                     "execution gas counter",
                 ),
                 (
-                    c.block.state_used == body.state_used.unwrap(),
+                    c.block.state_used == fields::some(body.state_used, "missing state used")?,
                     "execution state counter",
                 ),
                 (
                     state.world.root().map_err(|error| {
                         state_error(error, Error::ResourceLimit("account root"))
-                    })? == hash(&body.evm_root),
+                    })? == fields::hash32(&body.evm_root, "missing evm root")?,
                     "execution account root",
                 ),
                 (
@@ -561,11 +564,11 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                         .etxs()
                         .root()
                         .map_err(|error| state_error(error, Error::ResourceLimit("ETX root")))?
-                        == hash(&body.etx_set_root),
+                        == fields::hash32(&body.etx_set_root, "missing etx set root")?,
                     "execution ETX root",
                 ),
                 (
-                    state.utxos.root() == hash(&body.utxo_root),
+                    state.utxos.root() == fields::hash32(&body.utxo_root, "missing utxo root")?,
                     "execution UTXO root",
                 ),
                 (
@@ -574,13 +577,13 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                 ),
                 (
                     receipts_root(&receipts).map_err(|_| invalid("receipt encoding"))?
-                        == hash(&body.receipt_hash),
+                        == fields::hash32(&body.receipt_hash, "missing receipt hash")?,
                     "execution receipt root",
                 ),
                 (
                     quai_primitives::work::transactions_root(&outbound)
                         .map_err(|_| invalid("outbound encoding"))?
-                        == hash(&body.outbound_etx_hash),
+                        == fields::hash32(&body.outbound_etx_hash, "missing outbound etx hash")?,
                     "execution outbound root",
                 ),
             ];

@@ -1,6 +1,7 @@
 //! Durable execution-only private branches. Local selection is explicit and
 //! grants no header/hierarchy/fork-choice authority or validated RPC access.
 use crate::{
+    fields,
     history::{History, Record, MAX_RECORDS},
     private_profile::PrivateChain,
     share_rules,
@@ -305,7 +306,8 @@ fn decode<'a>(checkpoint: &'a Checkpoint, profile: &PrivateChain) -> io::Result<
             && anchor.height == checkpoint.height
             && anchor.height == record.number(2).map_err(bad)?
             && anchor.parent == record.parents[2]
-            && anchor.timestamp == record.header().wire().time.unwrap(),
+            && anchor.timestamp
+                == fields::some(record.header().wire().time, "missing time").map_err(bad)?,
         "private commit anchor binding",
     )?;
     if checkpoint.parent.is_none() {
@@ -322,16 +324,23 @@ fn decode<'a>(checkpoint: &'a Checkpoint, profile: &PrivateChain) -> io::Result<
         record.verify_binding().map_err(bad)?;
         let body = record.object().header().wire();
         require(
-            roots.evm.as_slice() == body.evm_root.as_ref().unwrap().value
-                && roots.etx.as_slice() == body.etx_set_root.as_ref().unwrap().value
-                && roots.utxo.as_slice() == body.utxo_root.as_ref().unwrap().value
+            roots.evm.as_slice()
+                == fields::hash(&body.evm_root, "missing evm root").map_err(bad)?
+                && roots.etx.as_slice()
+                    == fields::hash(&body.etx_set_root, "missing etx set root").map_err(bad)?
+                && roots.utxo.as_slice()
+                    == fields::hash(&body.utxo_root, "missing utxo root").map_err(bad)?
                 && crate::rules::Uint::from_u64(roots.accounts)
-                    == share_rules::uint(body.quai_state_size.as_ref().unwrap()).map_err(bad)?,
+                    == share_rules::uint(
+                        fields::bytes(&body.quai_state_size, "missing quai state size")
+                            .map_err(bad)?,
+                    )
+                    .map_err(bad)?,
             "private commit state roots",
         )?;
         require(
             trie::ordered_root(&receipts).map_err(bad)?.as_slice()
-                == body.receipt_hash.as_ref().unwrap().value,
+                == fields::hash(&body.receipt_hash, "missing receipt hash").map_err(bad)?,
             "private commit receipt root",
         )?;
     }
@@ -400,7 +409,8 @@ impl PrivateBranch {
                 block: record.id(),
                 parent: record.parents[2],
                 height: 0,
-                timestamp: record.header().wire().time.unwrap(),
+                timestamp: fields::some(record.header().wire().time, "missing time")
+                    .map_err(bad)?,
             };
             let staged = match &s.journal {
                 Store::Keyed(k) => k.database.version_for_block(record.id())?,
@@ -750,7 +760,7 @@ impl PrivateBranch {
             block: block.id(),
             parent: block.parents[2],
             height: block.number(2).map_err(bad)?,
-            timestamp: block.header().wire().time.unwrap(),
+            timestamp: fields::some(block.header().wire().time, "missing time").map_err(bad)?,
         };
         let height = block.number(2).map_err(bad)?;
         let receipts = result

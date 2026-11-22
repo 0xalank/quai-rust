@@ -4,6 +4,7 @@
 //! admitted-block token, fork choice or canonical/RPC publication is implied.
 use crate::{
     chain::Chain,
+    fields,
     history::{History, Record, MAX_RECORDS},
     placement::{self, CandidateIndex, Prepared, Profile},
     prime_controller,
@@ -143,11 +144,11 @@ pub fn newly_confirmed(
         if parent_order == 0 && (location[0] as u64 > regions || location[1] as u64 > zones) {
             return Ok(out);
         }
-        let pl = &parent.header().wire().location.as_ref().unwrap().value;
+        let pl = fields::hash(&parent.header().wire().location, "missing location")?;
         if pl.get(context) == Some(&location[context]) && parent_order as usize == context {
             return Ok(out);
         }
-        if context == 1 && parent_order == 0 && pl.as_slice() != location {
+        if context == 1 && parent_order == 0 && pl != location {
             let list = known.confirmed(&parent.id())?;
             out.extend(filter_to_sub(&list, location, 1, 0)?);
         }
@@ -674,7 +675,8 @@ impl Hierarchy {
             appends[c] = Some(p);
         }
         let uncled = expected_uncled_entropy(v, &self.histories[2], zone)?;
-        if share_rules::uint(h.uncled_entropy.as_ref().unwrap())? != uncled {
+        if share_rules::uint(fields::bytes(&h.uncled_entropy, "missing uncled entropy")?)? != uncled
+        {
             return Err(Error::Invalid("hierarchy uncled entropy"));
         }
         let accumulated = accumulated(&self.histories, &self.indexes, zone)?;
@@ -685,13 +687,16 @@ impl Hierarchy {
             if transactions_root(&cross)
                 .map_err(|_| Error::Unsupported("rollup root domain"))?
                 .as_slice()
-                != h.etx_rollup_hash.as_ref().unwrap().value
+                != fields::hash(&h.etx_rollup_hash, "missing etx rollup hash")?
             {
                 return Err(Error::Invalid("committed ETX rollup root"));
             }
         }
         if order <= 1 {
-            let from_view = sub_rollup(&self.histories, self, records[1].as_ref().unwrap(), 1)?;
+            let region = records[1]
+                .as_ref()
+                .ok_or(Error::Invalid("hierarchy region record"))?;
+            let from_view = sub_rollup(&self.histories, self, region, 1)?;
             if from_view
                 .iter()
                 .map(Transaction::encode)
@@ -771,9 +776,11 @@ impl Hierarchy {
             return Err(Error::Invalid("stale hierarchy preparation"));
         }
         for c in p.order as usize..3 {
-            let r = p.records[c].as_ref().unwrap();
+            let (Some(r), Some(a)) = (p.records[c].as_ref(), p.appends[c].as_ref()) else {
+                return Err(Error::Invalid("prepared confirmation record"));
+            };
             self.histories[c].check_insert(r)?;
-            self.indexes[c].check_insert(&r.id(), &p.appends[c].as_ref().unwrap().next)?;
+            self.indexes[c].check_insert(&r.id(), &a.next)?;
         }
         if self.orders.len() >= MAX_RECORDS
             || (self.chain.private().is_some()
@@ -784,12 +791,18 @@ impl Hierarchy {
         {
             return Err(Error::ResourceLimit("hierarchy history capacity"));
         }
-        let id = p.records[2].as_ref().unwrap().id();
+        let id = p.records[2]
+            .as_ref()
+            .ok_or(Error::Invalid("prepared confirmation record"))?
+            .id();
+        // The loop above found every record and append present.
         for c in p.order as usize..3 {
-            let r = p.records[c].take().unwrap();
+            let (Some(r), Some(a)) = (p.records[c].take(), p.appends[c].take()) else {
+                return Err(Error::Invalid("prepared confirmation record"));
+            };
             self.heads[c] = r.id();
             self.histories[c].insert(r)?;
-            self.indexes[c].insert_imported(id, p.appends[c].take().unwrap().next)?;
+            self.indexes[c].insert_imported(id, a.next)?;
         }
         self.orders.insert(id, p.order);
         if p.order <= 1 {

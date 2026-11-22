@@ -134,9 +134,11 @@ impl RecentCandidates {
         if exists {
             c.arrival.retain(|id| *id != tip.id)
         } else if full {
-            let id = c.arrival.pop_front().unwrap();
-            c.nodes.remove(&id);
-            evicted = Some(id)
+            // A full set has an oldest entry.
+            if let Some(id) = c.arrival.pop_front() {
+                c.nodes.remove(&id);
+                evicted = Some(id)
+            }
         } else {
             self.len += 1
         }

@@ -1,5 +1,5 @@
 //! Bounded ancestry snapshots. Imported records are candidates, never chain authority.
-use crate::{rules::Uint, share_rules, verifier::PINNED_SCHEDULE, Error};
+use crate::{fields, rules::Uint, share_rules, verifier::PINNED_SCHEDULE, Error};
 use quai_primitives::spec::FORKS;
 use quai_primitives::{work::WorkObject, Hash, Header};
 use std::{collections::BTreeMap, sync::Arc};
@@ -112,7 +112,10 @@ impl Record {
         &self.bytes
     }
     pub fn difficulty(&self) -> Result<Uint, Error> {
-        share_rules::uint(self.header.wire().difficulty.as_deref().unwrap())
+        share_rules::uint(fields::bytes(
+            &self.header.wire().difficulty,
+            "missing difficulty",
+        )?)
     }
     pub fn uncles(&self) -> Result<Vec<Header>, Error> {
         self.object

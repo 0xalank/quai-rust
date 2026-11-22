@@ -1,6 +1,7 @@
 //! Candidate append preparation: computed order, ancestry commitments and PCRC.
 //! Candidate caches are unverified and never publish canonical chain state.
 use crate::{
+    fields,
     history::{History, Record},
     rules::{self, Uint},
     share_rules,
@@ -273,7 +274,9 @@ pub fn check_append_commitments(
             .interlinks
             .as_ref()
             .ok_or(Error::Unavailable("parent interlinks"))?;
-        if hash_list_root(links)?.as_slice() != b.interlink_root_hash.as_ref().unwrap().value {
+        if hash_list_root(links)?.as_slice()
+            != fields::hash(&b.interlink_root_hash, "missing interlink root hash")?
+        {
             return Err(Error::Invalid("parent interlink commitment"));
         }
     }
@@ -404,7 +407,7 @@ pub fn order_projection(
     let e = rules::entropy(&rules::EntropyInput {
         hash,
         difficulty: header.difficulty()?,
-        expansion: b.expansion_number.unwrap() as u8,
+        expansion: fields::some(b.expansion_number, "missing expansion number")? as u8,
         parent_entropy: [Uint::ZERO; 3],
         parent_delta: pd,
         parent_uncled_delta: [Uint::ZERO; 3],
@@ -523,7 +526,7 @@ pub fn prepare_append_components(
             .as_ref()
             .ok_or(Error::Unavailable("parent termini"))?,
         header.id,
-        &header.header.wire().location.as_ref().unwrap().value,
+        fields::hash(&header.header.wire().location, "missing location")?,
         &profile.location,
         dominant_origin,
         claimed_dominant,

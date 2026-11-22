@@ -1,6 +1,6 @@
 //! Bounded coordinator NodeSet projections and entropy-keyed pending candidates.
 //! Imported tips, calculated scores and pending sets carry no canonical authority.
-use crate::{history::Record, initialization, rules::Uint, scoring::CandidateScore, Error};
+use crate::{fields, history::Record, initialization, rules::Uint, scoring::CandidateScore, Error};
 use crypto_bigint::U512;
 use quai_primitives::Hash;
 use std::{
@@ -103,7 +103,7 @@ impl Frontier {
         if order > 2 {
             return Err(Error::Invalid("frontier order"));
         }
-        let loc = &record.header().wire().location.as_ref().unwrap().value;
+        let loc = fields::hash(&record.header().wire().location, "missing location")?;
         if loc.len() != 2 || loc.iter().any(|v| *v > 15) || !self.tips.contains_key(loc) {
             return Err(Error::Unsupported("frontier block location"));
         }
@@ -114,7 +114,7 @@ impl Frontier {
         if order <= 1 {
             out.push(vec![loc[0]])
         }
-        out.push(loc.clone());
+        out.push(loc.to_vec());
         Ok(out)
     }
     pub fn extendable(&self, record: &Record, order: u8) -> Result<bool, Error> {
@@ -176,7 +176,12 @@ impl Frontier {
         if m.order as usize != score.context() {
             return Err(Error::Unsupported("frontier local score required"));
         }
-        if record.object().header().wire().expansion_number.unwrap() as u8 != self.expansion {
+        if fields::some(
+            record.object().header().wire().expansion_number,
+            "missing expansion number",
+        )? as u8
+            != self.expansion
+        {
             return Err(Error::Unsupported("frontier expansion transition"));
         }
         self.updated_projection(record, m.order, score.total())
@@ -231,11 +236,13 @@ impl PendingFrontiers {
         let inserted = !self.sets.contains_key(&key);
         let mut evicted = None;
         if inserted {
+            // A full set has an oldest entry.
             if self.sets.len() == self.capacity {
-                let old = self.arrival.pop_front().unwrap();
-                self.sets.remove(&old);
-                self.processing.retain(|k| *k != old);
-                evicted = Some(old);
+                if let Some(old) = self.arrival.pop_front() {
+                    self.sets.remove(&old);
+                    self.processing.retain(|k| *k != old);
+                    evicted = Some(old);
+                }
             }
             self.sets.insert(key, Arc::new(frontier));
             self.arrival.push_back(key);

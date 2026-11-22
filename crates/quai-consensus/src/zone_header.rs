@@ -1,5 +1,6 @@
 //! Zone header policy components on supplied candidate history. No chain authority.
 use crate::{
+    fields,
     history::{History, Record},
     rules::Uint,
     share_rules::{self, Triple},
@@ -38,33 +39,30 @@ pub fn expected_expansion(
     let id = if order == 0 {
         parent.id
     } else {
-        parent
-            .object
-            .header()
-            .wire()
-            .prime_terminus_hash
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .unwrap()
+        fields::hash32(
+            &parent.object.header().wire().prime_terminus_hash,
+            "missing prime terminus hash",
+        )?
     };
     let prime = history.get(&id)?;
     let b = prime.object.header().wire();
     if profile.genesis.contains(&id) && profile.location == [0, 0] {
-        return Ok(b.expansion_number.unwrap() as u8);
+        return Ok(fields::some(b.expansion_number, "missing expansion number")? as u8);
     }
-    if b.threshold_count.unwrap() == 1168 {
-        return Ok((b.expansion_number.unwrap() as u8).wrapping_add(1));
+    if fields::some(b.threshold_count, "missing threshold count")? == 1168 {
+        return Ok(
+            (fields::some(b.expansion_number, "missing expansion number")? as u8).wrapping_add(1),
+        );
     }
-    Ok(history
-        .get(&prime.parents[0])?
-        .object
-        .header()
-        .wire()
-        .expansion_number
-        .unwrap() as u8)
+    Ok(fields::some(
+        history
+            .get(&prime.parents[0])?
+            .object
+            .header()
+            .wire()
+            .expansion_number,
+        "missing expansion number",
+    )? as u8)
 }
 /// Controlled-parent-entropy projection for offline comparison. It verifies signed
 /// auxiliary bindings, but supplied entropy is not a native proof/authority token.
@@ -109,35 +107,30 @@ pub fn check_zone_header_projection(
         return Err(Error::Invalid("parent uncled delta entropy"));
     }
     let expansion = expected_expansion(history, &parent, profile, metrics.order)?;
-    if b.expansion_number.unwrap() as u8 != expansion {
+    if fields::some(b.expansion_number, "missing expansion number")? as u8 != expansion {
         return Err(Error::Invalid("zone expansion"));
     }
     if header.prime >= FORKS.kawpow && w.aux_pow.is_some() {
         verifier.verify_auxiliary_components(&header.header, false)?;
     }
     let base_fee = crate::economics::expected_base_fee(history, &parent, profile)?;
-    if share_rules::uint(b.base_fee.as_deref().unwrap())? != base_fee {
+    if share_rules::uint(fields::bytes(&b.base_fee, "missing base fee")?)? != base_fee {
         return Err(Error::Invalid("base fee"));
     }
     let (ph, pn) = if metrics.order == 0 || profile.genesis.contains(&parent.id) {
         (parent.id, parent.numbers[0])
     } else {
         (
-            parent
-                .object
-                .header()
-                .wire()
-                .prime_terminus_hash
-                .as_ref()
-                .unwrap()
-                .value
-                .as_slice()
-                .try_into()
-                .unwrap(),
+            fields::hash32(
+                &parent.object.header().wire().prime_terminus_hash,
+                "missing prime terminus hash",
+            )?,
             parent.prime,
         )
     };
-    if b.prime_terminus_hash.as_ref().unwrap().value.as_slice() != ph || header.prime != pn {
+    if fields::hash(&b.prime_terminus_hash, "missing prime terminus hash")? != ph
+        || header.prime != pn
+    {
         return Err(Error::Invalid("prime terminus binding"));
     }
     if header.prime >= FORKS.kawpow {
@@ -156,8 +149,14 @@ pub fn check_zone_header_projection(
             share_rules::uint(pw.sha_share_target.as_deref().unwrap_or_default())?,
             header.prime,
         )?;
-        if share_rules::uint(w.sha_share_target.as_deref().unwrap())? != target
-            || share_rules::uint(w.scrypt_share_target.as_deref().unwrap())? != target
+        if share_rules::uint(fields::bytes(
+            &w.sha_share_target,
+            "missing sha share target",
+        )?)? != target
+            || share_rules::uint(fields::bytes(
+                &w.scrypt_share_target,
+                "missing scrypt share target",
+            )?)? != target
         {
             return Err(Error::Invalid("header share target"));
         }
@@ -171,7 +170,11 @@ pub fn check_zone_header_projection(
             header.prime,
             aux.as_ref(),
         )?;
-        if share_rules::uint(w.kawpow_difficulty.as_deref().unwrap())? != kaw {
+        if share_rules::uint(fields::bytes(
+            &w.kawpow_difficulty,
+            "missing kawpow difficulty",
+        )?)? != kaw
+        {
             return Err(Error::Invalid("header KAWPOW controller"));
         }
     }

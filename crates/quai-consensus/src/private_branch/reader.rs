@@ -261,7 +261,9 @@ impl Reader {
         })?;
         Ok(d.records[2]
             .as_ref()
-            .unwrap()
+            .ok_or(quai_execution::settlement::Error::Invalid(
+                "missing private redemption ancestry",
+            ))?
             .object()
             .transactions()
             .iter()

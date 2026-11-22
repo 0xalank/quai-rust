@@ -28,7 +28,8 @@ fn narrow(n: U512) -> Result<Uint, Error> {
     Ok(n.resize())
 }
 fn low64(n: Uint) -> u64 {
-    u64::from_be_bytes(n.to_be_bytes()[24..].try_into().unwrap())
+    let b = n.to_be_bytes();
+    u64::from_be_bytes(std::array::from_fn(|i| b[24 + i]))
 }
 /// core/exchange_controller.go CalculateTokenChoicesSet, the choices of one
 /// block: normalize the priced ETXs with the parent's miner difficulty and
@@ -193,16 +194,17 @@ impl Window {
         self.persisted_row_writes
     }
     pub fn choice(&self, i: usize) -> Option<Choice> {
-        if i >= N {
-            return None;
-        }
+        (i < N).then(|| self.row(i))
+    }
+    /// Row `i` (below `N`) in logical order.
+    fn row(&self, i: usize) -> Choice {
         let slot = (self.start + i) % N;
-        Some(self.chunks[slot / CHUNK][slot % CHUNK])
+        self.chunks[slot / CHUNK][slot % CHUNK]
     }
     pub fn logical_digest(&self) -> Hash {
         let mut h = Sha256::new();
         for i in 0..N {
-            h.update(self.choice(i).unwrap().encode())
+            h.update(self.row(i).encode())
         }
         h.finalize().into()
     }
@@ -369,7 +371,7 @@ impl Window {
     }
     /// The rows in logical order (types.TokenChoiceSet index order).
     pub fn choices(&self) -> Vec<Choice> {
-        (0..N).map(|i| self.choice(i).unwrap()).collect()
+        (0..N).map(|i| self.row(i)).collect()
     }
     /// A window bound to `block` at `number` from rows in logical order, as
     /// rawdb.ReadTokenChoicesSet returns them.
@@ -405,7 +407,7 @@ impl Window {
             None => out.push(0),
         }
         for i in 0..N {
-            out.extend(self.choice(i).unwrap().encode());
+            out.extend(self.row(i).encode());
         }
         out
     }

@@ -23,19 +23,26 @@ pub struct Quorum {
     aggregate: [[u8; 33]; 6],
     verifiers: [k256::schnorr::VerifyingKey; 6],
 }
+/// The compiled-in quorum keys (params.MuSig2PublicKeys).
+fn pinned_keys() -> Result<[[u8; 33]; 3], Error> {
+    let mut out = [[0u8; 33]; 3];
+    for (key, hex) in out.iter_mut().zip(PINNED_KEYS) {
+        *key = quai_primitives::decode_hex(&format!("0x{hex}"))
+            .ok()
+            .and_then(|b| b.try_into().ok())
+            .ok_or(Error::Invalid("pinned quorum key"))?;
+    }
+    Ok(out)
+}
 impl Quorum {
     /// The quorum of a chain spec (params.MuSig2PublicKeys for go-quai).
     pub fn for_spec(spec: &quai_primitives::spec::ChainSpec) -> Result<Self, Error> {
         Self::from_trusted_keys(spec.quorum_keys)
     }
     pub fn pinned() -> Self {
-        Self::from_trusted_keys(std::array::from_fn(|i| {
-            quai_primitives::decode_hex(&format!("0x{}", PINNED_KEYS[i]))
-                .unwrap()
-                .try_into()
-                .unwrap()
-        }))
-        .expect("pinned quorum keys")
+        pinned_keys()
+            .and_then(Self::from_trusted_keys)
+            .expect("pinned quorum keys")
     }
     pub fn from_trusted_keys(keys: [[u8; 33]; 3]) -> Result<Self, Error> {
         let parsed = keys
@@ -63,7 +70,11 @@ impl Quorum {
             }
             let p = PublicKey::from_affine(sum.to_affine())
                 .map_err(|_| Error::Invalid("quorum aggregate at infinity"))?;
-            let p: [u8; 33] = p.to_encoded_point(true).as_bytes().try_into().unwrap();
+            let p: [u8; 33] = p
+                .to_encoded_point(true)
+                .as_bytes()
+                .try_into()
+                .map_err(|_| Error::Invalid("quorum aggregate encoding"))?;
             verifiers.push(
                 k256::schnorr::VerifyingKey::from_bytes(&p[1..])
                     .map_err(|_| Error::Invalid("quorum x-only key"))?,
@@ -72,8 +83,12 @@ impl Quorum {
         }
         Ok(Self {
             keys,
-            aggregate: aggregate.try_into().unwrap(),
-            verifiers: verifiers.try_into().unwrap(),
+            aggregate: aggregate
+                .try_into()
+                .map_err(|_| Error::Invalid("quorum aggregate count"))?,
+            verifiers: verifiers
+                .try_into()
+                .map_err(|_| Error::Invalid("quorum verifier count"))?,
         })
     }
     pub fn keys(&self) -> &[[u8; 33]; 3] {

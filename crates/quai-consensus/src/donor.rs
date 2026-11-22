@@ -13,16 +13,18 @@ pub fn sha256d(header: &[u8]) -> Result<Hash, Error> {
     out.reverse();
     Ok(out)
 }
-fn pbkdf_one(password: &[u8], salt: &[u8], length: usize) -> Vec<u8> {
+fn pbkdf_one(password: &[u8], salt: &[u8], length: usize) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     for block in 1..=length.div_ceil(32) {
-        let mut h = Hmac::<Sha256>::new_from_slice(password).unwrap();
+        // HMAC takes a key of any length.
+        let mut h = Hmac::<Sha256>::new_from_slice(password)
+            .map_err(|_| Error::Invalid("scrypt password"))?;
         h.update(salt);
         h.update(&(block as u32).to_be_bytes());
         out.extend_from_slice(&h.finalize().into_bytes());
     }
     out.truncate(length);
-    out
+    Ok(out)
 }
 fn salsa8(x: &mut [u32; 16]) {
     let start = *x;
@@ -53,7 +55,7 @@ fn salsa8(x: &mut [u32; 16]) {
     }
 }
 fn blockmix(x: &mut [u32; 32]) {
-    let mut t: [u32; 16] = x[16..].try_into().unwrap();
+    let mut t: [u32; 16] = std::array::from_fn(|i| x[16 + i]);
     let mut out = [0; 32];
     for half in 0..2 {
         for i in 0..16 {
@@ -68,9 +70,10 @@ pub fn scrypt(header: &[u8]) -> Result<Hash, Error> {
     if header.len() != 80 {
         return Err(Error::Invalid("donor header must be 80 bytes"));
     }
-    let b = pbkdf_one(header, header, 128);
-    let mut x: [u32; 32] =
-        std::array::from_fn(|i| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap()));
+    let b = pbkdf_one(header, header, 128)?;
+    let mut x: [u32; 32] = std::array::from_fn(|i| {
+        u32::from_le_bytes([b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]])
+    });
     let mut memory = vec![[0u32; 32]; 1024];
     for row in &mut memory {
         *row = x;
@@ -84,7 +87,9 @@ pub fn scrypt(header: &[u8]) -> Result<Hash, Error> {
         blockmix(&mut x);
     }
     let salt: Vec<_> = x.iter().flat_map(|n| n.to_le_bytes()).collect();
-    let mut out: Hash = pbkdf_one(header, &salt, 32).try_into().unwrap();
+    let mut out: Hash = pbkdf_one(header, &salt, 32)?
+        .try_into()
+        .map_err(|_| Error::Invalid("scrypt output length"))?;
     out.reverse();
     Ok(out)
 }

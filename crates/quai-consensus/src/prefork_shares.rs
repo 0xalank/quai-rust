@@ -1,5 +1,6 @@
 //! Native pre-KAWPOW strong/weak share entropy with exact reference rounding.
 use crate::{
+    fields,
     history::{History, Record},
     rules::{self, Uint},
     share_rules,
@@ -61,9 +62,10 @@ pub fn native_components(
             return Err(Error::Unsupported("pre-fork auxiliary uncle"));
         }
         // Do not promote inclusion-only work to a full-target proof.
-        let location = &block.header().wire().location.as_ref().unwrap().value;
+        let location = fields::hash(&block.header().wire().location, "missing location")?;
         let work = v.work_for_inclusion(h, location)?;
-        let own_difficulty = share_rules::uint(h.wire().difficulty.as_deref().unwrap())?;
+        let own_difficulty =
+            share_rules::uint(fields::bytes(&h.wire().difficulty, "missing difficulty")?)?;
         let intrinsic = rules::intrinsic(work.hash())?;
         if quai_primitives::meets_blake3_target(&work.hash(), &own_difficulty.to_be_bytes())
             .map_err(|_| Error::Invalid("uncle difficulty"))?

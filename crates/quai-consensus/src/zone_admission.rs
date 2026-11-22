@@ -112,15 +112,10 @@ pub fn inspect_indexed_local(
         verifier, history, index, block, profile, now, false, [0; 32],
     )?;
     let shares = crate::prefork_shares::native_components(verifier, history, block)?;
-    if crate::share_rules::uint(
-        block
-            .object()
-            .header()
-            .wire()
-            .uncled_entropy
-            .as_ref()
-            .unwrap(),
-    )? != shares.uncled
+    if crate::share_rules::uint(crate::fields::bytes(
+        &block.object().header().wire().uncled_entropy,
+        "missing uncled entropy",
+    )?)? != shares.uncled
     {
         return Err(Error::Invalid("local uncled entropy"));
     }

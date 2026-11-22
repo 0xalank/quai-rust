@@ -1,6 +1,7 @@
 //! Bounded prime/region header policy on imported candidate history.
 //! Component reports never confer canonical or economic validity.
 use crate::{
+    fields,
     history::{History, Record},
     rules::{self, Uint},
     share_rules,
@@ -63,7 +64,8 @@ pub fn efficiency_score(
         numerator.wrapping_div(&denominator)
     };
     let bytes = ratio.to_be_bytes();
-    let truncated = u16::from_be_bytes(bytes[126..].try_into().unwrap());
+    // The low 16 bits of the 1024-bit ratio (128 big-endian bytes).
+    let truncated = u16::from_be_bytes([bytes[126], bytes[127]]);
     Ok(previous.wrapping_mul(9).wrapping_add(truncated) / 10)
 }
 pub fn threshold_count(previous: u16, efficiency: u16) -> u16 {
@@ -134,13 +136,18 @@ fn cheap(
     {
         return Err(Error::Invalid("extra data size"));
     }
-    if w.header_hash.as_ref().unwrap().value.as_slice() != header.object.header().hash() {
+    if fields::hash(&w.header_hash, "missing header hash")? != header.object.header().hash() {
         return Err(Error::Invalid("body header commitment"));
     }
-    if !uncle && w.time.unwrap() > now + quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME {
+    if !uncle
+        && fields::some(w.time, "missing time")?
+            > now + quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME
+    {
         return Err(Error::Invalid("future block"));
     }
-    if w.time.unwrap() < parent.header.wire().time.unwrap() {
+    if fields::some(w.time, "missing time")?
+        < fields::some(parent.header.wire().time, "missing time")?
+    {
         return Err(Error::Invalid("older block time"));
     }
     Ok(())
@@ -179,7 +186,7 @@ pub fn check_projection(
     let p = parent.object.header().wire();
     let w = header.header.wire();
     let pl = parent.header.wire();
-    let location = &w.location.as_ref().unwrap().value;
+    let location = fields::hash(&w.location, "missing location")?;
     let n = location.len().min(profile.location.len());
     if location[..n] != profile.location[..n] {
         return Err(Error::Invalid("header slice location"));
@@ -207,7 +214,7 @@ pub fn check_projection(
             (0, 0)
         } else {
             let score = efficiency_score(
-                p.efficiency_score.unwrap() as u16,
+                fields::some(p.efficiency_score, "missing efficiency score")? as u16,
                 [
                     share_rules::uint(&p.parent_delta_entropy[1])?,
                     share_rules::uint(&p.parent_delta_entropy[2])?,
@@ -220,48 +227,48 @@ pub fn check_projection(
             )?;
             (
                 score,
-                threshold_count(p.threshold_count.unwrap() as u16, score),
+                threshold_count(
+                    fields::some(p.threshold_count, "missing threshold count")? as u16,
+                    score,
+                ),
             )
         };
-        if b.efficiency_score.unwrap() as u16 != efficiency {
+        if fields::some(b.efficiency_score, "missing efficiency score")? as u16 != efficiency {
             return Err(Error::Invalid("prime efficiency score"));
         }
-        if b.threshold_count.unwrap() as u16 != threshold {
+        if fields::some(b.threshold_count, "missing threshold count")? as u16 != threshold {
             return Err(Error::Invalid("prime threshold count"));
         }
-        let previous: Hash = p
-            .etx_eligible_slices
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let previous: Hash = fields::hash32(&p.etx_eligible_slices, "missing etx eligible slices")?;
         let eligible = if profile.genesis.contains(&parent.id) {
             previous
         } else {
             update_etx_eligible(
                 previous,
-                &pl.location.as_ref().unwrap().value,
+                fields::hash(&pl.location, "missing location")?,
                 parent.numbers[2],
             )?
         };
-        if b.etx_eligible_slices.as_ref().unwrap().value.as_slice() != eligible {
+        if fields::hash(&b.etx_eligible_slices, "missing etx eligible slices")? != eligible {
             return Err(Error::Invalid("ETX eligible slices"));
         }
-        if b.prime_state_root.as_ref().unwrap().value.as_slice() != empty {
+        if fields::hash(&b.prime_state_root, "missing prime state root")? != empty {
             return Err(Error::Invalid("prime state root"));
         }
-        if share_rules::uint(b.miner_difficulty.as_deref().unwrap())?
-            != miner_difficulty(
-                parent.numbers[0],
-                parent.difficulty()?,
-                share_rules::uint(p.miner_difficulty.as_deref().unwrap())?,
-            )?
-        {
+        if share_rules::uint(fields::bytes(
+            &b.miner_difficulty,
+            "missing miner difficulty",
+        )?)? != miner_difficulty(
+            parent.numbers[0],
+            parent.difficulty()?,
+            share_rules::uint(fields::bytes(
+                &p.miner_difficulty,
+                "missing miner difficulty",
+            )?)?,
+        )? {
             return Err(Error::Invalid("prime miner difficulty"));
         }
-    } else if b.region_state_root.as_ref().unwrap().value.as_slice() != empty {
+    } else if fields::hash(&b.region_state_root, "missing region state root")? != empty {
         return Err(Error::Invalid("region state root"));
     }
     role(header)?;
@@ -333,11 +340,14 @@ fn native_metrics(
     let entropy = rules::entropy(&rules::EntropyInput {
         hash: proof.hash(),
         difficulty: parent.difficulty()?,
-        expansion: b.expansion_number.unwrap() as u8,
+        expansion: fields::some(b.expansion_number, "missing expansion number")? as u8,
         parent_entropy: array(&b.parent_entropy)?,
         parent_delta: array(&b.parent_delta_entropy)?,
         parent_uncled_delta: array(&b.parent_uncled_delta_entropy)?,
-        uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap())?,
+        uncled_entropy: share_rules::uint(fields::bytes(
+            &b.uncled_entropy,
+            "missing uncled entropy",
+        )?)?,
         postfork_share_count: None,
         node_context: ctx as u8,
     })?;

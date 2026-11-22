@@ -1,5 +1,6 @@
 //! Candidate ancestry and header/inclusion checks. No canonical chain authority.
 use crate::{
+    fields,
     history::{History, Record},
     rules,
     rules::Uint,
@@ -19,23 +20,19 @@ fn header_id(h: &Header) -> Result<Hash, Error> {
         .map_err(|_| Error::Unsupported("header hash domain"))
 }
 fn prime(h: &Header) -> Result<u64, Error> {
-    share_rules::number(h.wire().prime_terminus_number.as_deref().unwrap())
+    share_rules::number(fields::bytes(
+        &h.wire().prime_terminus_number,
+        "missing prime terminus number",
+    )?)
 }
 fn num(h: &Header) -> Result<u64, Error> {
-    share_rules::number(h.wire().number.as_deref().unwrap())
+    share_rules::number(fields::bytes(&h.wire().number, "missing number")?)
 }
 fn diff(h: &Header) -> Result<Uint, Error> {
-    share_rules::uint(h.wire().difficulty.as_deref().unwrap())
+    share_rules::uint(fields::bytes(&h.wire().difficulty, "missing difficulty")?)
 }
-fn parent(h: &Header) -> Hash {
-    h.wire()
-        .parent_hash
-        .as_ref()
-        .unwrap()
-        .value
-        .as_slice()
-        .try_into()
-        .unwrap()
+fn parent(h: &Header) -> Result<Hash, Error> {
+    fields::hash32(&h.wire().parent_hash, "missing parent hash")
 }
 pub fn data_policy(
     header: &Header,
@@ -43,7 +40,7 @@ pub fn data_policy(
     early_lock: bool,
 ) -> Result<(), Error> {
     let h = header.wire();
-    let address = &h.primary_coinbase.as_ref().unwrap().value;
+    let address = fields::address(&h.primary_coinbase, "missing primary coinbase")?;
     if address[1] > 127 && qi_restriction_height < FORKS.controller_kick_in {
         return Err(Error::Invalid("Qi coinbase before controller activation"));
     }
@@ -54,14 +51,15 @@ pub fn data_policy(
     if h.data[0] as usize > quai_primitives::spec::LOCK_PERIODS.by_lock_byte.len() - 1 {
         return Err(Error::Invalid("header data lock byte"));
     }
-    let location = &h.location.as_ref().unwrap().value;
+    let location = fields::location(&h.location)?;
     if h.data.len() >= 21 && (!internal_address(&h.data[1..21], location) || h.data[2] > 127) {
         return Err(Error::Invalid("lockup contract scope"));
     }
     if h.data.len() == 41 && !internal_address(&h.data[21..41], location) {
         return Err(Error::Invalid("beneficiary scope"));
     }
-    if early_lock && num(header)? < FORKS.lockup_start && h.lock.unwrap() != 0 {
+    if early_lock && num(header)? < FORKS.lockup_start && fields::some(h.lock, "missing lock")? != 0
+    {
         return Err(Error::Invalid("early header lock"));
     }
     Ok(())
@@ -100,7 +98,10 @@ pub fn expected_difficulty(
     if profile.genesis.contains(&parent.id) {
         let value = crate::initialization::genesis_difficulty(
             parent,
-            parent.object.header().wire().expansion_number.unwrap() as u8,
+            fields::some(
+                parent.object.header().wire().expansion_number,
+                "missing expansion number",
+            )? as u8,
             profile.default_genesis,
         )?;
         if value.bits_vartime() > 256 {
@@ -121,8 +122,8 @@ pub fn expected_difficulty(
     rules::adjust_difficulty(
         parent.difficulty()?,
         profile.minimum_difficulty,
-        parent.header.wire().time.unwrap(),
-        grand.header.wire().time.unwrap(),
+        fields::some(parent.header.wire().time, "missing time")?,
+        fields::some(grand.header.wire().time, "missing time")?,
         profile.duration,
     )
 }
@@ -147,8 +148,10 @@ pub fn count_algorithms(headers: &[Header], location: &[u8]) -> Result<AlgoCount
             .map(|b| crate::auxiliary::Auxiliary::decode(b).map(|a| a.id()))
             .transpose()?
             .unwrap_or(0);
-        let external =
-            !internal_address(&h.wire().primary_coinbase.as_ref().unwrap().value, location);
+        let external = !internal_address(
+            fields::address(&h.wire().primary_coinbase, "missing primary coinbase")?,
+            location,
+        );
         match id {
             0 | 1 => out.kawpow += 1,
             2 | 3 => {
@@ -214,50 +217,54 @@ pub fn check_header_ancestry(
     {
         return Err(Error::Invalid("extra data size"));
     }
-    if w.header_hash.as_ref().unwrap().value.as_slice() != header.object.header().hash() {
+    if fields::hash(&w.header_hash, "missing header hash")? != header.object.header().hash() {
         return Err(Error::Invalid("body header commitment"));
     }
-    if !uncle
-        && w.time.unwrap() > now.saturating_add(quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME)
-    {
+    let time = fields::some(w.time, "missing time")?;
+    if !uncle && time > now.saturating_add(quai_primitives::spec::ALLOWED_FUTURE_BLOCK_TIME) {
         return Err(Error::Invalid("future block"));
     }
-    if w.time.unwrap() < parent.header.wire().time.unwrap() {
+    if time < fields::some(parent.header.wire().time, "missing time")? {
         return Err(Error::Invalid("older block time"));
     }
     let expected = expected_difficulty(history, &parent, profile)?;
     if header.difficulty() != Ok(expected) {
         return Err(Error::Invalid("header difficulty"));
     }
-    let location = &w.location.as_ref().unwrap().value;
+    let location = fields::location(&w.location)?;
     let n = location.len().min(profile.location.len());
     if location[..n] != profile.location[..n] {
         return Err(Error::Invalid("header location"));
     }
     data_policy(&header.header, header.prime, true)?;
     if !internal_address(
-        &w.primary_coinbase.as_ref().unwrap().value,
+        fields::address(&w.primary_coinbase, "missing primary coinbase")?,
         &profile.location,
     ) {
         return Err(Error::Invalid("coinbase scope"));
     }
-    if b.gas_limit.unwrap() > i64::MAX as u64 || b.gas_used.unwrap() > b.gas_limit.unwrap() {
+    let gas_limit = fields::some(b.gas_limit, "missing gas limit")?;
+    if gas_limit > i64::MAX as u64 || fields::some(b.gas_used, "missing gas used")? > gas_limit {
         return Err(Error::Invalid("gas use/limit"));
     }
-    if b.gas_limit.unwrap()
+    if gas_limit
         != rules::next_limit(
             parent.numbers[2],
-            parent.object.header().wire().gas_limit.unwrap(),
+            fields::some(parent.object.header().wire().gas_limit, "missing gas limit")?,
             profile.gas_ceiling,
         )
     {
         return Err(Error::Invalid("gas limit schedule"));
     }
-    if b.state_used.unwrap() > b.state_limit.unwrap()
-        || b.state_limit.unwrap()
+    let state_limit = fields::some(b.state_limit, "missing state limit")?;
+    if fields::some(b.state_used, "missing state used")? > state_limit
+        || state_limit
             != rules::next_limit(
                 parent.numbers[2],
-                parent.object.header().wire().state_limit.unwrap(),
+                fields::some(
+                    parent.object.header().wire().state_limit,
+                    "missing state limit",
+                )?,
                 50_000_000,
             )
     {
@@ -354,7 +361,7 @@ fn check_inclusions_verified(
 /// SHA and scrypt shares (PowID above Kawpow). Go applies it after KawPow;
 /// before KawPow the port uses `prefork_shares`, which also weighs the shares.
 pub fn uncled_log_entropy(verifier: &mut Verifier, block: &Record) -> Result<Uint, Error> {
-    let location = block.header.wire().location.as_ref().unwrap().value.clone();
+    let location = fields::location(&block.header.wire().location)?.to_vec();
     let mut total = crypto_bigint::U512::ZERO;
     for h in block.uncles()? {
         if let Some(bytes) = &h.wire().aux_pow {
@@ -425,11 +432,14 @@ pub fn native_parent_metrics(
     let mut entropy = rules::entropy(&rules::EntropyInput {
         hash: proof.hash(),
         difficulty: parent.difficulty()?,
-        expansion: b.expansion_number.unwrap() as u8,
+        expansion: fields::some(b.expansion_number, "missing expansion number")? as u8,
         parent_entropy: arr(&b.parent_entropy)?,
         parent_delta: arr(&b.parent_delta_entropy)?,
         parent_uncled_delta: arr(&b.parent_uncled_delta_entropy)?,
-        uncled_entropy: share_rules::uint(b.uncled_entropy.as_deref().unwrap())?,
+        uncled_entropy: share_rules::uint(fields::bytes(
+            &b.uncled_entropy,
+            "missing uncled entropy",
+        )?)?,
         postfork_share_count: if parent.prime >= FORKS.kawpow {
             Some(parent.uncles()?.len() as u32)
         } else {
@@ -508,7 +518,7 @@ pub fn verify_workshare(
     let mut report = WorkshareReport {
         hash,
         pow: work.hash(),
-        parent: parent(h),
+        parent: parent(h)?,
         number: num(h)?,
         parent_checked: false,
     };
@@ -668,14 +678,15 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
                 }
             }
         }
-        if !ancestors.contains(&parent(h)) || (!workshare && parent(h) == block.parents[2]) {
+        let uncle_parent = parent(h)?;
+        if !ancestors.contains(&uncle_parent) || (!workshare && uncle_parent == block.parents[2]) {
             return Err(Error::Invalid("dangling uncle"));
         }
         distances.push(history.workshare_distance(block, h)?);
         data_policy(h, block.prime, true)?;
         if let Some(aux) = &aux {
             let external = !internal_address(
-                &h.wire().primary_coinbase.as_ref().unwrap().value,
+                fields::address(&h.wire().primary_coinbase, "missing primary coinbase")?,
                 &profile.location,
             );
             // Runtime work computation checks bindings and this exact exception; the
@@ -684,7 +695,7 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
                 exceptions += 1;
             }
         }
-        let parent = history.get(&parent(h))?;
+        let parent = history.get(&parent(h)?)?;
         if diff(h)? != expected_difficulty(history, &parent, profile)? {
             return Err(Error::Invalid("uncle difficulty"));
         }

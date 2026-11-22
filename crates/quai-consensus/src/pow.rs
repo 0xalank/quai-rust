@@ -830,8 +830,11 @@ impl SharedCaches {
                 .slots
                 .lock()
                 .map_err(|_| Error::Unavailable("shared epoch caches"))?;
-            if let Some(index) = slots.iter().position(|(k, _)| *k == key) {
-                let entry = slots.remove(index).unwrap();
+            let hit = slots
+                .iter()
+                .position(|(k, _)| *k == key)
+                .and_then(|index| slots.remove(index));
+            if let Some(entry) = hit {
                 let slot = entry.1.clone();
                 slots.push_back(entry);
                 (slot, false)

@@ -2,6 +2,7 @@
 //! Does not distribute rewards, settle fees, or execute economic state.
 use crate::bigdiv::Quotient as _;
 use crate::{
+    fields,
     history::Record,
     rules::Uint,
     share_rules::{self, Triple},
@@ -43,7 +44,10 @@ pub fn one_over_kqi(number: u64) -> Uint {
     )
 }
 pub fn equivalent_difficulty(h: &Header, difficulty: Uint) -> Result<Uint, Error> {
-    let prime = share_rules::number(h.wire().prime_terminus_number.as_deref().unwrap())?;
+    let prime = share_rules::number(fields::bytes(
+        &h.wire().prime_terminus_number,
+        "missing prime terminus number",
+    )?)?;
     if prime < FORKS.kawpow {
         return Ok(difficulty);
     }
@@ -83,7 +87,10 @@ pub fn reward_quote(
         header,
         exchange,
         average_fees,
-        share_rules::uint(header.wire().difficulty.as_deref().unwrap())?,
+        share_rules::uint(fields::bytes(
+            &header.wire().difficulty,
+            "missing difficulty",
+        )?)?,
     )
 }
 /// Conversion normalization uses the parent miner difficulty, which may differ
@@ -98,8 +105,11 @@ pub fn reward_quote_at_difficulty(
     if difficulty == Uint::ZERO {
         return Err(Error::Invalid("zero reward difficulty"));
     }
-    let prime = share_rules::number(h.prime_terminus_number.as_deref().unwrap())?;
-    let number = share_rules::number(h.number.as_deref().unwrap())?;
+    let prime = share_rules::number(fields::bytes(
+        &h.prime_terminus_number,
+        "missing prime terminus number",
+    )?)?;
+    let number = share_rules::number(fields::bytes(&h.number, "missing number")?)?;
     let equivalent = equivalent_difficulty(header, difficulty)?;
     let mut logarithm = quai_execution::evm::state_gas::log_q64(equivalent);
     if prime >= FORKS.kawpow {
@@ -146,40 +156,23 @@ pub fn expected_base_fee(
     let exchange = if profile.genesis.contains(&parent.parents[2]) {
         Uint::from_u128(INITIAL_EXCHANGE_RATE)
     } else {
-        let hash = parent
-            .object
-            .header()
-            .wire()
-            .prime_terminus_hash
-            .as_ref()
-            .unwrap()
-            .value
-            .as_slice()
-            .try_into()
-            .unwrap();
+        let hash = fields::hash32(
+            &parent.object.header().wire().prime_terminus_hash,
+            "missing prime terminus hash",
+        )?;
         let prime = history.get(&hash)?;
-        share_rules::uint(
-            prime
-                .object
-                .header()
-                .wire()
-                .exchange_rate
-                .as_deref()
-                .unwrap(),
-        )?
+        share_rules::uint(fields::bytes(
+            &prime.object.header().wire().exchange_rate,
+            "missing exchange rate",
+        )?)?
     };
     Ok(reward_quote(
         &parent.header,
         exchange,
-        share_rules::uint(
-            parent
-                .object
-                .header()
-                .wire()
-                .avg_tx_fees
-                .as_deref()
-                .unwrap(),
-        )?,
+        share_rules::uint(fields::bytes(
+            &parent.object.header().wire().avg_tx_fees,
+            "missing avg tx fees",
+        )?)?,
     )?
     .base_fee)
 }

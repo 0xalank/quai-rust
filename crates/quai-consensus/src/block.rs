@@ -17,7 +17,7 @@
 use crate::{
     chain::Chain,
     confirmation::{self, Known},
-    economics,
+    economics, fields,
     history::{History, Record},
     placement::{self, CandidateIndex, Snapshot},
     prime_controller,
@@ -98,7 +98,7 @@ fn uint_hex(bytes: &[u8]) -> String {
 pub fn uint(v: Uint) -> String {
     let b = v.to_be_bytes();
     if b[..16].iter().all(|x| *x == 0) {
-        u128::from_be_bytes(b[16..].try_into().unwrap()).to_string()
+        u128::from_be_bytes(std::array::from_fn(|i| b[16 + i])).to_string()
     } else {
         hex(&b)
     }
@@ -187,9 +187,13 @@ pub struct Validated {
 }
 
 fn body(record: &Record, c: usize) -> Result<(), Failure> {
+    let missing = |e: Error| fail(c, "body: header field", "present", describe(&e));
     let o = record.object();
     let b = o.header().wire();
-    let committed = h32(&record.header().wire().header_hash.as_ref().unwrap().value);
+    let committed = h32(
+        fields::hash(&record.header().wire().header_hash, "missing header hash")
+            .map_err(missing)?,
+    );
     if committed != o.header().hash() {
         return Err(fail(
             c,
@@ -198,7 +202,8 @@ fn body(record: &Record, c: usize) -> Result<(), Failure> {
             hex(&o.header().hash()),
         ));
     }
-    let empty = quai_primitives::trie::ordered_root(&[]).unwrap();
+    let empty = quai_primitives::trie::ordered_root(&[])
+        .map_err(|e| fail(c, "body: empty root", "the empty list root", e))?;
     let root = |r: Result<Hash, String>, what: &str| -> Result<Hash, Failure> {
         r.map_err(|e| {
             fail(
@@ -224,29 +229,36 @@ fn body(record: &Record, c: usize) -> Result<(), Failure> {
             return Err(fail(c, "body: zone interlinks", hex(&empty), hex(&links)));
         }
         let tx = root(o.transaction_root(), "transaction root")?;
-        if tx != h32(&b.tx_hash.as_ref().unwrap().value) {
+        if tx != h32(fields::hash(&b.tx_hash, "missing tx hash").map_err(missing)?) {
             return Err(fail(
                 c,
                 "body: transaction root",
-                hex(&b.tx_hash.as_ref().unwrap().value),
+                hex(fields::hash(&b.tx_hash, "missing tx hash").map_err(missing)?),
                 hex(&tx),
             ));
         }
         let etx = root(o.outbound_root(), "outbound ETX root")?;
-        if etx != h32(&b.outbound_etx_hash.as_ref().unwrap().value) {
+        if etx
+            != h32(
+                fields::hash(&b.outbound_etx_hash, "missing outbound etx hash").map_err(missing)?,
+            )
+        {
             return Err(fail(
                 c,
                 "body: outbound ETX root",
-                hex(&b.outbound_etx_hash.as_ref().unwrap().value),
+                hex(
+                    fields::hash(&b.outbound_etx_hash, "missing outbound etx hash")
+                        .map_err(missing)?,
+                ),
                 hex(&etx),
             ));
         }
         let uncles = o.uncle_root();
-        if uncles != h32(&b.uncle_hash.as_ref().unwrap().value) {
+        if uncles != h32(fields::hash(&b.uncle_hash, "missing uncle hash").map_err(missing)?) {
             return Err(fail(
                 c,
                 "body: uncle root",
-                hex(&b.uncle_hash.as_ref().unwrap().value),
+                hex(fields::hash(&b.uncle_hash, "missing uncle hash").map_err(missing)?),
                 hex(&uncles),
             ));
         }
@@ -274,8 +286,9 @@ fn body(record: &Record, c: usize) -> Result<(), Failure> {
         }
         if c == 0 {
             let links = root(o.interlink_root(), "interlink root")?;
-            let committed = &b.interlink_root_hash.as_ref().unwrap().value;
-            if links.as_slice() != committed.as_slice() {
+            let committed = fields::hash(&b.interlink_root_hash, "missing interlink root hash")
+                .map_err(missing)?;
+            if links.as_slice() != committed {
                 return Err(fail(c, "body: interlink root", hex(committed), hex(&links)));
             }
         }
@@ -405,7 +418,10 @@ fn explain(
                     (prev.id(), prev.number(0).unwrap_or(0))
                 } else {
                     (
-                        h32(&pb.prime_terminus_hash.as_ref().unwrap().value),
+                        h32(
+                            fields::hash(&pb.prime_terminus_hash, "missing prime terminus hash")
+                                .unwrap_or_default(),
+                        ),
                         prev.prime(),
                     )
                 };
@@ -413,7 +429,10 @@ fn explain(
                     format!("{} at prime {pn}", hex(&ph)),
                     format!(
                         "{} at prime {}",
-                        hex(&b.prime_terminus_hash.as_ref().unwrap().value),
+                        hex(
+                            fields::hash(&b.prime_terminus_hash, "missing prime terminus hash")
+                                .unwrap_or_default()
+                        ),
                         record.prime()
                     ),
                 )
@@ -504,7 +523,14 @@ pub fn check(
     let mut claim = [0u8; 32];
     let mut next: [Option<Snapshot>; 3] = [None, None, None];
     for c in order as usize..3 {
-        let r = records[c].clone().unwrap();
+        let Some(r) = records[c].clone() else {
+            return Err(fail(
+                c,
+                "records",
+                "a record in each coincident context",
+                "none",
+            ));
+        };
         match placement::prepare_append_components(
             v,
             &parent.histories[c],
@@ -541,7 +567,9 @@ pub fn check(
     }
     // Prime controllers (core/slice.go Append, prime context).
     let prime = if order == 0 {
-        let record = records[0].as_ref().unwrap();
+        let record = records[0]
+            .as_ref()
+            .ok_or_else(|| fail(0, "records", "a prime record", "none"))?;
         match confirmation::prime_step(parent.histories, parent.known, parent.controller, record) {
             Ok(step) => Some(step),
             Err(prime_controller::Refusal::Field {
@@ -596,14 +624,17 @@ pub fn check(
         .map_err(|e| fail(2, "ETX rollup", "rollup within bounds", describe(&e)))?;
     let root =
         work::transactions_root(&cross).map_err(|e| fail(2, "ETX rollup", "rollup root", e))?;
-    let committed = &zb.etx_rollup_hash.as_ref().unwrap().value;
+    let committed = fields::hash(&zb.etx_rollup_hash, "missing etx rollup hash")
+        .map_err(|e| fail(2, "ETX rollup root", "present", describe(&e)))?;
     // Go checks EtxRollupHash in the region Append: region-coincident blocks.
-    if order <= 1 && root.as_slice() != committed.as_slice() {
+    if order <= 1 && root.as_slice() != committed {
         return Err(fail(2, "ETX rollup root", hex(&root), hex(committed)));
     }
     // The region manifest must roll up the same zone ETXs.
     if order <= 1 {
-        let region = records[1].as_ref().unwrap();
+        let region = records[1]
+            .as_ref()
+            .ok_or_else(|| fail(1, "records", "a region record", "none"))?;
         let mut from_region = vec![];
         for id in region.object().manifest_hashes() {
             let block = parent.histories[2].get(&id).map_err(|e| {
@@ -699,8 +730,9 @@ pub fn execute<P: historical::History>(
         |h| v.precompute_inclusion_work(h, &location),
     );
     let b = zone.object().header().wire();
-    let field =
-        |x: &Option<quai_primitives::schema::common::ProtoHash>| hex(&x.as_ref().unwrap().value);
+    let field = |x: &Option<quai_primitives::schema::common::ProtoHash>| {
+        x.as_ref().map(|h| hex(&h.value)).unwrap_or_default()
+    };
     let (expected, actual) = match &computed {
         Ok(c) => match message(&e) {
             "execution account root" => (field(&b.evm_root), hex(&c.evm_root)),
@@ -820,7 +852,9 @@ impl Ancestry {
         }
         let mut next = checked.next;
         for c in checked.order as usize..3 {
-            let r = checked.records[c].clone().unwrap();
+            let r = checked.records[c]
+                .clone()
+                .ok_or(Error::Invalid("validated context record"))?;
             let snapshot = next[c]
                 .take()
                 .ok_or(Error::Invalid("validated append snapshot"))?;

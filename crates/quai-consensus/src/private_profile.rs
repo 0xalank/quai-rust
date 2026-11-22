@@ -1,5 +1,6 @@
 //! Frozen private development contract. This does not qualify a public chain.
 use crate::{
+    fields,
     history::Record,
     initialization::{build_genesis, GenesisSpec},
     rules::Uint,
@@ -51,8 +52,8 @@ impl PrivateChain {
             return Ok(profile.clone());
         }
         let profile = Arc::new(Self::reviewed_hierarchy()?);
-        let _ = TEMPLATE.set(profile);
-        Ok(TEMPLATE.get().unwrap().clone())
+        // A value another thread set first is the same.
+        Ok(TEMPLATE.get_or_init(|| profile).clone())
     }
     pub(crate) fn execution_template() -> Result<Arc<Self>, Error> {
         static TEMPLATE: OnceLock<Arc<PrivateChain>> = OnceLock::new();
@@ -60,8 +61,8 @@ impl PrivateChain {
             return Ok(p.clone());
         }
         let p = Arc::new(Self::reviewed_execution()?);
-        let _ = TEMPLATE.set(p);
-        Ok(TEMPLATE.get().unwrap().clone())
+        // A value another thread set first is the same.
+        Ok(TEMPLATE.get_or_init(|| p).clone())
     }
     pub(crate) fn hierarchy_for_fingerprint(id: Hash) -> Result<Arc<Self>, Error> {
         let early = Self::hierarchy_template()?;
@@ -84,8 +85,8 @@ impl PrivateChain {
             return Ok(profile.clone());
         }
         let profile = Arc::new(Self::reviewed_all_etx()?);
-        let _ = TEMPLATE.set(profile);
-        Ok(TEMPLATE.get().unwrap().clone())
+        // A value another thread set first is the same.
+        Ok(TEMPLATE.get_or_init(|| profile).clone())
     }
     /// Experimental all-defined-ETX contract. Native canonical startup still
     /// begins at the embedded genesis; no supplied state constructor exists.
@@ -206,14 +207,7 @@ impl PrivateChain {
             let expected = &g["contexts"][context];
             if raw(expected, "hash")?.as_slice() != block.id().as_slice()
                 || raw(expected, "body_hash")?.as_slice()
-                    != block
-                        .header
-                        .wire()
-                        .header_hash
-                        .as_ref()
-                        .unwrap()
-                        .value
-                        .as_slice()
+                    != fields::hash(&block.header.wire().header_hash, "missing header hash")?
             {
                 return Err(Error::Invalid("private genesis commitment"));
             }

@@ -7,10 +7,13 @@ in the commit message and keep raw run output in `results/` (local, ignored).
 **Measure of progress:** the highest mainnet block that Rust replays with every
 root equal to go-quai v0.57.0 (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
 
-Current value: **zone 6,980,880** (2026-11-21), from the rolling replay
+Current value: **zone 7,580,880** (2026-11-22 01:16Z), from the rolling replay
 (`scripts/mainnet/rolling_replay.sh`), past MaxCodeSize (zone 3,490,000) and
-KawPow (prime 1,171,500), with the ProgPoW grace end (prime 1,301,100) and
-InclusionDepthChange (prime 1,330,000). The long replay executes mainnet zone blocks from the
+KawPow (prime 1,171,500), with the ProgPoW grace end (prime 1,301,100),
+InclusionDepthChange (prime 1,330,000), BlocksPerYear (zone 6,307,200),
+Singularity (prime 1,530,500, near zone 7,000,000; the first monthly unlock
+under its forfeiture rule is zone 7,257,600) and QiWrappingChange (prime
+1,570,000, near zone 7,170,000). The long replay executes mainnet zone blocks from the
 colosseum genesis, and every root equals go-quai: EVM state, ETX set, UTXO,
 receipts, outbound ETXs, gas and state counters, account count. It passed
 zone 259,200 (the first user transactions), CoinbaseLockupPrecompile at zone
@@ -20,7 +23,8 @@ first feedback exchange rate (prime 266,001). Binaries: `f841a74` for
 0–180,000, `e1f4cfb` for 180,000–686,009, `d207b70` (the `controllers`
 branch, merged as `c466449`) for 686,009–1,250,000, `c466449` for
 1,250,000–1,450,000, `6e6ce8f` to 1,618,455, `23d29bd` to 3,300,000 (61–65
-blocks/s with 6 PoW threads on a quiet host), then `f5e0c58`. A single-binary
+blocks/s with 6 PoW threads on a quiet host), `f5e0c58` to 3,900,000, then
+`efb7a9e`. A single-binary
 run from genesis with the final binary is still to do.
 Earlier value: zone 27,406, rerun from genesis on the Go export (with receipts)
 by the coordinator.
@@ -170,8 +174,8 @@ Gate: Rust replays mainnet zone 0-0 to the live head, and every root equals Go.
        | KawPow | AuxPow without donor header or transaction dropped on decode, before any other check (types/wo.go:1652) | header.rs `decode_auxiliary` drops it, as Go | work-headers `aux_shapes` (new: 15 shapes at prime 1,171,499, 1,171,500, 1,301,099, 1,301,100 and 2,000,000; 28 failed the old decode); history regenerated with coinbase transactions in the oracle's `ha()` | fixed (`phase1-gaps`) |
        | InclusionDepthChange p 1,330,000 | depth 3 → 4, target ramp, reward depth, payout discount (hcv:259; hc:359-380, 1277; sp:1119, 1263) | validation.rs:497; share_rules.rs:136; history.rs:307; payouts.rs | history, payouts (both) | equal |
        | BlocksPerYear z 6,307,200 | kQuai authority (state_transition.go:391), lockup multiple (protocol_params.go:389), rate override (slice.go:607, 1999) | settlement.rs:209; economic_state.rs; prime_forward.rs:106 (CB) | authority, incoming `*-zone-*` (new), prime-forward (both) | equal |
-       | Singularity p 1,530,500 | uncles 16 → 32, SHA/scrypt shares 8 → 16 (hcv:241, 363-380); forfeiture (state/gen_allocs.go:23) | validation.rs:317, 474, 559; historical.rs:68 | history (before only; share limits none), historical (both) | equal (limits by reading) |
-       | QiWrappingChange p 1,570,000 | no local UTXO for wrapped Qi (sp:1677) | qi_settlement.rs:203 | qi-settlement (both) | equal |
+       | Singularity p 1,530,500 | uncles 16 → 32, SHA/scrypt shares 8 → 16 (hcv:241, 363-380); forfeiture (state/gen_allocs.go:23) | validation.rs:317, 474, 559; historical.rs:68 | history (before only; share limits none), historical (both) | equal (limits by reading); mainnet replay passed it, with the unlock at zone 7,257,600 |
+       | QiWrappingChange p 1,570,000 | no local UTXO for wrapped Qi (sp:1677) | qi_settlement.rs:203 | qi-settlement (both) | equal; mainnet replay passed it |
        | ShaEquivalentDifficulty p 1,755,000 | SHA difficulty anchor (rewards.go:291), lockup revert (vm/evm.go:267), conversion hold | economics.rs:51; calls.rs:253; etx.rs; qi_settlement.rs | header quotes, stateful lockup, settlement `conversion-*` (new), qi-settlement (both) | equal |
        | ConversionStability p 1,872,600 | share EMA and gain (hc:421, 451) | share_rules.rs:218 | history controllers (both) | equal |
        | SelfDestructRefund p 1,919,500 | refund once, opETX/opConvert overflow checks (instructions.go:875, 919, 966, 1142, 1190; state_transition.go:479) | mod.rs:965; etx.rs | stateful, settlement (both) | equal |
@@ -1057,3 +1061,4 @@ Mining, block templates and Stratum come last.
 | 2026-11-20 | Phase 1, 2.4 | All three runs on `efb7a9e` (`quai-node` sha256 `34ecbc21…`, `peer-export` `64f3e362…`): the rolling replay from its clean checkpoint at zone 3,900,000 (every root equal); the shadow run after a segment of 3,087 heights level with the peers; and a new single-binary replay from genesis to zone 3,900,000 (`rolling-genesis`, history `results/rolling-replay/genesis-efb7a9e.jsonl`) |
 | 2026-11-21 | Phase 1, 2.4 | All three runs stopped at their disk floors on 2026-11-20 09:02Z (free space fell 24 GB in 8 hours, about 10 GB of it ours), each after a clean checkpoint: the rolling replay at zone 4,780,880 and the single-binary genesis replay (`efb7a9e`) at zone 1,832,747, both with every root equal; the shadow run after 6,301 heights level with the peers (11,224,704), no failure. To keep the main replay going, the genesis run's data (regenerable; history in `results/rolling-replay/genesis-efb7a9e.jsonl`) and build caches were deleted; the rolling replay and the shadow run restarted on 2026-11-21 05:24Z. The `rpc-parity` agent stopped at an account weekly limit (resets 2026-11-25) with 2 commits and uncommitted work in its worktree |
 | 2026-11-21 | Phase 1, 2.4 | Rolling replay (`efb7a9e`): 2.2M heights from zone 4,780,880 to 6,980,880 in about 14 hours, every root equal, through KawPow (prime 1,171,500), the ProgPoW grace end and InclusionDepthChange. It stopped after 3 failed exports ("no usable peer") while the Mac was on another network (gateway 100.65.0.1). Shadow run finding: after that network change or a sleep, the node stayed at zone 11,247,721 for hours while the peers reported 11,250,923; gossip intake stopped and its stall check, which asks the peers, got no answers and counted nothing. No block failed a check. A restart caught up by number in about 90 s; `shadow_run.sh` now restarts the node on such a stall (`1b084a8`). Open (node): recover gossip intake after a network change, and count a lag with no peer answers |
+| 2026-11-21 | Phase 1, 2.4 | Rolling replay (`efb7a9e`): zone 6,980,880 to 7,580,880 (2026-11-22 01:16Z), every root equal, at about 52 zone blocks/s. It passed Singularity (prime 1,530,500, between zones 6,993,763 and 7,008,433), the monthly unlock at zone 7,257,600 (the first under the Singularity forfeiture rule, `historical.rs:68`) and QiWrappingChange (prime 1,570,000, between zones 7,146,950 and 7,174,549). Shadow run (`efb7a9e`, with the stall watchdog of `1b084a8`): level with the peers at zone 11,253,876; 0 divergences, 0 failures |

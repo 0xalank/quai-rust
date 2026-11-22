@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Go oracle for filters and subscriptions: go-quai v0.57.0's production
-quai/filters PublicFilterAPI and EventSystem behind its JSON-RPC server, over
-HTTP and WebSocket, over a test chain with logs, a reorg and the chain events
-that core emits (reference/filters). Explicit and offline; never part of the
-Rust runtime.
+quai/filters PublicFilterAPI and EventSystem (in the "eth" and "quai"
+namespaces, as Quai.APIs registers them) behind its JSON-RPC server, over
+HTTP and WebSocket, over a test chain with logs, a reorg and the chain
+events that core emits: head moves, and in scenario "events" appended
+blocks (ChainEvent) and unlocks (UnlocksEvent) (reference/filters).
+Explicit and offline; never part of the Rust runtime.
 
     scripts/gen_filter_vectors.py --go-quai ../go-quai --write
     scripts/gen_filter_vectors.py --go-quai ../go-quai --check
@@ -12,7 +14,7 @@ import argparse, json, os, subprocess, tempfile
 from pathlib import Path
 from gen_foundation_vectors import ROOT, PIN, checked_reference, sha
 
-SCENARIOS = ['filters', 'expiry', 'subscriptions', 'limit']
+SCENARIOS = ['filters', 'expiry', 'subscriptions', 'limit', 'events']
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--go-quai', required=True)
 m = p.add_mutually_exclusive_group(required=True)
@@ -29,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='quai-filters-') as directory:
     overlay = d / 'overlay.json'
     binary = d / 'oracle'
     overlay.write_text(json.dumps({'Replace': {str(go / k): str(v) for k, v in files.items()}}))
-    subprocess.run(['nice', '-n', '10', 'go', 'build', '-p', '2', '-overlay', str(overlay),
+    subprocess.run(['nice', '-n', '19', 'go', 'build', '-p', '2', '-overlay', str(overlay),
                     '-ldflags', '-X main.referenceRevision=' + PIN, '-o', str(binary),
                     './cmd/quai-filter-vectors'], cwd=go, env=env, check=True)
     raw = subprocess.check_output(['nice', '-n', '10', str(binary)], cwd=d, env=env)

@@ -1,9 +1,9 @@
 {
   "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
-  "vectors_sha256": "08169ea5c922c7fba97d8016293eacbe12f814e13a11bfdaa7f266d805a61a36",
-  "driver_sha256": "1c44d595b87d5c2da624c54d7109a122739fd94928b88a67f6abb5d86cd6b10c",
+  "vectors_sha256": "2e205100b9aa4a74eeaf14eb23d7a247b1fa07f28213f6bfb8b69cb3138cbcd9",
+  "driver_sha256": "cb5326403edccb901101d9acbec4ff0b79bc823b3e4f2c49b0cc86eb862f421e",
   "oracle_sources": {
-    "reference/rpc-calls/main.go": "cede706e34d4806935cbcb70e29f2cd5d649ba1c63c8a37301fcfa66e2f04584",
+    "reference/rpc-calls/main.go": "576ae56b0940a5f10a21f754c849bb495d76636dfa22726b65485f038e15acf5",
     "reference/rpc-calls/core-export.go": "17b21dbe9d224ae03c14f3d7d0da6b5fdd5b92f52018ae7f6592c2c0b89829d4"
   },
   "go_sources": {

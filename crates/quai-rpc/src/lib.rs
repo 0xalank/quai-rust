@@ -176,8 +176,11 @@ pub struct App {
     store: Option<quai_store::Store>,
     /// The validated chain data of `--mode native`.
     view: Option<Arc<dyn view::ChainView>>,
-    /// Filters and subscriptions of the native view, made on first use.
+    /// Filters and subscriptions of the native view, made on first use:
+    /// go-quai registers one filter API in "quai" and another in "eth",
+    /// each with its own filters and subscription count.
     filters: std::sync::OnceLock<Arc<native::filters::FilterApi>>,
+    eth_filters: std::sync::OnceLock<Arc<native::filters::FilterApi>>,
     ingestion: std::sync::RwLock<Value>,
     native_hits: AtomicU64,
     native_receipt_hits: AtomicU64,
@@ -281,6 +284,7 @@ impl App {
             store,
             view,
             filters: std::sync::OnceLock::new(),
+            eth_filters: std::sync::OnceLock::new(),
             ingestion: std::sync::RwLock::new(json!({"enabled":config.follow,"state":"starting"})),
             native_hits: AtomicU64::new(0),
             native_receipt_hits: AtomicU64::new(0),
@@ -298,10 +302,20 @@ impl App {
         }))
     }
 
-    /// The filter API of the native view (started on the current runtime).
+    /// The "quai" filter API of the native view (started on the current
+    /// runtime).
     pub fn filter_api(&self) -> Option<&Arc<native::filters::FilterApi>> {
+        self.filter_api_in("quai")
+    }
+    /// The filter API of a namespace: "eth" has its own, as in go-quai.
+    pub fn filter_api_in(&self, namespace: &str) -> Option<&Arc<native::filters::FilterApi>> {
         let view = self.view.as_ref()?;
-        let api = self.filters.get_or_init(|| {
+        let cell = if namespace == "eth" {
+            &self.eth_filters
+        } else {
+            &self.filters
+        };
+        let api = cell.get_or_init(|| {
             native::filters::FilterApi::new(
                 view.clone(),
                 Duration::from_millis(self.config.filter_timeout_ms),
@@ -310,6 +324,10 @@ impl App {
         });
         api.start();
         Some(api)
+    }
+    /// The filter APIs made so far (for activation and closing).
+    pub fn filter_apis(&self) -> impl Iterator<Item = &Arc<native::filters::FilterApi>> {
+        self.filters.get().into_iter().chain(self.eth_filters.get())
     }
 
     /// The follower status. Writers only replace the whole `Value`, so a lock
@@ -562,10 +580,12 @@ impl App {
                     self.fixture(method, params).await
                 } else if let Some(outcome) = self.subscriptions(method, params, ws, created) {
                     outcome
-                } else if let Some(r) = match self.filter_api() {
-                    Some(api) => api.call(method, params).await,
-                    None => None,
-                } {
+                } else if let Some(r) =
+                    match self.filter_api_in(method.split('_').next().unwrap_or_default()) {
+                        Some(api) => api.call(native::eth::alias(method), params).await,
+                        None => None,
+                    }
+                {
                     match r {
                         Ok(value) => {
                             self.native_hits.fetch_add(1, Ordering::Relaxed);
@@ -632,7 +652,10 @@ impl App {
     ) -> Option<Outcome> {
         self.view.as_ref()?;
         let result = if method.ends_with("_subscribe") {
-            match (ws, self.filter_api()) {
+            match (
+                ws,
+                self.filter_api_in(method.split('_').next().unwrap_or_default()),
+            ) {
                 (Some(conn), Some(api)) => {
                     api.subscribe(conn.id, &conn.out, method, params).map(|id| {
                         *created = Some(id.clone());
@@ -642,8 +665,17 @@ impl App {
                 _ => Err(native::RpcError::go("notifications not supported")),
             }
         } else if method.ends_with("_unsubscribe") {
+            // Any namespace cancels a subscription of the connection.
             match (ws, self.filter_api()) {
-                (Some(conn), Some(api)) => api.unsubscribe(conn.id, params),
+                (Some(conn), Some(api)) => match api.unsubscribe(conn.id, params) {
+                    Err(e) if e.message == "subscription not found" => {
+                        match self.eth_filters.get() {
+                            Some(eth) => eth.unsubscribe(conn.id, params),
+                            None => Err(e),
+                        }
+                    }
+                    other => other,
+                },
                 _ => native::args::Args::new(params, 1).and_then(|a| {
                     a.get(0, native::filters::rpc_id)?;
                     Err(native::RpcError::go("subscription not found"))

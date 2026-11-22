@@ -1,9 +1,14 @@
-//! go-quai v0.57.0's filter API in the "quai" namespace
-//! (quai/filters/api.go, filter_system.go) over a `ChainView` whose head
-//! moves: polling filters (`quai_newFilter`, `quai_newBlockFilter`,
-//! `quai_newPendingTransactionFilter`, `quai_getFilterChanges`,
-//! `quai_getFilterLogs`, `quai_uninstallFilter`) and the WebSocket
-//! subscriptions "newHeads", "logs" and "newPendingTransactions".
+//! go-quai v0.57.0's filter API, registered in the "quai" and "eth"
+//! namespaces (quai/filters/api.go, filter_system.go), over a `ChainView`
+//! whose head moves: polling filters (`quai_newFilter`,
+//! `quai_newBlockFilter`, `quai_newPendingTransactionFilter`,
+//! `quai_getFilterChanges`, `quai_getFilterLogs`, `quai_uninstallFilter`)
+//! and the WebSocket subscriptions "newHeads", "newHeadsV2", "logs",
+//! "newPendingTransactions", "newChainBlocks", "newChainBlocksV2" and
+//! "accesses" (`quai_subscribe` or `eth_subscribe`; notifications come as
+//! `<namespace>_subscription`). The mining subscriptions ("pendingHeader",
+//! "blockTemplateUpdates", "newWorkshares", "newWorksharesV2") are not
+//! served.
 //!
 //! Events follow what go-quai's core sends (core/headerchain.go
 //! `SetCurrentHeader` and `AppendBlock`, core/slice.go
@@ -66,6 +71,19 @@ pub const METHODS: &[&str] = &[
     "quai_getFilterLogs",
 ];
 
+/// The WebSocket subscriptions of this module (the names `quai_subscribe`
+/// and `eth_subscribe` take). docs/rpc-parity.md lists the ones go-quai
+/// has besides.
+pub const SUBSCRIPTIONS: &[&str] = &[
+    "newHeads",
+    "newHeadsV2",
+    "logs",
+    "newPendingTransactions",
+    "newChainBlocks",
+    "newChainBlocksV2",
+    "accesses",
+];
+
 /// What an event-system subscription receives.
 #[derive(Clone, Debug)]
 enum Event {
@@ -78,6 +96,14 @@ enum Event {
     PendingTxs,
     /// `ChainHeadSubscription`: block filters and "newHeads".
     Heads,
+    /// "newHeadsV2": the head with RPC version "v2".
+    HeadsV2,
+    /// `BlocksSubscription`: every appended block ("newChainBlocks", and
+    /// with `v2` "newChainBlocksV2").
+    ChainBlocks { v2: bool },
+    /// "accesses": the heads whose transactions touch the address, and the
+    /// blocks that unlock its lockups.
+    Accesses(super::args::Address),
 }
 
 /// `EventSystem.SubscribeLogs`: the subscription type of a criteria.
@@ -142,6 +168,8 @@ struct Poll {
 
 struct Sub {
     conn: u64,
+    /// "quai" or "eth": the notifications' `<namespace>_subscription`.
+    namespace: &'static str,
     event: Event,
     out: mpsc::Sender<String>,
     /// Notifications made before the subscribe answer went out
@@ -150,7 +178,7 @@ struct Sub {
 }
 impl Sub {
     fn notify(&mut self, id: &str, result: &Value) {
-        let text = notification(id, result);
+        let text = notification_in(self.namespace, id, result);
         match &mut self.buffer {
             Some(b) => b.push(text),
             None => {
@@ -160,11 +188,15 @@ impl Sub {
     }
 }
 
-/// The JSON text of a notification: go-quai's `Notifier.send`, written by
-/// `json.Encoder` (with its newline).
+/// The JSON text of a "quai" notification: go-quai's `Notifier.send`,
+/// written by `json.Encoder` (with its newline).
 pub fn notification(id: &str, result: &Value) -> String {
+    notification_in("quai", id, result)
+}
+/// A notification of a subscription made in `namespace`.
+pub fn notification_in(namespace: &str, id: &str, result: &Value) -> String {
     format!(
-        "{{\"jsonrpc\":\"2.0\",\"method\":\"quai_subscription\",\"params\":{{\"subscription\":{},\"result\":{}}}}}\n",
+        "{{\"jsonrpc\":\"2.0\",\"method\":\"{namespace}_subscription\",\"params\":{{\"subscription\":{},\"result\":{}}}}}\n",
         Value::String(id.to_string()),
         result
     )
@@ -268,6 +300,38 @@ impl FilterApi {
             || self.started.swap(true, Ordering::SeqCst)
         {
             return;
+        }
+        if let Some(mut events) = self.view.chain_events() {
+            let api = Arc::downgrade(self);
+            tokio::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    let hash = match events.recv().await {
+                        Ok(h) => h,
+                        // Lagged: go-quai drops events a busy subscriber
+                        // cannot take.
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => return,
+                    };
+                    let Some(api) = api.upgrade() else { return };
+                    let _ = tokio::task::spawn_blocking(move || api.on_chain_block(hash)).await;
+                }
+            });
+        }
+        if let Some(mut events) = self.view.unlock_events() {
+            let api = Arc::downgrade(self);
+            tokio::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    let unlocks = match events.recv().await {
+                        Ok(u) => u,
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => return,
+                    };
+                    let Some(api) = api.upgrade() else { return };
+                    api.on_unlocks(&unlocks);
+                }
+            });
         }
         if let Some(mut events) = self.view.head_events() {
             let api = Arc::downgrade(self);
@@ -424,9 +488,17 @@ impl FilterApi {
     ) -> R<String> {
         let name = subscription_name(params)?;
         let namespace = method.split('_').next().unwrap_or_default();
+        let space: &'static str = if namespace == "eth" { "eth" } else { "quai" };
         let arity = match (namespace, name.as_str()) {
-            ("quai", "newHeads" | "newPendingTransactions") => 1,
-            ("quai", "logs") => 2,
+            (
+                "quai" | "eth",
+                "newHeads"
+                | "newHeadsV2"
+                | "newPendingTransactions"
+                | "newChainBlocks"
+                | "newChainBlocksV2",
+            ) => 1,
+            ("quai" | "eth", "logs" | "accesses") => 2,
             _ => {
                 return Err(RpcError {
                     code: -32601,
@@ -440,8 +512,13 @@ impl FilterApi {
         };
         let a = Args::new(params, arity)?;
         a.get(0, args::string)?;
-        let crit = if arity == 2 {
+        let crit = if name == "logs" {
             Some(a.get(1, filter)?)
+        } else {
+            None
+        };
+        let accessed = if name == "accesses" {
+            Some(a.get(1, args::address)?)
         } else {
             None
         };
@@ -451,7 +528,18 @@ impl FilterApi {
         }
         let event = match name.as_str() {
             "newHeads" => Event::Heads,
+            "newHeadsV2" => Event::HeadsV2,
             "newPendingTransactions" => Event::PendingTxs,
+            "newChainBlocks" => Event::ChainBlocks { v2: false },
+            "newChainBlocksV2" => Event::ChainBlocks { v2: true },
+            "accesses" => {
+                // `addr.InternalAddress()`.
+                let address = accessed.unwrap_or_default();
+                if !super::internal(self.view.as_ref(), &address) {
+                    return Err(RpcError::go("Address belongs to other zone"));
+                }
+                Event::Accesses(address)
+            }
             _ => subscribe_logs(crit.as_ref().ok_or_else(|| RpcError::go("logs criteria"))?)
                 .map_err(RpcError::go)?,
         };
@@ -461,6 +549,7 @@ impl FilterApi {
             id.clone(),
             Sub {
                 conn,
+                namespace: space,
                 event,
                 out: out.clone(),
                 buffer: Some(vec![]),
@@ -624,19 +713,105 @@ impl FilterApi {
             }
         }
         let mut head_json = None;
+        let mut head_v2 = None;
+        let head_hash = json::hash_hex(&head.hash);
         for (id, s) in subs.iter_mut() {
-            if matches!(s.event, Event::Heads) {
-                let v = head_json.get_or_insert_with(|| json::work_object(&head));
-                s.notify(id, v);
+            match &s.event {
+                Event::Heads => {
+                    let v = head_json.get_or_insert_with(|| json::work_object(&head));
+                    s.notify(id, v);
+                }
+                Event::HeadsV2 => {
+                    let v = head_v2.get_or_insert_with(|| json::work_object_v2(&head));
+                    s.notify(id, v);
+                }
+                Event::Accesses(address) => {
+                    for _ in 0..accesses(&head, address) {
+                        s.notify(id, &head_hash);
+                    }
+                }
+                _ => {}
             }
         }
         st.last = Some(head.hash);
         st.handled += 1;
     }
+
+    /// An appended block (`ChainEvent`): "newChainBlocks" and
+    /// "newChainBlocksV2" get the block (`RPCMarshalWorkObject`).
+    pub fn on_chain_block(&self, hash: Hash) {
+        let view = self.view.pinned().unwrap_or_else(|| self.view.clone());
+        let Ok(Some(block)) = view.block_or_candidate(&hash) else {
+            return;
+        };
+        let mut st = self.lock();
+        let (mut v1, mut v2) = (None, None);
+        for (id, s) in st.subs.iter_mut() {
+            if let Event::ChainBlocks { v2: version_2 } = s.event {
+                let v = if version_2 {
+                    v2.get_or_insert_with(|| json::work_object_v2(&block))
+                } else {
+                    v1.get_or_insert_with(|| json::work_object(&block))
+                };
+                s.notify(id, v);
+            }
+        }
+    }
+
+    /// The unlocks of an appended block (`UnlocksEvent`): "accesses" gets
+    /// the block hash once when its address is among them.
+    pub fn on_unlocks(&self, unlocks: &crate::view::Unlocks) {
+        let hash = json::hash_hex(&unlocks.block_hash);
+        let mut st = self.lock();
+        for (id, s) in st.subs.iter_mut() {
+            if let Event::Accesses(address) = &s.event {
+                if unlocks.addresses.contains(address) {
+                    s.notify(id, &hash);
+                }
+            }
+        }
+    }
     /// The number of head events handled (tests wait on it).
     pub fn handled(&self) -> u64 {
         self.lock().handled
     }
+}
+
+/// How many notifications "accesses" sends for a head (the `Accesses`
+/// goroutine of quai/filters/api.go): one per transaction whose recipient
+/// or sender (Quai), recipient or ETX sender (external) or an output
+/// (Qi, at most one per transaction) is the address, and one more per
+/// Quai transaction whose access list names it. Go's `break` there leaves
+/// only the `switch`, so one transaction can send twice.
+fn accesses(head: &BlockData, address: &super::args::Address) -> usize {
+    use quai_primitives::transaction::Kind;
+    let mut n = 0;
+    for tx in head.object.transactions() {
+        match tx.kind() {
+            Kind::Quai(q) => {
+                if q.to.as_ref() == Some(address) || tx.sender().ok().as_ref() == Some(address) {
+                    n += 1;
+                }
+                if q.access_list.iter().any(|t| &t.address == address) {
+                    n += 1;
+                }
+            }
+            Kind::External(e) => {
+                if &e.to == address || &e.sender == address {
+                    n += 1;
+                }
+            }
+            Kind::Qi(q) => {
+                let owner = |o: &quai_primitives::transaction::Output| {
+                    json::address20(o.address.as_deref().unwrap_or_default())
+                };
+                if q.outputs.iter().any(|o| &owner(o) == address) {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
 }
 
 /// `parseSubscriptionName`: the first element of the array of parameters.

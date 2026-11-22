@@ -99,6 +99,72 @@ pub fn wo_header(header: &Header) -> Value {
     })
 }
 
+/// `WorkObjectHeader.RPCMarshalWorkObjectHeader("v2")`: the "v1" fields,
+/// "shaDiffAndCount" and "scryptDiffAndCount" always (their getters never
+/// return nil; `{}` when unset) and, for a header whose prime terminus is
+/// at or after the KawPow fork (the only ones whose `ProtoDecode` sets
+/// them), their members, the share targets, the KawPow difficulty and an
+/// AuxPow that has a donor header and a transaction.
+pub fn wo_header_v2(header: &Header) -> Value {
+    let mut v = wo_header(header);
+    let w = header.wire();
+    let prime = w
+        .prime_terminus_number
+        .as_deref()
+        .map(|n| {
+            n.iter().fold(0u128, |a, b| {
+                a.saturating_mul(256).saturating_add(*b as u128)
+            })
+        })
+        .unwrap_or(0);
+    let fork = prime >= quai_primitives::spec::FORKS.kawpow as u128;
+    let Value::Object(m) = &mut v else {
+        return v;
+    };
+    let share = |c: &Option<quai_primitives::wire::ShareCount>| {
+        let mut out = Map::new();
+        if let (true, Some(c)) = (fork, c) {
+            for (k, f) in [
+                ("difficulty", &c.difficulty),
+                ("count", &c.count),
+                ("uncled", &c.uncled),
+            ] {
+                if let Some(b) = f {
+                    out.insert(k.into(), big_hex(b));
+                }
+            }
+        }
+        Value::Object(out)
+    };
+    m.insert("shaDiffAndCount".into(), share(&w.sha_diff_and_count));
+    m.insert("scryptDiffAndCount".into(), share(&w.scrypt_diff_and_count));
+    if !fork {
+        return v;
+    }
+    if let Some(raw) = &w.aux_pow {
+        if let Ok(p) = quai_primitives::auxiliary::canonical_pow(raw) {
+            if p.header.is_some() && p.transaction.is_some() {
+                m.insert(
+                    "auxpow".into(),
+                    json!({
+                        "powId": u64_hex(p.chain_id.unwrap_or(0) as u64),
+                        "header": bytes_hex(p.header.as_deref().unwrap_or_default()),
+                        "auxpow2": bytes_hex(p.auxpow2.as_deref().unwrap_or_default()),
+                        "signature": bytes_hex(p.signature.as_deref().unwrap_or_default()),
+                        "merkleBranch": p.merkle_branch.iter().map(|b| bytes_hex(b)).collect::<Vec<_>>(),
+                        "transaction": bytes_hex(p.transaction.as_deref().unwrap_or_default()),
+                    }),
+                );
+            }
+        }
+    }
+    let big = |b: &Option<Vec<u8>>| big_hex(b.as_deref().unwrap_or_default());
+    m.insert("shaShareTarget".into(), big(&w.sha_share_target));
+    m.insert("scryptShareTarget".into(), big(&w.scrypt_share_target));
+    m.insert("kawpowDifficulty".into(), big(&w.kawpow_difficulty));
+    v
+}
+
 /// `reflect.TypeOf(Header{}).Size()` of go-quai v0.57.0 on 64-bit hosts.
 const HEADER_STRUCT_SIZE: u64 = 728;
 fn bit_len(bytes: &[u8]) -> u64 {
@@ -523,6 +589,14 @@ pub fn tx_json(tx: &Transaction, hash: &Hash) -> Value {
 /// database (`ProtoDecode` gives every body list, so none is null): the
 /// payload of a "newHeads" notification.
 pub fn work_object(block: &BlockData) -> Value {
+    work_object_as(block, wo_header)
+}
+/// `WorkObject.RPCMarshalWorkObject("v2")` ("newHeadsV2",
+/// "newChainBlocksV2"): v2 headers for the work object and its uncles.
+pub fn work_object_v2(block: &BlockData) -> Value {
+    work_object_as(block, wo_header_v2)
+}
+fn work_object_as(block: &BlockData, header: fn(&Header) -> Value) -> Value {
     let list = |txs: &[Transaction], hashes: &[Hash]| -> Value {
         Value::Array(
             txs.iter()
@@ -533,14 +607,14 @@ pub fn work_object(block: &BlockData) -> Value {
     };
     let hashes = |v: Vec<Hash>| -> Value { Value::Array(v.iter().map(|h| hash_hex(h)).collect()) };
     json!({
-        "woHeader": wo_header(&block.header),
+        "woHeader": header(&block.header),
         "woBody": {
             "header": Value::Object(body_header(block.object.header().wire())),
             "transactions": list(block.object.transactions(), &block.tx_hashes),
             "outboundEtxs": list(block.object.outbound_etxs(), &block.etx_hashes),
             "manifest": hashes(block.object.manifest_hashes()),
             "interlinkHashes": hashes(block.object.interlink_hashes()),
-            "uncles": Value::Array(block.uncles.iter().map(wo_header).collect()),
+            "uncles": Value::Array(block.uncles.iter().map(header).collect()),
         },
     })
 }

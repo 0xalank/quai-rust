@@ -1154,6 +1154,21 @@ impl AccountState for WorldState {
             Some(a) => a.get(*key).map_err(read_error),
         }
     }
+    fn size(&self, address: &Address) -> Result<U256, ViewError> {
+        Ok(self
+            .0
+            .account(address)
+            .map_err(read_error)?
+            .map(|a| quai_execution::evm::word::bytes(a.storage_size))
+            .unwrap_or([0; 32]))
+    }
+    fn proof(
+        &self,
+        address: &Address,
+        keys: &[Hash],
+    ) -> Result<quai_rpc::view::WorldProof, ViewError> {
+        self.0.proof(address, keys).map_err(read_error)
+    }
 }
 /// The state behind an empty EVM root.
 struct EmptyState;
@@ -1169,6 +1184,16 @@ impl AccountState for EmptyState {
     }
     fn storage(&self, _: &Address, _: &Hash) -> Result<Hash, ViewError> {
         Ok([0; 32])
+    }
+    fn size(&self, _: &Address) -> Result<U256, ViewError> {
+        Ok([0; 32])
+    }
+    fn proof(&self, _: &Address, _: &[Hash]) -> Result<quai_rpc::view::WorldProof, ViewError> {
+        // An empty trie: no nodes, no account.
+        Ok(quai_rpc::view::WorldProof {
+            account: vec![],
+            storage: None,
+        })
     }
 }
 
@@ -1442,6 +1467,33 @@ impl ChainView for ExportView {
             Some(h) => self.load_known(&snap, h, *hash).map(Some),
             None => Ok(None),
         }
+    }
+    fn coinbase_lockups(
+        &self,
+        owner: &Address,
+        beneficiary: &Address,
+    ) -> Result<Vec<quai_rpc::view::CoinbaseLockup>, ViewError> {
+        use quai_execution::lockup::Key;
+        let snap = self.snap();
+        let head = head_state(&snap)?;
+        let all = head.state.world.lockups().map_err(read_error)?;
+        let key = |lock, epoch| Key {
+            owner: *owner,
+            beneficiary: *beneficiary,
+            lock,
+            epoch,
+        };
+        Ok(all
+            .range(key(0, 0)..=key(u8::MAX, u32::MAX))
+            .map(|(k, l)| quai_rpc::view::CoinbaseLockup {
+                lockup_byte: k.lock,
+                epoch: k.epoch,
+                balance: quai_execution::evm::word::bytes(l.balance),
+                unlock_height: l.unlock_height,
+                elements: l.elements,
+                delegate: l.delegate,
+            })
+            .collect())
     }
     fn utxo_set_size(&self, block: &BlockData) -> Result<u64, ViewError> {
         let snap = self.snap();

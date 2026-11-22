@@ -182,16 +182,16 @@ type backend struct {
 	hc              *core.HeaderChain
 }
 
-func (b *backend) NodeCtx() int                                { return common.ZONE_CTX }
-func (b *backend) NodeLocation() common.Location               { return loc }
-func (b *backend) ProcessingState() bool                       { return true }
-func (b *backend) ChainConfig() *params.ChainConfig            { return &b.cfg }
-func (b *backend) RPCGasCap() uint64                           { return params.GasCeil }
-func (b *backend) Logger() *log.Logger                         { return log.Global }
-func (b *backend) CurrentHeader() *types.WorkObject            { return b.head }
-func (b *backend) CurrentBlock() *types.WorkObject             { return b.head }
+func (b *backend) NodeCtx() int                                   { return common.ZONE_CTX }
+func (b *backend) NodeLocation() common.Location                  { return loc }
+func (b *backend) ProcessingState() bool                          { return true }
+func (b *backend) ChainConfig() *params.ChainConfig               { return &b.cfg }
+func (b *backend) RPCGasCap() uint64                              { return params.GasCeil }
+func (b *backend) Logger() *log.Logger                            { return log.Global }
+func (b *backend) CurrentHeader() *types.WorkObject               { return b.head }
+func (b *backend) CurrentBlock() *types.WorkObject                { return b.head }
 func (b *backend) GetBlockByHash(h common.Hash) *types.WorkObject { return b.blocks[h] }
-func (b *backend) CalcBaseFee(wo *types.WorkObject) *big.Int   { return b.hc.CalcBaseFee(wo) }
+func (b *backend) CalcBaseFee(wo *types.WorkObject) *big.Int      { return b.hc.CalcBaseFee(wo) }
 
 // HeaderByNumber as quai/api_backend.go: no pending block without a miner.
 func (b *backend) HeaderByNumber(_ context.Context, n rpc.BlockNumber) (*types.WorkObject, error) {
@@ -283,13 +283,13 @@ func (c chain) Engine(*types.WorkObjectHeader) consensus.Engine { return nil }
 func (c chain) GetHeaderOrCandidateByHash(h common.Hash) *types.WorkObject {
 	return c.b.blocks[h]
 }
-func (c chain) NodeCtx() int                                       { return common.ZONE_CTX }
-func (c chain) IsGenesisHash(h common.Hash) bool                   { return h == c.b.genesis }
-func (c chain) GetHeaderByHash(h common.Hash) *types.WorkObject    { return c.b.blocks[h] }
-func (c chain) GetBlockByHash(h common.Hash) *types.WorkObject     { return c.b.blocks[h] }
+func (c chain) NodeCtx() int                                            { return common.ZONE_CTX }
+func (c chain) IsGenesisHash(h common.Hash) bool                        { return h == c.b.genesis }
+func (c chain) GetHeaderByHash(h common.Hash) *types.WorkObject         { return c.b.blocks[h] }
+func (c chain) GetBlockByHash(h common.Hash) *types.WorkObject          { return c.b.blocks[h] }
 func (c chain) CheckInCalcOrderCache(common.Hash) (*big.Int, int, bool) { return nil, 0, false }
-func (c chain) AddToCalcOrderCache(common.Hash, int, *big.Int)     {}
-func (c chain) CalcBaseFee(wo *types.WorkObject) *big.Int          { return c.b.hc.CalcBaseFee(wo) }
+func (c chain) AddToCalcOrderCache(common.Hash, int, *big.Int)          {}
+func (c chain) CalcBaseFee(wo *types.WorkObject) *big.Int               { return c.b.hc.CalcBaseFee(wo) }
 func (c chain) CheckIfEtxIsEligible(s common.Hash, l common.Location) bool {
 	return c.b.hc.CheckIfEtxIsEligible(s, l)
 }
@@ -460,7 +460,12 @@ func run(sc scenario) map[string]interface{} {
 	}
 	server := rpc.NewServer(log.Global)
 	defer server.Stop()
+	// quaiapi.GetAPIs registers both namespaces: eth_gasPrice is the same
+	// PublicQuaiAPI method, eth_call, eth_estimateGas and
+	// eth_createAccessList are PublicBlockChainAPI's.
+	must(server.RegisterName("eth", quaiapi.NewPublicQuaiAPI(b)))
 	must(server.RegisterName("quai", quaiapi.NewPublicQuaiAPI(b)))
+	must(server.RegisterName("eth", quaiapi.NewPublicBlockChainAPI(b)))
 	must(server.RegisterName("quai", quaiapi.NewPublicBlockChainQuaiAPI(b)))
 	vectors := []interface{}{}
 	for _, r := range sc.requests {
@@ -503,7 +508,7 @@ func ask(server *rpc.Server, method string, params []interface{}) map[string]int
 			e["message"] = pointer.ReplaceAllString(m[:end], "0xc000000000") + m[end:]
 		}
 	}
-	if r, ok := out["result"].(map[string]interface{}); ok && method == "quai_createAccessList" {
+	if r, ok := out["result"].(map[string]interface{}); ok && (method == "quai_createAccessList" || method == "eth_createAccessList") {
 		if list, ok := r["accessList"].([]interface{}); ok {
 			for _, t := range list {
 				keys := t.(map[string]interface{})["storageKeys"].([]interface{})
@@ -520,7 +525,7 @@ func ask(server *rpc.Server, method string, params []interface{}) map[string]int
 type obj = map[string]interface{}
 
 func a(x common.Address) string { return hx(x.Bytes()) }
-func gas(n uint64) string        { return hexutil.EncodeUint64(n) }
+func gas(n uint64) string       { return hexutil.EncodeUint64(n) }
 
 func callRequests(at interface{}) []request {
 	var r []request
@@ -603,6 +608,27 @@ func callRequests(at interface{}) []request {
 	add("quai_createAccessList", obj{"from": a(alice), "to": a(store), "data": "0x01"})
 	add("quai_gasPrice")
 	add("quai_gasPrice", 1)
+	return r
+}
+
+// ethRequests mirrors the call requests in the eth namespace, with the
+// cases where PublicBlockChainAPI differs: EstimateGas has no conversion or
+// Qi branch (DoEstimateGas runs them), and CreateAccessList defaults to the
+// pending block.
+func ethRequests(at interface{}) []request {
+	var r []request
+	for _, q := range callRequests(at) {
+		r = append(r, request{"eth_" + strings.TrimPrefix(q.method, "quai_"), q.params})
+	}
+	add := func(method string, params ...interface{}) { r = append(r, request{method, params}) }
+	add("eth_estimateGas", obj{"from": a(alice), "to": a(qi), "value": "0x1"}, at)
+	add("eth_estimateGas", obj{"from": a(alice), "to": a(qi), "value": "0x8ac7230489e80000"}, at)
+	add("eth_estimateGas", obj{"from": a(alice), "to": a(qiOther), "value": "0x1"}, at)
+	add("eth_estimateGas", obj{"from": a(alice), "to": a(bob), "value": "0x1", "txType": 2}, at)
+	add("eth_estimateGas", obj{"from": a(alice), "to": a(bob), "value": "0x1", "txType": 1}, at)
+	add("quai_estimateGas", obj{"from": a(alice), "to": a(bob), "value": "0x1", "txType": 1}, at)
+	add("eth_createAccessList", obj{"from": a(alice), "to": a(store), "data": "0x01"}, nil)
+	add("eth_call", obj{"from": a(alice), "to": a(store), "data": "0x01"}, at, obj{})
 	return r
 }
 
@@ -723,6 +749,7 @@ func main() {
 	onePrime.number = 0
 	scenarios = append(scenarios,
 		scenario{"fee-child-of-genesis", one, gen, onePrime, true, []request{{"quai_gasPrice", []interface{}{}}}},
+		scenario{"eth", mainHead, mainParent, mainPrime, false, ethRequests("0x1e8480")},
 	)
 	out := []interface{}{}
 	for _, sc := range scenarios {

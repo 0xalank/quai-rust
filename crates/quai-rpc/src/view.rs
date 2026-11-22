@@ -122,6 +122,44 @@ pub trait AccountState: Send + Sync {
     fn nonce(&self, address: &Address) -> Result<u64, ViewError>;
     fn code(&self, address: &Address) -> Result<Vec<u8>, ViewError>;
     fn storage(&self, address: &Address, key: &Hash) -> Result<Hash, ViewError>;
+    /// `StateDB.GetSize`: the account's storage size, zero for an account
+    /// that does not exist (`quai_getContractSize`).
+    fn size(&self, _address: &Address) -> Result<U256, ViewError> {
+        Err(ViewError::Unavailable("the account sizes".into()))
+    }
+    /// `StateDB.GetProof` and `GetStorageProof` (`quai_getProof`).
+    fn proof(&self, _address: &Address, _keys: &[Hash]) -> Result<WorldProof, ViewError> {
+        Err(ViewError::Unavailable("Merkle proofs".into()))
+    }
+}
+pub use quai_execution::evm::state::{StorageProof, WorldProof};
+
+/// The unlocks of one appended block (`core.UnlocksEvent`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unlocks {
+    pub block_hash: Hash,
+    /// The internal address of each unlock, in order.
+    pub addresses: Vec<Address>,
+}
+
+/// `net_peerCount` and `net_peerCountByDirection`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PeerCounts {
+    pub peers: u64,
+    pub incoming: u64,
+    pub outgoing: u64,
+}
+
+/// A coinbase lockup record of an owner and a beneficiary
+/// (`rawdb.ReadCoinbaseLockup`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoinbaseLockup {
+    pub lockup_byte: u8,
+    pub epoch: u32,
+    pub balance: U256,
+    pub unlock_height: u32,
+    pub elements: u16,
+    pub delegate: Address,
 }
 
 /// An unspent output (`types.UtxoEntry`).
@@ -287,6 +325,18 @@ pub trait ChainView: Send + Sync + 'static {
     fn removed_logs(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<RemovedLogs>>> {
         None
     }
+    /// Every zone block the node appends, canonical or not (go-quai's
+    /// `ChainEvent` from `Slice.Append`): "newChainBlocks" and
+    /// "newChainBlocksV2". A view without a live chain has none.
+    fn chain_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
+        None
+    }
+    /// The coinbase lockups each appended block unlocked (go-quai's
+    /// `UnlocksEvent` from `HeaderChain.AppendBlock`): "accesses". A view
+    /// without a live chain has none.
+    fn unlock_events(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<Unlocks>>> {
+        None
+    }
     /// `quai_sendRawTransaction` and `quai_receiveTxFromPoolSharingClient`:
     /// decode the protobuf transaction and submit it as go-quai's
     /// `SubmitTransaction` does. The hash, or `ViewError::Go` with go-quai's
@@ -349,6 +399,31 @@ pub trait ChainView: Send + Sync + 'static {
     /// `GetSlicesRunning`: the zones this node runs.
     fn running_chains(&self) -> Vec<[u8; 2]> {
         vec![self.location()]
+    }
+    /// `txpool_getRollingFeeInfo`: the processor's rolling minimum, maximum
+    /// and average fee over the blocks this process executed
+    /// (core/state_processor.go `calcRollingFeeInfo`). None until it
+    /// executes a block with transactions, as in go-quai; a view that
+    /// executes no block has none.
+    fn rolling_fee_info(&self) -> Option<[U256; 3]> {
+        None
+    }
+    /// The connected peers (`net_peerCount`: peers with a connection) and
+    /// the peers with an inbound and with an outbound connection
+    /// (`net_peerCountByDirection`; one peer can count in both). go-quai
+    /// answers zeros without a p2p backend; so does a view without a
+    /// network.
+    fn peer_counts(&self) -> PeerCounts {
+        PeerCounts::default()
+    }
+    /// `vm.GetAllLockupData`: the coinbase lockup records of `owner` and
+    /// `beneficiary` at the head, in key order (lockup byte, then epoch).
+    fn coinbase_lockups(
+        &self,
+        _owner: &Address,
+        _beneficiary: &Address,
+    ) -> Result<Vec<CoinbaseLockup>, ViewError> {
+        Err(ViewError::Unavailable("the coinbase lockup records".into()))
     }
 }
 

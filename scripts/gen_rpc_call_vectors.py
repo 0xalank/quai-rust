@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Go oracle for the native RPC calls: quai_call, quai_estimateGas,
-quai_createAccessList and quai_gasPrice answered by go-quai v0.57.0's
-production handlers (internal/quaiapi) and JSON-RPC server over controlled
-state and headers (reference/rpc-calls). Explicit and offline; never part of
-the Rust runtime.
+quai_createAccessList and quai_gasPrice, and their eth_ twins (scenario
+"eth": PublicBlockChainAPI's Call, EstimateGas and CreateAccessList and the
+shared GasPrice), answered by go-quai v0.57.0's production handlers
+(internal/quaiapi) and JSON-RPC server over controlled state and headers
+(reference/rpc-calls). Explicit and offline; never part of the Rust
+runtime.
 
     scripts/gen_rpc_call_vectors.py --go-quai ../go-quai --write
     scripts/gen_rpc_call_vectors.py --go-quai ../go-quai --check
@@ -12,7 +14,7 @@ import argparse, json, os, subprocess, tempfile
 from pathlib import Path
 from gen_foundation_vectors import ROOT, PIN, checked_reference, sha
 
-SCENARIOS = 13
+SCENARIOS = 14
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--go-quai', required=True)
 m = p.add_mutually_exclusive_group(required=True)
@@ -31,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='quai-rpc-calls-') as directory:
     overlay.write_text(json.dumps({'Replace': {
         str(go / 'cmd/quai-rpc-call-vectors/main.go'): str(main),
         str(go / 'core/native_rpc_calls_vectors.go'): str(adapter)}}))
-    subprocess.run(['go', 'build', '-overlay', str(overlay), '-ldflags',
+    subprocess.run(['nice', '-n', '19', 'go', 'build', '-p', '2', '-overlay', str(overlay), '-ldflags',
                     '-X main.referenceRevision=' + PIN, '-o', str(binary),
                     './cmd/quai-rpc-call-vectors'], cwd=go, env=env, check=True)
     raw = subprocess.check_output([str(binary)], cwd=d, env=env)

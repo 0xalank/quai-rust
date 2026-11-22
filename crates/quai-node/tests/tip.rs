@@ -560,3 +560,80 @@ fn pool_follows_the_reorg() {
     p.finish(&log).unwrap();
     std::fs::remove_dir_all(data).unwrap();
 }
+
+/// The catch-up by number of tip mode (`tip::catch_up_from`), which a node
+/// far behind the peers runs after a sleep or a network change. On branch
+/// A at 12 while the peers hold branch B, it starts at 4 (8 below the head,
+/// shared), takes B's blocks 9..=16 and moves the head to B at its block 15,
+/// as go-quai's coordinator did. A source whose block at the start is not
+/// this node's stops at once.
+#[test]
+fn a_catch_up_by_number_takes_the_peers_branch() {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch("catch-up");
+    let mut p = opened(&data, false, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    p.enable_tip().unwrap();
+    for h in &a[1..=12] {
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
+    }
+    assert_eq!(p.tip().unwrap().head(), (ha[12], 12));
+    let (start, heads) = quai_node::tip::catch_up_start(&p).unwrap();
+    assert_eq!(start, (ha[4], 4));
+    assert_eq!(heads[2], (ha[4], 4));
+    let mut detector = quai_node::divergence::Detector::new(None, None, log);
+    let mut stats = quai_node::tip::TipStats::default();
+    let stop = AtomicBool::new(false);
+    // Another block at the start: nothing is offered.
+    let mut other = a[4].clone();
+    other.records[2].as_mut().unwrap().hash = [9; 32];
+    let mut source = Heights(vec![other, a[5].clone()].into());
+    let done = quai_node::tip::catch_up_from(
+        &mut p,
+        &mut source,
+        start,
+        &stop,
+        &log,
+        &mut detector,
+        &mut stats,
+        None,
+    )
+    .unwrap();
+    assert_eq!((done.offered, done.accepted), (0, 0));
+    assert!(done.end.contains("not this node's"), "{}", done.end);
+    assert_eq!(p.tip().unwrap().head(), (ha[12], 12));
+    // The peers' chain: branch B from the shared block 4.
+    let mut source = Heights(b[4..].iter().cloned().collect());
+    let done = quai_node::tip::catch_up_from(
+        &mut p,
+        &mut source,
+        start,
+        &stop,
+        &log,
+        &mut detector,
+        &mut stats,
+        None,
+    )
+    .unwrap();
+    // 5..=8 are known; B's 9..=16 are new, and the head moves at 15.
+    assert_eq!(done.offered, 12);
+    assert_eq!(done.accepted, 8);
+    assert_eq!(done.reorgs, 1);
+    assert_eq!(done.rejected, None);
+    assert_eq!(done.end, "the source ended");
+    assert_eq!(p.tip().unwrap().head(), (hb[16], 16));
+    assert_eq!(
+        (stats.accepted, stats.reorgs, stats.reorged_blocks),
+        (8, 1, 4)
+    );
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    std::fs::remove_dir_all(data).unwrap();
+}

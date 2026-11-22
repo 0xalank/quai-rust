@@ -17,8 +17,8 @@
 //! checkpoint near the head, so it shows the live head choice while a
 //! validating node is still far behind.
 use crate::log::Log;
-use crate::peers::{decode_block, Block};
-use crate::processor::{Offer, Processor};
+use crate::peers::{decode_block, Block, PeerSource};
+use crate::processor::{BlockSource, Next, Offer, Processor};
 use crate::qex::{Context, Height, RawRecord};
 use crypto_bigint::U256;
 use prost::Message;
@@ -309,8 +309,27 @@ const SHARE_DISTANCE: u64 = 8;
 const DEAD: usize = 4096;
 /// Time between comparisons with the peers' canonical chain.
 const CHECK_EVERY: Duration = Duration::from_secs(30);
-/// Peers asked per comparison.
+/// Peers asked per comparison (a different set each time).
 const CHECK_PEERS: usize = 4;
+/// A gossip block this far above the head starts a catch-up by number.
+const CATCH_UP_GAP: u64 = 64;
+/// A catch-up starts at the canonical block this far below the head,
+/// deeper than the reorgs seen at the head (at most 3).
+const CATCH_UP_BACK: u64 = 8;
+/// Least time between two catch-ups.
+const CATCH_UP_EVERY: Duration = Duration::from_secs(60);
+/// A catch-up that gets no height for this long ends.
+const CATCH_UP_IDLE: Duration = Duration::from_secs(120);
+/// Least time between two dials of the boot peers while no peer answers.
+const REDIAL_EVERY: Duration = Duration::from_secs(120);
+
+/// What a catch-up by number needs: the sync's peer source settings.
+#[derive(Clone, Debug)]
+pub struct CatchUp {
+    pub genesis: Hash,
+    pub margin: u64,
+    pub max_peers: usize,
+}
 
 /// A bounded set of hashes, oldest out first.
 #[derive(Default)]
@@ -359,7 +378,8 @@ enum Check {
         answers: Vec<(libp2p::PeerId, Option<Hash>)>,
     },
 }
-/// The canonical zone hash at `number` of each of `peers`.
+/// The canonical zone hash at `number` of each of `peers` that answers (a
+/// hash, or None: no block there). A request that fails is no answer.
 async fn ask(
     node: Arc<PublicNode>,
     peers: Vec<libp2p::PeerId>,
@@ -369,28 +389,23 @@ async fn ask(
         .into_iter()
         .map(|p| {
             let node = node.clone();
-            tokio::spawn(async move {
-                (
-                    p,
-                    crate::peers::peer_hash_at(&node, p, 2, number)
-                        .await
-                        .ok()
-                        .flatten(),
-                )
-            })
+            tokio::spawn(async move { (p, crate::peers::peer_hash_at(&node, p, 2, number).await) })
         })
         .collect();
     let mut out = vec![];
     for t in tasks {
-        if let Ok(v) = t.await {
-            out.push(v);
+        if let Ok((p, Ok(h))) = t.await {
+            out.push((p, h));
         }
     }
     out
 }
 /// The block hashes of a block's uncles (workshares included).
 fn uncle_hashes(block: &Block) -> Vec<Hash> {
-    quai_consensus::history::Record::decode(&block.raw)
+    uncle_hashes_of(&block.raw)
+}
+fn uncle_hashes_of(raw: &[u8]) -> Vec<Hash> {
+    quai_consensus::history::Record::decode(raw)
         .and_then(|r| r.uncles())
         .map(|u| u.iter().filter_map(|h| h.block_hash().ok()).collect())
         .unwrap_or_default()
@@ -411,6 +426,7 @@ pub fn follow(
     detector: &mut crate::divergence::Detector,
     metrics: Option<Arc<crate::metrics::Metrics>>,
     gossip_stats: Arc<GossipStats>,
+    catch: &CatchUp,
 ) -> Result<TipStats, String> {
     processor.enable_tip()?;
     let caches = Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?);
@@ -421,6 +437,13 @@ pub fn follow(
     let mut last_report = Instant::now();
     let mut dead = Recent::new(DEAD);
     let mut shares_seen = Recent::new(16_384);
+    // Peer health and the catch-up by number.
+    let mut check_round = 0usize;
+    let mut lag_head: Option<u64> = None;
+    let mut silent_checks = 0u32;
+    let mut last_redial: Option<Instant> = None;
+    let mut last_catch_up: Option<Instant> = None;
+    let mut catch_up_due = false;
     let (check_tx, check_rx) = std::sync::mpsc::channel::<Check>();
     let bump = |f: fn(&crate::metrics::Metrics) -> &AtomicU64| {
         if let Some(m) = &metrics {
@@ -440,7 +463,20 @@ pub fn follow(
                     ours,
                     answers,
                 } => detector.head_verdict(number, ours, &answers),
-                Check::Lag { head, answers } => detector.lag_verdict(head, &answers),
+                Check::Lag { head, answers } => {
+                    // Peers ahead and a head that did not move since the
+                    // last check: gossip does not bring the node back.
+                    if answers.iter().any(|(_, h)| h.is_some()) && lag_head == Some(head) {
+                        catch_up_due = true;
+                    }
+                    lag_head = Some(head);
+                    silent_checks = if answers.is_empty() {
+                        silent_checks + 1
+                    } else {
+                        0
+                    };
+                    detector.lag_verdict(head, &answers);
+                }
                 Check::Block { rejected, answers } => detector.block_verdict(rejected, &answers),
             }
         }
@@ -460,6 +496,10 @@ pub fn follow(
                 Ok(b) => {
                     if let Some(m) = &metrics {
                         m.note_peer_head(b.number);
+                    }
+                    let head = processor.tip().map_or(0, |t| t.head().1);
+                    if b.number > head + CATCH_UP_GAP {
+                        catch_up_due = true;
                     }
                     queue.push_back(b)
                 }
@@ -494,11 +534,16 @@ pub fn follow(
                     .filter(|n| *n >= tip.base().1)
                     .and_then(|n| tip.canonical_at(n).map(|h| (n, h)));
                 let due = detector.due(head);
-                let peers: Vec<_> = node
-                    .verified_peers()
-                    .into_iter()
-                    .take(CHECK_PEERS)
-                    .collect();
+                let mut all = node.verified_peers();
+                all.sort();
+                let peers: Vec<_> = if all.len() <= CHECK_PEERS {
+                    all
+                } else {
+                    (0..CHECK_PEERS)
+                        .map(|i| all[(check_round * CHECK_PEERS + i) % all.len()])
+                        .collect()
+                };
+                check_round = check_round.wrapping_add(1);
                 let (node, tx) = (node.clone(), check_tx.clone());
                 runtime.spawn(async move {
                     if let Some((number, ours)) = probe {
@@ -522,6 +567,26 @@ pub fn follow(
                     }
                 });
             }
+        }
+        // No peer in a slot, or none answered two checks in a row: after a
+        // sleep or a network change the old connections may be dead (ping
+        // closes them); dial the boot peers and walk the DHT again.
+        if (node.verified_peers().is_empty() || silent_checks >= 2)
+            && last_redial.is_none_or(|t| t.elapsed() >= REDIAL_EVERY)
+        {
+            last_redial = Some(Instant::now());
+            silent_checks = 0;
+            log.warn("tip: no peer answers; dialing the boot peers again");
+            runtime.spawn(crate::peers::dial_targets(node.clone(), vec![], true, *log));
+        }
+        if catch_up_due && last_catch_up.is_none_or(|t| t.elapsed() >= CATCH_UP_EVERY) {
+            catch_up_due = false;
+            last_catch_up = Some(Instant::now());
+            lag_head = None;
+            catch_up(
+                processor, runtime, &node, catch, stop, log, detector, &mut stats, &metrics,
+                &mut dead,
+            )?;
         }
         while let Some(block) = queue.pop_front() {
             let mut chain = vec![block];
@@ -645,6 +710,187 @@ pub fn follow(
         }
     }
     Ok(stats)
+}
+/// Where a catch-up by number starts: the canonical block `CATCH_UP_BACK`
+/// below the head (the tip base at the lowest), and the prime, region and
+/// zone heads after it.
+pub fn catch_up_start(processor: &Processor) -> Option<((Hash, u64), [(Hash, u64); 3])> {
+    let tip = processor.tip()?;
+    let (_, head) = tip.head();
+    let start = head.saturating_sub(CATCH_UP_BACK).max(tip.base().1);
+    let hash = tip.canonical_at(start)?;
+    let [Some(prime), Some(region), Some(zone)] = tip.heads_after(&hash)? else {
+        return None;
+    };
+    Some(((hash, start), [prime, region, zone]))
+}
+
+/// What a catch-up did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CaughtUp {
+    pub offered: u64,
+    pub accepted: u64,
+    pub reorgs: u64,
+    /// The height this node rejected, which ended the catch-up.
+    pub rejected: Option<Hash>,
+    /// Why it ended.
+    pub end: String,
+}
+
+/// Offer the heights of `source` in tip mode, with the checks and the head
+/// choice of a gossip block. The source's first height must be this node's
+/// canonical block `start`; a different block there ends the catch-up at
+/// once (the chains part below it: gossip and its ancestor walk take over).
+/// It also ends at a height that is not accepted, at the end of the source,
+/// after `CATCH_UP_IDLE` without a height, and on `stop`.
+#[allow(clippy::too_many_arguments)]
+pub fn catch_up_from(
+    processor: &mut Processor,
+    source: &mut dyn BlockSource,
+    start: (Hash, u64),
+    stop: &AtomicBool,
+    log: &Log,
+    detector: &mut crate::divergence::Detector,
+    stats: &mut TipStats,
+    metrics: Option<&crate::metrics::Metrics>,
+) -> Result<CaughtUp, String> {
+    let mut done = CaughtUp::default();
+    let mut last_height = Instant::now();
+    done.end = loop {
+        if stop.load(Ordering::Relaxed) {
+            break "a stop signal".to_string();
+        }
+        match source.next() {
+            Ok(Next::Height(h)) => {
+                last_height = Instant::now();
+                let (hash, number) = (h.zone().hash, h.zone().number);
+                if number <= start.1 {
+                    if number == start.1 && hash != start.0 {
+                        break format!("the peers' block at {number} is not this node's");
+                    }
+                    continue;
+                }
+                let uncles = uncle_hashes_of(&h.zone().block);
+                done.offered += 1;
+                stats.offered += 1;
+                if let Some(m) = metrics {
+                    m.tip_offered.fetch_add(1, Ordering::Relaxed);
+                }
+                match processor.offer(*h, log)? {
+                    Offer::Accepted {
+                        head,
+                        removed,
+                        refused,
+                    } => {
+                        done.accepted += 1;
+                        stats.accepted += 1;
+                        detector.block_included(hash, number, &uncles);
+                        if refused {
+                            stats.refused += 1;
+                        }
+                        if !removed.is_empty() {
+                            done.reorgs += 1;
+                            stats.reorgs += 1;
+                            stats.reorged_blocks += removed.len() as u64;
+                            stats.deepest = stats.deepest.max(removed.len() as u64);
+                            if let Some(m) = metrics {
+                                m.deepest_reorg
+                                    .fetch_max(removed.len() as u64, Ordering::Relaxed);
+                            }
+                            log.info(&format!(
+                                "tip: reorg to {} at {}: {} blocks removed",
+                                hex(&head.0),
+                                head.1,
+                                removed.len()
+                            ));
+                        }
+                    }
+                    Offer::Known => {}
+                    Offer::Rejected(f) => {
+                        stats.rejected += 1;
+                        done.rejected = Some(hash);
+                        detector.block_rejected(hash, number, f);
+                        break format!("block {} at {number} rejected", hex(&hash));
+                    }
+                    other => break format!("block {} at {number}: {other:?}", hex(&hash)),
+                }
+            }
+            Ok(Next::Wait) => {
+                if last_height.elapsed() >= CATCH_UP_IDLE {
+                    break format!("no height for {}s", CATCH_UP_IDLE.as_secs());
+                }
+                source.wait(stop);
+            }
+            Ok(Next::End) => break "the source ended".to_string(),
+            Err(e) => break format!("{}: {}", e.check, e.actual),
+        }
+    };
+    Ok(done)
+}
+
+/// Catch up by number when far behind the peers (after a sleep, a network
+/// change or a gap in gossip): the sync's peer source fetches the canonical
+/// heights from `catch_up_start`, in parallel batches with their prime and
+/// region records as at the start of a run, and hands off where the sync
+/// does (the best peer head less the margin).
+#[allow(clippy::too_many_arguments)]
+fn catch_up(
+    processor: &mut Processor,
+    runtime: &tokio::runtime::Handle,
+    node: &Arc<PublicNode>,
+    c: &CatchUp,
+    stop: &AtomicBool,
+    log: &Log,
+    detector: &mut crate::divergence::Detector,
+    stats: &mut TipStats,
+    metrics: &Option<Arc<crate::metrics::Metrics>>,
+    dead: &mut Recent,
+) -> Result<(), String> {
+    let Some((start, heads)) = catch_up_start(processor) else {
+        return Ok(());
+    };
+    let head = processor.tip().map_or(0, |t| t.head().1);
+    log.info(&format!(
+        "tip: behind the peers at {head}; catching up by number from {}",
+        start.1
+    ));
+    let mut source = PeerSource::start(
+        runtime,
+        node.clone(),
+        crate::peers::Options {
+            start: start.1,
+            heads,
+            genesis: c.genesis,
+            to: None,
+            margin: c.margin,
+            max_peers: c.max_peers,
+            inflight: 3,
+            peers: vec![],
+            public: true,
+            handoff: true,
+        },
+        *log,
+    )?;
+    let done = catch_up_from(
+        processor,
+        &mut source,
+        start,
+        stop,
+        log,
+        detector,
+        stats,
+        metrics.as_deref(),
+    )?;
+    drop(source);
+    if let Some(h) = done.rejected {
+        dead.insert(h);
+    }
+    let head = processor.tip().map_or(0, |t| t.head().1);
+    log.info(&format!(
+        "tip: catch-up ended ({}): {} heights offered, {} accepted, {} reorgs; head {head}",
+        done.end, done.offered, done.accepted, done.reorgs
+    ));
+    Ok(())
 }
 /// One gossip workshare through go-quai's intake (`worker.AddWorkShare`)
 /// and the uncle rules that do not depend on an including block.

@@ -2063,6 +2063,11 @@ impl Tip {
         }
         self.blocks.get(hash).map(|b| &b.after)
     }
+    /// The prime, region and zone heads after a block of the tip (the base
+    /// or a checked block): where a sync by number starts from that block.
+    pub fn heads_after(&self, hash: &Hash) -> Option<[Option<(Hash, u64)>; 3]> {
+        self.context_of(hash).map(|c| c.heads)
+    }
     fn is_canonical(&self, hash: &Hash) -> bool {
         *hash == self.base.0 || self.canonical.contains(hash)
     }

@@ -372,6 +372,11 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
                     &mut detector,
                     Some(metrics.clone()),
                     stats.clone(),
+                    &crate::tip::CatchUp {
+                        genesis: chain.genesis_hash(),
+                        margin: o.margin,
+                        max_peers: o.max_peers,
+                    },
                 );
                 match followed {
                     Ok(t) => log.info(&format!(

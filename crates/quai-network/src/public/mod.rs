@@ -59,7 +59,7 @@ use libp2p::{
     },
     dcutr, dns, gossipsub, identify, identity, kad,
     multiaddr::Protocol,
-    noise, relay,
+    noise, ping, relay,
     swarm::{
         behaviour::toggle::Toggle,
         dial_opts::{DialOpts, PeerCondition},
@@ -139,6 +139,9 @@ const RELAY_RETRY: Duration = Duration::from_secs(300);
 const NAT_GRACE: Duration = Duration::from_secs(45);
 /// Least time between two FindProviders walks for one topic.
 const FIND_INTERVAL: Duration = Duration::from_secs(60);
+/// libp2p ping: the interval and the time-out (rust-libp2p's defaults).
+const PING_INTERVAL: Duration = Duration::from_secs(15);
+const PING_TIMEOUT: Duration = Duration::from_secs(20);
 
 fn err(e: impl std::fmt::Display) -> io::Error {
     io::Error::other(e.to_string())
@@ -233,6 +236,14 @@ pub struct Config {
     pub max_per_ip: usize,
     /// Validator threads.
     pub validators: usize,
+    /// libp2p ping on every connection (go-libp2p hosts answer it): the
+    /// time between pings, and the time-out after which a connection that
+    /// does not answer is closed. A connection that a sleep or a network
+    /// change killed sends no reset, and gossipsub keeps it open; go-libp2p
+    /// closes such a yamux session after its keep-alive (30 s, then a 10 s
+    /// write time-out).
+    pub ping_interval: Duration,
+    pub ping_timeout: Duration,
 }
 impl Config {
     /// The probe profile: dial out only, no answers, nothing forwarded.
@@ -255,6 +266,8 @@ impl Config {
             max_connections: MAX_PEERS - MAX_PENDING_DIALS,
             max_per_ip: MAX_PEERS as usize,
             validators: 0,
+            ping_interval: PING_INTERVAL,
+            ping_timeout: PING_TIMEOUT,
         }
     }
     /// The public profile on TCP `port` (0: any free port).
@@ -282,6 +295,8 @@ impl Config {
             max_connections: GO_MAX_PEERS as u32 + 16,
             max_per_ip: 4,
             validators: 2,
+            ping_interval: PING_INTERVAL,
+            ping_timeout: PING_TIMEOUT,
         }
     }
     fn read_only_profile(&self) -> bool {
@@ -296,6 +311,7 @@ struct Behaviour {
     streams: libp2p_stream::Behaviour,
     gossip: gossipsub::Behaviour,
     identify: identify::Behaviour,
+    ping: ping::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     relay: Toggle<relay::client::Behaviour>,
     dcutr: Toggle<dcutr::Behaviour>,
@@ -326,6 +342,11 @@ pub enum Event {
     },
     DialFailed {
         peer: Option<PeerId>,
+        error: String,
+    },
+    /// A connection did not answer a ping and was closed.
+    DeadConnection {
+        peer: PeerId,
         error: String,
     },
     Identified {
@@ -424,6 +445,8 @@ pub struct Stats {
     pub served: (u64, u64, u64),
     /// Head number per context, from accepted blocks.
     pub heads: [Option<u64>; 3],
+    /// Connections closed because they did not answer a ping.
+    pub dead_connections: u64,
 }
 
 type Reply<T> = oneshot::Sender<io::Result<T>>;
@@ -545,6 +568,8 @@ fn kad_progress(
 /// State the API and the driver share.
 struct Shared {
     connected: RwLock<BTreeSet<PeerId>>,
+    /// Peers with an inbound and peers with an outbound connection.
+    directions: RwLock<(BTreeSet<PeerId>, BTreeSet<PeerId>)>,
     verified: RwLock<BTreeSet<PeerId>>,
     book: Arc<Mutex<Book>>,
     heads: Arc<RwLock<Heads>>,
@@ -709,6 +734,11 @@ impl PublicNode {
                     streams: libp2p_stream::Behaviour::new(),
                     gossip,
                     identify: identify::Behaviour::new(identify),
+                    ping: ping::Behaviour::new(
+                        ping::Config::new()
+                            .with_interval(c.ping_interval)
+                            .with_timeout(c.ping_timeout),
+                    ),
                     kad,
                     relay: Toggle::from(relay_behaviour),
                     dcutr: Toggle::from(c.reachability.then(|| dcutr::Behaviour::new(local))),
@@ -734,6 +764,7 @@ impl PublicNode {
         };
         let shared = Arc::new(Shared {
             connected: RwLock::new(BTreeSet::new()),
+            directions: RwLock::new((BTreeSet::new(), BTreeSet::new())),
             verified: RwLock::new(BTreeSet::new()),
             book,
             heads: Arc::new(RwLock::new(Heads::default())),
@@ -858,6 +889,17 @@ impl PublicNode {
     }
     pub fn is_connected(&self, peer: &PeerId) -> bool {
         read(&self.shared.connected).contains(peer)
+    }
+    /// Every peer with an open connection, in a slot or not.
+    pub fn connected_peers(&self) -> Vec<PeerId> {
+        read(&self.shared.connected).iter().copied().collect()
+    }
+    /// The peers with an open connection, and the peers with an inbound and
+    /// with an outbound connection; one peer can count in both (go-quai
+    /// `PeerCount` and `PeerCountByDirection`, p2p/node/stats.go).
+    pub fn peer_counts(&self) -> (usize, usize, usize) {
+        let d = read(&self.shared.directions);
+        (read(&self.shared.connected).len(), d.0.len(), d.1.len())
     }
     /// Peers in a slot: they passed the genesis check (every connected peer
     /// when the check is off).
@@ -1193,6 +1235,8 @@ struct Driver {
 struct PeerInfo {
     /// Open connections and whether each runs through a relay.
     connections: HashMap<ConnectionId, bool>,
+    /// The connections this node dialed.
+    outbound: HashSet<ConnectionId>,
     /// A direct address this node dialed.
     dialed: Option<Multiaddr>,
     /// Identify listen addresses that the dial policy allows.
@@ -1246,6 +1290,27 @@ impl Driver {
     /// for DCUtR or a direct dial before its genesis check and slot.
     fn direct(&self, peer: &PeerId) -> bool {
         self.peers.get(peer).is_some_and(PeerInfo::direct)
+    }
+    /// Keep the peer's place in the inbound and outbound sets
+    /// ([`PublicNode::peer_counts`]) equal to its open connections.
+    fn note_directions(&self, peer: PeerId) {
+        let (inbound, outbound) = self.peers.get(&peer).map_or((false, false), |i| {
+            let out = i
+                .connections
+                .keys()
+                .filter(|c| i.outbound.contains(c))
+                .count();
+            (i.connections.len() > out, out > 0)
+        });
+        let mut guard = write(&self.shared.directions);
+        let (ins, outs) = &mut *guard;
+        for (set, member) in [(ins, inbound), (outs, outbound)] {
+            if member {
+                set.insert(peer);
+            } else {
+                set.remove(&peer);
+            }
+        }
     }
     async fn run(
         mut self,
@@ -1828,9 +1893,13 @@ impl Driver {
                 write(&self.shared.connected).insert(peer_id);
                 let info = self.peers.entry(peer_id).or_default();
                 info.connections.insert(connection_id, relayed);
+                if endpoint.is_dialer() {
+                    info.outbound.insert(connection_id);
+                }
                 if endpoint.is_dialer() && !relayed {
                     info.dialed = Some(address.clone());
                 }
+                self.note_directions(peer_id);
                 if num_established.get() == 1 {
                     self.emit(Event::Connected {
                         peer: peer_id,
@@ -1852,6 +1921,7 @@ impl Driver {
             } => {
                 if let Some(info) = self.peers.get_mut(&peer_id) {
                     info.connections.remove(&connection_id);
+                    info.outbound.remove(&connection_id);
                 }
                 if num_established > 0 && !self.direct(&peer_id) {
                     // Only relayed connections are left: the slot is free.
@@ -1864,6 +1934,7 @@ impl Driver {
                     write(&self.shared.verified).remove(&peer_id);
                     self.peers.remove(&peer_id);
                     self.waiting.retain(|p| *p != peer_id);
+                    self.note_directions(peer_id);
                     self.emit(Event::Disconnected {
                         peer: peer_id,
                         cause: cause.map(|c| chain(&c)),
@@ -1882,6 +1953,22 @@ impl Driver {
                     peer: peer_id,
                     error,
                 });
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
+                peer,
+                connection,
+                result: Err(failure),
+            })) => {
+                // A peer without the protocol is alive; any other failure
+                // (a time-out, a broken stream) means the connection is dead.
+                if !matches!(failure, ping::Failure::Unsupported) {
+                    self.stats.dead_connections += 1;
+                    self.emit(Event::DeadConnection {
+                        peer,
+                        error: chain(&failure),
+                    });
+                    self.swarm.close_connection(connection);
+                }
             }
             SwarmEvent::Behaviour(BehaviourEvent::Identify(identify::Event::Received {
                 peer_id,

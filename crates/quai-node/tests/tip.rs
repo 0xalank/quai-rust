@@ -637,3 +637,70 @@ fn a_catch_up_by_number_takes_the_peers_branch() {
     assert!(s.failure.is_none(), "{:?}", s.failure);
     std::fs::remove_dir_all(data).unwrap();
 }
+
+/// The RPC's appended-block events (go-quai's `ChainEvent`) in tip mode:
+/// every checked block, canonical or not, in the order it was offered; a
+/// block the head choice did not take is still found by hash
+/// (`GetBlockOrCandidateByHash`). With state, the rolling fee window
+/// (`txpool_getRollingFeeInfo`) appears once a block with a Quai or Qi
+/// transaction executes.
+fn appended_blocks_reach_the_rpc(state: bool) {
+    let doc = doc();
+    let first = doc["first_branch"].as_u64().unwrap() as usize;
+    let (a, b) = (heights(&doc, first), heights(&doc, 1 - first));
+    let (ha, hb) = (go_hashes(&doc, first), go_hashes(&doc, 1 - first));
+    let log = Log::new(Level::Warn);
+    let data = scratch(&format!("appended-{state}"));
+    let mut p = opened(&data, state, false, 1_000);
+    p.run(&mut Genesis(Some(a[0].clone())), &log).unwrap();
+    let (view, live) = p.live_view().unwrap();
+    let mut chain = view.chain_events().unwrap();
+    assert_eq!(view.rolling_fee_info(), None);
+    p.enable_tip().unwrap();
+    for h in a[1..=16].iter().chain(&b[9..=12]) {
+        assert!(matches!(
+            p.offer(h.clone(), &log).unwrap(),
+            Offer::Accepted { .. }
+        ));
+    }
+    let mut seen = vec![];
+    while let Ok(h) = chain.try_recv() {
+        seen.push(h);
+    }
+    let want: Vec<Hash> = ha[1..=16].iter().chain(&hb[9..=12]).copied().collect();
+    assert_eq!(seen, want);
+    // B's blocks 9..=12 are not canonical; the view finds them by hash.
+    assert_eq!(p.tip().unwrap().head(), (ha[16], 16));
+    assert_eq!(view.block_by_number(10).unwrap().unwrap().hash, ha[10]);
+    let side = view.block_or_candidate(&hb[10]).unwrap().unwrap();
+    assert_eq!((side.hash, side.number), (hb[10], 10));
+    let pinned = view.pinned().unwrap();
+    assert_eq!(
+        pinned.block_or_candidate(&hb[11]).unwrap().unwrap().hash,
+        hb[11]
+    );
+    if state {
+        let with_fees = a[1..=16].iter().any(|h| {
+            let r = quai_consensus::history::Record::decode(&h.zone().block).unwrap();
+            r.object()
+                .transactions()
+                .iter()
+                .any(|t| !matches!(t.kind(), quai_primitives::transaction::Kind::External(_)))
+        });
+        assert_eq!(view.rolling_fee_info().is_some(), with_fees);
+    } else {
+        assert_eq!(view.rolling_fee_info(), None);
+    }
+    drop((view, live, chain, pinned));
+    let s = p.finish(&log).unwrap();
+    assert!(s.failure.is_none(), "{:?}", s.failure);
+    std::fs::remove_dir_all(data).unwrap();
+}
+#[test]
+fn appended_blocks_reach_the_rpc_with_state() {
+    appended_blocks_reach_the_rpc(true);
+}
+#[test]
+fn appended_blocks_reach_the_rpc_without_state() {
+    appended_blocks_reach_the_rpc(false);
+}

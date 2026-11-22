@@ -280,6 +280,54 @@ struct Checker {
     /// The zone block a shadow bootstrap trusted (test tool): it and its
     /// ancestry were not validated here. Every checkpoint carries it on.
     trusted: Option<(Hash, u64)>,
+    /// The RPC's live view: unlock events and the rolling fee window.
+    live: Option<Arc<crate::rpc_view::Live>>,
+    fees: RollingFees,
+}
+/// go-quai's rolling fee window (core/state_processor.go
+/// `calcRollingFeeInfo`, `GetRollingFeeInfo`) over the blocks this process
+/// executed: a minimum that rises 1% a block unless a block goes below it,
+/// a maximum that falls 1% a block unless a block goes above it, and the
+/// running mean of the blocks' average fees (their Quai fees over the count
+/// of their Quai and Qi transactions). Blocks without such a transaction
+/// change nothing.
+#[derive(Default)]
+struct RollingFees {
+    min: Option<Uint>,
+    max: Option<Uint>,
+    avg: Option<Uint>,
+    num: Uint,
+}
+impl RollingFees {
+    fn add(&mut self, block: &quai_consensus::zone_execution::TxFees, quai_fees: Uint) {
+        if block.count == 0 {
+            return;
+        }
+        // Every divisor is above zero: 100, the block's count, and the
+        // number of blocks after this one.
+        let hundred = Uint::from_u64(100);
+        let percent = |v: Uint, p: u64| v.wrapping_mul(&Uint::from_u64(p)).wrapping_div(&hundred);
+        self.min = Some(match self.min {
+            Some(m) if block.min >= m => percent(m, 101),
+            _ => block.min,
+        });
+        self.max = Some(match self.max {
+            Some(m) if block.max <= m => percent(m, 99),
+            _ => block.max,
+        });
+        let avg = self.avg.unwrap_or(Uint::ONE);
+        let block_avg = quai_fees.wrapping_div(&Uint::from_u64(block.count));
+        let sum = self.num.wrapping_mul(&avg).wrapping_add(&block_avg);
+        self.num = self.num.wrapping_add(&Uint::ONE);
+        self.avg = Some(sum.wrapping_div(&self.num));
+    }
+    fn get(&self) -> Option<[[u8; 32]; 3]> {
+        Some([
+            self.min?.to_be_bytes(),
+            self.max?.to_be_bytes(),
+            self.avg?.to_be_bytes(),
+        ])
+    }
 }
 struct Fail {
     context: Context,
@@ -327,6 +375,8 @@ impl Checker {
             verifier: Verifier::with_shared_caches(caches.clone()),
             caches,
             collect: false,
+            live: None,
+            fees: RollingFees::default(),
             window,
             heads: [None; 3],
             orders: HashMap::new(),
@@ -829,6 +879,16 @@ impl Checker {
         h: &Height,
         executed: Option<&block::Executed>,
     ) -> Accepted {
+        // The RPC's unlock events and rolling fee window follow the executed
+        // blocks (go-quai: each block its state processor applies).
+        if let (Some(live), Some(x)) = (&self.live, executed) {
+            live.unlocked(
+                zone.id(),
+                x.execution.unlocks.iter().map(|u| u.address).collect(),
+            );
+            self.fees.add(&x.execution.tx_fees, x.execution.quai_fees);
+            live.node().set_rolling_fees(self.fees.get());
+        }
         let location = self.chain.location();
         let txs = zone.object().transactions();
         let tx_hashes: Vec<Hash> = txs
@@ -1600,6 +1660,7 @@ impl Processor {
         let (view, live) =
             crate::rpc_view::ExportView::live(self.checker.chain.clone(), reader, head, state)?;
         self.live = Some(live.clone());
+        self.checker.live = Some(live.clone());
         Ok((view, live))
     }
     /// The state after the zone head, for the RPC.
@@ -1701,6 +1762,11 @@ impl Processor {
                 slot.height.records[c].as_ref().map(|r| (r.number, r.hash))
             });
             let shares = done.as_ref().map_or(0, |d| d.shares as u64);
+            // The appended block for the RPC's chain events.
+            let appended = self.live.is_some().then(|| {
+                let z = slot.height.zone();
+                (z.hash, Arc::new(z.block.clone()))
+            });
             let result = if zone_height == 0 {
                 let genesis = self.checker.collect.then(|| {
                     genesis_block(&slot, self.checker.receipts, self.checker.state.is_some())
@@ -1730,6 +1796,9 @@ impl Processor {
                     if let Some(m) = &self.metrics {
                         m.head.store(zone_height, Ordering::Relaxed);
                         m.blocks.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if let (Some(live), Some((hash, bytes))) = (&self.live, appended) {
+                        live.appended(hash, zone_height, order, bytes);
                     }
                     if self.live.is_some() && zone_height % PUBLISH_EVERY == 0 {
                         self.publish()?;
@@ -2370,6 +2439,11 @@ impl Processor {
                 version: None,
             },
         );
+        // Appended (go-quai's ChainEvent), whatever the head choice does.
+        if let Some(live) = &self.live {
+            live.appended(hash, number, order, Arc::new(zone_raw.block.clone()));
+        }
+        let tip = self.tip.as_mut().ok_or("tip mode")?;
         let best = tip.choice.build(parents, hash, order, entropy);
         let target = best.map(|b| b.zone()).unwrap_or(tip.head().0);
         self.move_head(target, log)
@@ -3268,4 +3342,50 @@ pub fn bootstrap_checkpoint(
     report.windows = std::array::from_fn(|i| cp.windows[i].len());
     report.checkpoint = checkpoint::write(&dir, &cp).map_err(io_err("checkpoint write"))?;
     Ok(report)
+}
+
+#[cfg(test)]
+mod rolling_fee_tests {
+    use super::*;
+    use quai_consensus::zone_execution::TxFees;
+
+    /// go-quai's `calcTxStats` and `calcRollingFeeInfo`, copied verbatim
+    /// from core/state_processor.go at 33db82f2 and run over the same blocks
+    /// (Quai fees, and Qi fees in Quai that count but add no Quai fee),
+    /// printed these minimum, maximum and average figures after each block.
+    #[test]
+    fn the_rolling_fee_window_equals_go() {
+        let blocks: [&[(bool, u64)]; 7] = [
+            &[(true, 21_000_000), (true, 30_000_000), (false, 5_000_000)],
+            &[],
+            &[(true, 40_000_000)],
+            &[(false, 1_000)],
+            &[(true, 25_000_000), (true, 25_000_000)],
+            &[(true, 100_000_000), (false, 2_000_000), (true, 7)],
+            &[(true, 30_000_000)],
+        ];
+        let go: [[u64; 3]; 7] = [
+            [5_000_000, 30_000_000, 17_000_000],
+            [5_000_000, 30_000_000, 17_000_000],
+            [5_050_000, 40_000_000, 28_500_000],
+            [1_000, 39_600_000, 19_000_000],
+            [1_010, 39_204_000, 20_500_000],
+            [7, 100_000_000, 23_066_667],
+            [7, 99_000_000, 24_222_222],
+        ];
+        let mut r = RollingFees::default();
+        assert_eq!(r.get(), None);
+        for (block, want) in blocks.iter().zip(go) {
+            let mut fees = TxFees::default();
+            let mut quai = Uint::ZERO;
+            for &(is_quai, fee) in block.iter() {
+                fees.note(Uint::from_u64(fee));
+                if is_quai {
+                    quai = quai.wrapping_add(&Uint::from_u64(fee));
+                }
+            }
+            r.add(&fees, quai);
+            assert_eq!(r.get(), Some(want.map(|v| Uint::from_u64(v).to_be_bytes())));
+        }
+    }
 }

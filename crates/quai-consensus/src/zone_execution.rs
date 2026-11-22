@@ -93,6 +93,26 @@ impl Profile {
         })
     }
 }
+/// go-quai's `calcTxStats` over a block (core/state_processor.go): the
+/// smallest and largest fee of its Quai and Qi transactions (a Qi fee in
+/// Quai, `misc.QiToQuai`) and how many there are. ETXs count nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TxFees {
+    pub min: Uint,
+    pub max: Uint,
+    pub count: u64,
+}
+impl TxFees {
+    pub fn note(&mut self, fee: Uint) {
+        if self.count == 0 || fee < self.min {
+            self.min = fee;
+        }
+        if self.count == 0 || fee > self.max {
+            self.max = fee;
+        }
+        self.count += 1;
+    }
+}
 pub struct Executed {
     pub receipts: Vec<Receipt>,
     /// The index in the block body of the transaction behind each receipt
@@ -108,6 +128,8 @@ pub struct Executed {
     pub total_etx_gas: u64,
     pub quai_fees: Uint,
     pub qi_fees: Uint,
+    /// The fee figures of the transactions (the RPC's rolling fee window).
+    pub tx_fees: TxFees,
     pub supply_added: Uint,
     pub supply_removed: Uint,
     pub fully_validated: bool,
@@ -318,6 +340,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
     let mut deleted_hashes = vec![];
     let mut quai_fees = Uint::ZERO;
     let mut qi_fees = Uint::ZERO;
+    let mut tx_fees = TxFees::default();
     let mut supply_added = Uint::ZERO;
     let mut supply_removed = Uint::ZERO;
     let mut previous_price = Uint::ZERO;
@@ -333,6 +356,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                 let v = settlement::apply_quai(&mut state.world, tx, &mut c.block)
                     .map_err(execution)?;
                 quai_fees = add(quai_fees, v.fee)?;
+                tx_fees.note(v.fee);
                 if v.receipt.status == 1 {
                     budgets(
                         &v.receipt.outbound_etxs,
@@ -398,6 +422,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
                 supply_added = add(supply_added, Uint::from_u64(v.added_qit))?;
                 supply_removed = add(supply_removed, Uint::from_u64(v.removed_qit))?;
                 let fee = payouts::convert_qi(&quote, Uint::from_u64(v.fee_qit))?;
+                tx_fees.note(fee);
                 // ProcessQiTx refused shorter output addresses above.
                 let block_gas = gas::block_qi_gas(tx, scaling, profile.location)
                     .map_err(|_| Error::Unsupported("Qi price gas domain"))?;
@@ -578,6 +603,7 @@ fn inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Err
         total_etx_gas: c.total_etx_gas,
         quai_fees,
         qi_fees,
+        tx_fees,
         supply_added,
         supply_removed,
         fully_validated: false,

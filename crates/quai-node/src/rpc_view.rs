@@ -53,7 +53,7 @@ use quai_execution::{
 use quai_primitives::{transaction::Address, work::WorkObject, Hash};
 use quai_rpc::view::{
     AccountState, BlockData, CallError, CallRequest, CallResult, ChainView, LogData, OutpointData,
-    ReceiptData, SpentUtxo, TxPosition, UncleKind, UtxoData, ViewError, U256,
+    PeerCounts, ReceiptData, SpentUtxo, TxPosition, UncleKind, Unlocks, UtxoData, ViewError, U256,
 };
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::File;
@@ -421,6 +421,71 @@ pub struct Live {
     current: RwLock<Arc<Snapshot>>,
     events: tokio::sync::broadcast::Sender<Hash>,
     removed: tokio::sync::broadcast::Sender<Arc<quai_rpc::view::RemovedLogs>>,
+    /// Every zone block the node appends, canonical or not (go-quai's
+    /// `ChainEvent`).
+    chain: tokio::sync::broadcast::Sender<Hash>,
+    /// The coinbase lockups each executed block unlocked (`UnlocksEvent`).
+    unlocks: tokio::sync::broadcast::Sender<Arc<Unlocks>>,
+    node: Arc<NodeInfo>,
+}
+/// Zone blocks the node appended lately, kept for the RPC.
+const APPENDED: usize = 512;
+/// What every view of a running node shares, pinned views included: its
+/// peer counts, its rolling fee window and the zone blocks it appended
+/// lately (a block the head choice did not take is in no store).
+#[derive(Default)]
+pub struct NodeInfo {
+    peers: RwLock<Option<PeerCounter>>,
+    fees: RwLock<Option<[U256; 3]>>,
+    appended: Mutex<VecDeque<(Hash, u64, u8, Arc<Vec<u8>>)>>,
+}
+/// The network's peer counts (`net_peerCount`, `net_peerCountByDirection`).
+pub type PeerCounter = Box<dyn Fn() -> PeerCounts + Send + Sync>;
+impl NodeInfo {
+    pub fn set_peer_counter(&self, counter: PeerCounter) {
+        *self.peers.write().unwrap_or_else(|e| e.into_inner()) = Some(counter);
+    }
+    fn peer_counts(&self) -> PeerCounts {
+        self.peers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|f| f())
+            .unwrap_or_default()
+    }
+    /// go-quai's `GetRollingFeeInfo`: minimum, maximum and average.
+    pub fn set_rolling_fees(&self, fees: Option<[U256; 3]>) {
+        *self.fees.write().unwrap_or_else(|e| e.into_inner()) = fees;
+    }
+    fn rolling_fees(&self) -> Option<[U256; 3]> {
+        *self.fees.read().unwrap_or_else(|e| e.into_inner())
+    }
+    fn push_appended(&self, hash: Hash, number: u64, order: u8, bytes: Arc<Vec<u8>>) {
+        let mut a = self.appended.lock().unwrap_or_else(|e| e.into_inner());
+        if a.iter().any(|(h, ..)| *h == hash) {
+            return;
+        }
+        if a.len() >= APPENDED {
+            a.pop_front();
+        }
+        a.push_back((hash, number, order, bytes));
+    }
+    fn appended(&self, hash: &Hash) -> Option<(u64, Raw)> {
+        let a = self.appended.lock().unwrap_or_else(|e| e.into_inner());
+        a.iter()
+            .find(|(h, ..)| h == hash)
+            .map(|(h, number, order, bytes)| {
+                (
+                    *number,
+                    Raw {
+                        hash: *h,
+                        order: *order,
+                        bytes: bytes.to_vec(),
+                        kinds: None,
+                    },
+                )
+            })
+    }
 }
 impl Live {
     /// Publish a new head: a store snapshot that holds it and the state
@@ -454,6 +519,26 @@ impl Live {
     pub fn removed(&self, logs: quai_rpc::view::RemovedLogs) {
         let _ = self.removed.send(Arc::new(logs));
     }
+    /// A zone block the node appended (checked; canonical or not), with
+    /// its order and its work object bytes.
+    pub fn appended(&self, hash: Hash, number: u64, order: u8, bytes: Arc<Vec<u8>>) {
+        self.node.push_appended(hash, number, order, bytes);
+        let _ = self.chain.send(hash);
+    }
+    /// The coinbase lockups an executed block unlocked: go-quai sends the
+    /// event only when there is one.
+    pub fn unlocked(&self, block_hash: Hash, addresses: Vec<Address>) {
+        if !addresses.is_empty() {
+            let _ = self.unlocks.send(Arc::new(Unlocks {
+                block_hash,
+                addresses,
+            }));
+        }
+    }
+    /// The figures every view of this node shares.
+    pub fn node(&self) -> &Arc<NodeInfo> {
+        &self.node
+    }
     pub fn has_state(&self) -> bool {
         let c = self.current.read().unwrap_or_else(|e| e.into_inner());
         c.state.is_some()
@@ -465,6 +550,8 @@ pub struct ExportView {
     /// The snapshot of a fixed or pinned view; a live view reads `live`.
     snap: Arc<Snapshot>,
     live: Option<Arc<Live>>,
+    /// The running node's shared figures (a live view and its pins).
+    node: Option<Arc<NodeInfo>>,
     caches: Arc<SharedCaches>,
     /// Decoded blocks and uncle classes by block hash.
     blocks: Arc<Mutex<Lru<Arc<BlockData>>>>,
@@ -558,6 +645,7 @@ impl ExportView {
         Ok(Self {
             chain,
             snap,
+            node: live.as_ref().map(|l| l.node.clone()),
             live,
             caches: Arc::new(SharedCaches::new(2).map_err(|e| e.to_string())?),
             blocks: lru(),
@@ -571,6 +659,7 @@ impl ExportView {
             chain: self.chain.clone(),
             snap: self.snap.clone(),
             live: self.live.clone(),
+            node: self.node.clone(),
             caches: self.caches.clone(),
             blocks: self.blocks.clone(),
             kinds: self.kinds.clone(),
@@ -736,6 +825,8 @@ impl ExportView {
     ) -> Result<(Self, Arc<Live>), String> {
         let (events, _) = tokio::sync::broadcast::channel(256);
         let (removed, _) = tokio::sync::broadcast::channel(256);
+        let (chain_tx, _) = tokio::sync::broadcast::channel(256);
+        let (unlocks, _) = tokio::sync::broadcast::channel(256);
         let snap = Arc::new(Snapshot {
             blocks: Arc::new(StoreBlocks {
                 reader,
@@ -750,6 +841,9 @@ impl ExportView {
             current: RwLock::new(snap.clone()),
             events,
             removed,
+            chain: chain_tx,
+            unlocks,
+            node: Arc::new(NodeInfo::default()),
         });
         Ok((Self::with_snapshot(chain, snap, Some(live.clone()))?, live))
     }
@@ -779,6 +873,10 @@ impl ExportView {
             }
         }
         let raw = snap.blocks.block(height, &hash)?;
+        self.decode_raw(height, raw)
+    }
+    /// A zone block from its bytes (cached by hash).
+    fn decode_raw(&self, height: u64, raw: Raw) -> Result<Arc<BlockData>, ViewError> {
         let object =
             WorkObject::decode_auxiliary(&raw.bytes, PINNED_SCHEDULE).map_err(unavailable)?;
         let header = object
@@ -1422,12 +1520,28 @@ impl ChainView for ExportView {
     ) -> Option<tokio::sync::broadcast::Receiver<Arc<quai_rpc::view::RemovedLogs>>> {
         self.live.as_ref().map(|l| l.removed.subscribe())
     }
+    fn chain_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
+        self.live.as_ref().map(|l| l.chain.subscribe())
+    }
+    fn unlock_events(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<Unlocks>>> {
+        self.live.as_ref().map(|l| l.unlocks.subscribe())
+    }
+    fn rolling_fee_info(&self) -> Option<[U256; 3]> {
+        self.node.as_ref().and_then(|n| n.rolling_fees())
+    }
+    fn peer_counts(&self) -> PeerCounts {
+        self.node
+            .as_ref()
+            .map(|n| n.peer_counts())
+            .unwrap_or_default()
+    }
     fn pinned(&self) -> Option<Arc<dyn ChainView>> {
         self.live.as_ref()?;
         Some(Arc::new(Self {
             chain: self.chain.clone(),
             snap: self.snap(),
             live: None,
+            node: self.node.clone(),
             caches: self.caches.clone(),
             blocks: self.blocks.clone(),
             kinds: self.kinds.clone(),
@@ -1463,8 +1577,12 @@ impl ChainView for ExportView {
         }
         // A block a reorg left behind: the store keeps its bytes.
         let snap = self.snap();
-        match snap.blocks.candidate_height(hash)? {
-            Some(h) => self.load_known(&snap, h, *hash).map(Some),
+        if let Some(h) = snap.blocks.candidate_height(hash)? {
+            return self.load_known(&snap, h, *hash).map(Some);
+        }
+        // A block the node appended that the head choice did not take.
+        match self.node.as_ref().and_then(|n| n.appended(hash)) {
+            Some((number, raw)) => self.decode_raw(number, raw).map(Some),
             None => Ok(None),
         }
     }

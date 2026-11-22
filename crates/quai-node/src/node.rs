@@ -275,6 +275,18 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         _ => None,
     };
     let live_view = live_view.map(|(view, live)| (Arc::new(view), live));
+    // net_peerCount and net_peerCountByDirection read the network's counts.
+    if let Some((_, live)) = &live_view {
+        let node = node.clone();
+        live.node().set_peer_counter(Box::new(move || {
+            let (peers, incoming, outgoing) = node.peer_counts();
+            quai_rpc::view::PeerCounts {
+                peers: peers as u64,
+                incoming: incoming as u64,
+                outgoing: outgoing as u64,
+            }
+        }));
+    }
     let shutdown = {
         let stop = stop.clone();
         move || {

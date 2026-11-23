@@ -856,3 +856,139 @@ impl Trie {
         Ok(stats)
     }
 }
+
+/// Upper bound on nodes accepted in a single Merkle Patricia proof.
+pub const MAX_PROOF_NODES: usize = 128;
+
+struct ProofNodes(std::collections::HashMap<Hash, Vec<u8>>);
+
+impl ReadNodes for ProofNodes {
+    fn get_node(&self, hash: &Hash) -> Result<Option<Vec<u8>>, Error> {
+        Ok(self.0.get(hash).cloned())
+    }
+}
+
+/// Cryptographically verify a secure Merkle Patricia Trie inclusion or
+/// non-inclusion proof (`eth_getProof` / `quai_getProof`) for raw `key`
+/// against a trusted `root`.
+///
+/// Returns `Ok(Some(rlp_value))` when the proof proves membership of `key`,
+/// `Ok(None)` when the proof proves absence of `key`, and `Err(_)` when the
+/// proof is incomplete, malformed, or does not hash to `root`.
+pub fn verify_proof(root: Hash, key: &[u8], proof: &[Vec<u8>]) -> Result<Option<Vec<u8>>, Error> {
+    if key.len() > 64 {
+        return Err(Error::Invalid("secure key length"));
+    }
+    verify_proof_hashed(root, keccak(key), proof)
+}
+
+/// Cryptographically verify an MPT proof for an already-hashed 32-byte key.
+pub fn verify_proof_hashed(
+    root: Hash,
+    key_hash: Hash,
+    proof: &[Vec<u8>],
+) -> Result<Option<Vec<u8>>, Error> {
+    if proof.len() > MAX_PROOF_NODES {
+        return Err(Error::Invalid("proof node count"));
+    }
+    if root == empty_root() {
+        return Ok(None);
+    }
+    let mut nodes = std::collections::HashMap::with_capacity(proof.len());
+    for raw in proof {
+        if raw.len() > MAX_NODE_BYTES {
+            return Err(Error::Invalid("proof node byte limit"));
+        }
+        nodes.insert(keccak(raw), raw.clone());
+    }
+    if !nodes.contains_key(&root) {
+        return Err(Error::Missing(root));
+    }
+    Trie::from_root(root).get_hashed(&ProofNodes(nodes), key_hash)
+}
+
+/// Decode a single RLP list into its child byte payloads (for account leaves).
+pub fn rlp_list_items(raw: &[u8]) -> Result<Vec<Vec<u8>>, Error> {
+    let (root, rest) = item(raw)?;
+    if !rest.is_empty() || !root.list {
+        return Err(Error::Invalid("RLP list envelope"));
+    }
+    let mut out = Vec::new();
+    let mut cursor = root.body;
+    while !cursor.is_empty() {
+        let (v, next) = item(cursor)?;
+        if v.list {
+            return Err(Error::Invalid("nested RLP list item"));
+        }
+        out.push(v.body.to_vec());
+        cursor = next;
+    }
+    Ok(out)
+}
+
+/// Decode a single RLP byte string (for storage slot leaves).
+pub fn rlp_bytes_value(raw: &[u8]) -> Result<Vec<u8>, Error> {
+    let (v, rest) = item(raw)?;
+    if !rest.is_empty() || v.list {
+        return Err(Error::Invalid("RLP byte string"));
+    }
+    Ok(v.body.to_vec())
+}
+
+#[cfg(test)]
+mod proof_tests {
+    use super::*;
+
+    #[test]
+    fn verifies_inclusion_exclusion_inline_and_rejects_tampering() {
+        // Empty trie proves absence.
+        assert_eq!(verify_proof(empty_root(), b"missing", &[]).unwrap(), None);
+
+        // Single small leaf (root < 32 bytes).
+        let small = Trie::from_secure_pairs(&[(b"a".to_vec(), b"1".to_vec())]).unwrap();
+        let small_root = small.root();
+        let p_in = small.prove(&NoNodes, b"a").unwrap();
+        let p_out = small.prove(&NoNodes, b"b").unwrap();
+        assert_eq!(
+            verify_proof(small_root, b"a", &p_in).unwrap(),
+            Some(b"1".to_vec())
+        );
+        assert_eq!(verify_proof(small_root, b"b", &p_out).unwrap(), None);
+
+        // Multi-branch trie with deep paths.
+        let pairs: Vec<(Vec<u8>, Vec<u8>)> = (0u8..32)
+            .map(|i| (vec![i; 20], vec![i.wrapping_add(1); 48]))
+            .collect();
+        let trie = Trie::from_secure_pairs(&pairs).unwrap();
+        let root = trie.root();
+        for (k, v) in &pairs {
+            let proof = trie.prove(&NoNodes, k).unwrap();
+            assert_eq!(verify_proof(root, k, &proof).unwrap(), Some(v.clone()));
+            // Truncated proof must fail with Missing.
+            if proof.len() > 1 {
+                assert!(verify_proof(root, k, &proof[..proof.len() - 1]).is_err());
+            }
+            // Tampered value in leaf node must fail.
+            let mut bad = proof.clone();
+            if let Some(last) = bad.last_mut() {
+                if let Some(b) = last.last_mut() {
+                    *b ^= 0xff;
+                }
+            }
+            assert!(verify_proof(root, k, &bad).is_err());
+        }
+        // Absent key verified cleanly.
+        let absent = [0xeeu8; 20];
+        let absent_proof = trie.prove(&NoNodes, &absent).unwrap();
+        assert_eq!(verify_proof(root, &absent, &absent_proof).unwrap(), None);
+        // Wrong root rejected.
+        let mut wrong_root = root;
+        wrong_root[0] ^= 1;
+        assert!(verify_proof(
+            wrong_root,
+            &pairs[0].0,
+            &trie.prove(&NoNodes, &pairs[0].0).unwrap()
+        )
+        .is_err());
+    }
+}

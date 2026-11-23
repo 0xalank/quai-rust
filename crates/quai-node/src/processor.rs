@@ -1801,6 +1801,9 @@ impl Processor {
         if let (true, Some(dir)) = (self.settings.state, &self.dir) {
             view.set_state_dir(dir.clone());
         }
+        if let Some(st) = &self.checker.state {
+            view.set_past_reader(st.past.reader());
+        }
         self.live = Some(live.clone());
         self.checker.live = Some(live.clone());
         Ok((view, live))

@@ -139,10 +139,39 @@ fn decode_created(raw: &[u8]) -> io::Result<Vec<(OutPoint, u8)>> {
 
 /// External transactions and created UTXO keys of one zone height.
 type Entry = (Vec<Transaction>, Vec<(OutPoint, u8)>);
+/// Lock-free concurrent read handle on `past.redb` (`historical::History`) so
+/// the stateful mining block builder can read matured lockup redemptions and
+/// UTXO trim history even when `blocks.redb` is aggressively pruned to recent
+/// blocks (`--compact-miner` / `--prune-blocks 256`).
+#[derive(Clone)]
+pub struct PastReader {
+    db: std::sync::Arc<Database>,
+}
+
+impl PastReader {
+    fn read(&self, table: TableDefinition<u64, &[u8]>, height: u64) -> io::Result<Option<Vec<u8>>> {
+        let read = self.db.begin_read().map_err(bad)?;
+        let t = read.open_table(table).map_err(bad)?;
+        Ok(t.get(height).map_err(bad)?.map(|v| v.value().to_vec()))
+    }
+    pub fn incoming_opt(&self, height: u64) -> Option<Vec<Transaction>> {
+        self.read(INCOMING, height)
+            .ok()
+            .flatten()
+            .and_then(|raw| decode_txs(&raw).ok())
+    }
+    pub fn created_opt(&self, height: u64) -> Option<Vec<(OutPoint, u8)>> {
+        self.read(CREATED, height)
+            .ok()
+            .flatten()
+            .and_then(|raw| decode_created(&raw).ok())
+    }
+}
+
 /// Redemption and trim history (`historical::History`) on disk, with the
 /// heights since the last flush in memory.
 pub struct PastDb {
-    db: Database,
+    db: std::sync::Arc<Database>,
     pending: BTreeMap<u64, Entry>,
 }
 impl PastDb {
@@ -157,9 +186,14 @@ impl PastDb {
         write.open_table(CREATED).map_err(bad)?;
         write.commit().map_err(bad)?;
         Ok(Self {
-            db,
+            db: std::sync::Arc::new(db),
             pending: BTreeMap::new(),
         })
+    }
+    pub fn reader(&self) -> PastReader {
+        PastReader {
+            db: self.db.clone(),
+        }
     }
     pub fn record(
         &mut self,

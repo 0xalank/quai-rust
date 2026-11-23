@@ -819,3 +819,92 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
         history_verified: false,
     })
 }
+
+/// Consensus-exact header targets and share controllers derived purely from a
+/// validated parent block (and its grandparent when available), with zero chain
+/// state required. Used by both stateless workshare mining and full-block
+/// template construction/verification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NextHeaderRules {
+    pub number: u64,
+    pub difficulty: Uint,
+    pub prime_terminus_number: u64,
+    pub sha_share_target: Uint,
+    pub scrypt_share_target: Uint,
+    pub kawpow_difficulty: Uint,
+    pub sha_triple: Triple,
+    pub scrypt_triple: Triple,
+}
+
+/// Derive the exact next-block / next-workshare consensus fields for a child of
+/// `parent` at `quai_time`.
+pub fn derive_next_header_rules(
+    history: &History,
+    parent: &Record,
+    profile: &Profile,
+    parent_order: u8,
+    quai_time: u64,
+) -> Result<NextHeaderRules, Error> {
+    profile.validate()?;
+    let parent_num = if profile.genesis.contains(&parent.id) {
+        0
+    } else {
+        parent.numbers[2]
+    };
+    let number = parent_num
+        .checked_add(1)
+        .ok_or(Error::Unsupported("next block number overflow"))?;
+    let difficulty = expected_difficulty(history, parent, profile)?;
+    let prime_terminus_number = if parent_order == 0 || profile.genesis.contains(&parent.id) {
+        parent.numbers[0]
+    } else {
+        parent.prime
+    };
+    let pw = parent.header.wire();
+    let parent_kawpow = share_rules::uint(pw.kawpow_difficulty.as_deref().unwrap_or_default())
+        .unwrap_or(Uint::ZERO);
+    let parent_sha_target =
+        share_rules::uint(pw.sha_share_target.as_deref().unwrap_or_default()).unwrap_or(Uint::ZERO);
+    let (sha_share_target, scrypt_share_target, kawpow_difficulty, sha_triple, scrypt_triple) =
+        if prime_terminus_number >= FORKS.kawpow {
+            let share_target = share_rules::share_target(
+                parent.difficulty()?,
+                parent_kawpow,
+                parent_sha_target,
+                prime_terminus_number,
+            )?;
+            let aux = pw
+                .aux_pow
+                .as_ref()
+                .map(|b| crate::auxiliary::Auxiliary::decode(b))
+                .transpose()?;
+            let kawpow_diff = share_rules::next_kawpow_difficulty_at(
+                parent_kawpow,
+                prime_terminus_number,
+                aux.as_ref(),
+                quai_time,
+                &FORKS,
+            )?;
+            let (sha_t, scrypt_t) =
+                expected_share_triples(parent, prime_terminus_number, &profile.location)?;
+            (share_target, share_target, kawpow_diff, sha_t, scrypt_t)
+        } else {
+            (
+                Uint::ZERO,
+                Uint::ZERO,
+                Uint::ZERO,
+                Triple::default(),
+                Triple::default(),
+            )
+        };
+    Ok(NextHeaderRules {
+        number,
+        difficulty,
+        prime_terminus_number,
+        sha_share_target,
+        scrypt_share_target,
+        kawpow_difficulty,
+        sha_triple,
+        scrypt_triple,
+    })
+}

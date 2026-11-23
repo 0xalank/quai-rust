@@ -2,6 +2,7 @@
 //! assembly/validation and mining control (`go-quai/core/worker.go`,
 //! `core/slice.go`, `core/types/auxpow*.go`).
 pub mod auxpow;
+pub mod relay;
 pub mod template;
 pub mod worker;
 
@@ -11,5 +12,9 @@ pub use auxpow::{
     progpow_seed_hash, sign_aux_template, target_to_hex, word_swap_prev_hash, ParsedDonorBlock,
     POW_KAWPOW, POW_PROGPOW, POW_SCRYPT, POW_SHA_BCH, POW_SHA_BTC,
 };
+pub use relay::{verify_builder_template, BuilderRelay, VerifiedBuilderTemplate};
 pub use template::{marshal_aux_pow_template, BlockTemplateParams};
-pub use worker::{Miner, MinerConfig, SubmitOutcome, WorkshareLruDump};
+pub use worker::{
+    BuilderSubmitHook, Miner, MinerConfig, MinerMode, StateBlockBuilder, SubmitOutcome,
+    WorkshareLruDump,
+};

@@ -74,6 +74,9 @@ pub struct Options {
     pub rpc_security: crate::cli::RpcSecurityOptions,
     /// Local mining worker configuration.
     pub miner: crate::cli::MinerOptions,
+    /// Optional upstream stateful builder RPC (`--builder-rpc <URL>`) for
+    /// zero-storage full-block mining in stateless mode.
+    pub builder_rpc: Option<String>,
     /// Stratum v1 server and HTTP/WS dashboard configuration.
     pub stratum: crate::stratum::StratumConfig,
     /// The transaction pool (with state only).
@@ -349,8 +352,15 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     };
     let miner = if let Some((view, _)) = &mut live_view {
         let mut miner_cfg = o.miner.to_miner_config(Some(&o.stratum.pool_tag));
-        if o.stratum.enabled {
+        if o.stratum.enabled || o.miner.workshares_only || o.builder_rpc.is_some() {
             miner_cfg.enabled = true;
+        }
+        if o.builder_rpc.is_some() {
+            miner_cfg.mode = crate::miner::MinerMode::BuilderRelay;
+        } else if o.miner.workshares_only || o.stateless {
+            miner_cfg.mode = crate::miner::MinerMode::WorksharesOnly;
+        } else {
+            miner_cfg.mode = crate::miner::MinerMode::Full;
         }
         let m = crate::miner::Miner::new(
             chain.clone(),
@@ -358,7 +368,80 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             view.caches().clone(),
             miner_cfg,
         );
-        if o.p2p_publish || o.miner.enabled || o.stratum.enabled {
+        if !o.stateless && m.mode() == crate::miner::MinerMode::Full {
+            m.set_state_builder(view.make_state_block_builder());
+        }
+        if let Some(builder_url) = &o.builder_rpc {
+            let client = crate::light::HttpRpcClient::new(builder_url)?;
+            let submit_log = *log;
+            let submit_client = client.clone();
+            m.set_builder_submit_hook(Arc::new(move |raw_wo| {
+                let hex = quai_primitives::encode_hex(raw_wo);
+                if let Err(e) =
+                    submit_client.call("quai_receiveMinedHeader", serde_json::json!([hex]))
+                {
+                    submit_log.warn(&format!("builder relay submit failed: {e}"));
+                }
+            }));
+            // Spawn background polling for executed pending headers from `--builder-rpc`.
+            let poll_miner = m.clone();
+            let poll_view = view.share();
+            let poll_stop = stop.clone();
+            let poll_log = *log;
+            runtime.spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(2));
+                loop {
+                    if poll_stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let c = client.clone();
+                    let pm = poll_miner.clone();
+                    let pv = poll_view.share();
+                    let pl = poll_log;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        use quai_rpc::view::ChainView;
+                        if let Ok(serde_json::Value::String(hex)) =
+                            c.call("quai_getPendingHeader", serde_json::json!([]))
+                        {
+                            if let Ok(raw) = quai_primitives::decode_hex(&hex) {
+                                if let Ok(wo) = quai_primitives::work::WorkObject::decode_auxiliary(
+                                    &raw,
+                                    pm.aux_schedule(),
+                                ) {
+                                    let head_num = pv.head();
+                                    if let Ok(Some(head_blk)) = pv.block_by_number(head_num) {
+                                        let ph_ok = wo
+                                            .auxiliary_work_header(pm.aux_schedule())
+                                            .ok()
+                                            .and_then(|h| {
+                                                h.wire().parent_hash.as_ref().map(|p| {
+                                                    p.value.as_slice() == head_blk.hash.as_slice()
+                                                })
+                                            })
+                                            .unwrap_or(false);
+                                        if ph_ok {
+                                            pm.set_builder_template(
+                                                crate::miner::VerifiedBuilderTemplate {
+                                                    parent_hash: head_blk.hash,
+                                                    number: head_num + 1,
+                                                    work_object: wo,
+                                                    raw,
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            pl.debug("builder relay: waiting for upstream pending header");
+                        }
+                    })
+                    .await;
+                    tick.tick().await;
+                }
+            });
+        }
+        if o.p2p_publish || o.miner.enabled || o.miner.workshares_only || o.stratum.enabled {
             let p2p = node.clone();
             let rt = runtime.handle().clone();
             m.set_publish_hook(Arc::new(move |topic, payload| {

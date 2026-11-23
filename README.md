@@ -12,15 +12,18 @@ The default build and runtime have **zero Go toolchain or Go runtime dependency*
 - **Performance**: On Genesis mainnet replay benchmarks with full proof-of-work verification (`scripts/benchmark_replay.py`), `quai-rust` runs **~7.8x lower CPU** (`26.7 s` vs `207 s` per 1,000 blocks), **~3x lower peak RSS** (`131–173 MiB` vs `419 MiB`), and **~3x fewer bytes written** than `go-quai`.
 - **Networks & Multi-Slice Support**: Supports `colosseum` (mainnet), `garden`, `orchard`, `lighthouse`, and `local` environments, with `--slice <R-Z>` multi-slice selection and `ExpandedNodeSet` hierarchy tracking.
 - **Public libp2p Networking**: Kademlia DHT (`/quai/kad/1.0.0`), GossipSub with conservative peer/topic scoring and protocol validators, AutoNAT, DCUtR hole punching, relay client + optional circuit relay server (`--p2p-relay-service`), full `handleRequest` peer serving across prime/region/zone views, and optional block/workshare publishing (`--p2p-publish`).
-- **Storage Modes**:
+- **Storage & Light Client Modes**:
   - Default pruned state with crash-safe atomic checkpoints and batched `redb` compaction.
+  - `--compact-miner`: low-storage standalone full-block mining preset keeping only the active live EVM/UTXO/ETX state tries (aggressively compacted) and the last 256 canonical blocks (~13 MB), with lock-free `past.redb` lockup/trim reads.
+  - `quai-node light`: Helios-style trustless light client — header-only P2P sync (`WorkObjectHeaderView` + PoW/PoEM verification, bounded recent header window) with cryptographic MPT proof verification (`quai_getProof`, `eth_getProof`, `keccak(code)`, verified `quai_call`, and verified receipts/txs) over an untrusted `--upstream-rpc`.
   - `--archive`: per-height state version persistence for historical RPC queries.
   - `--index-address-utxos`: workshare, donor, supply analytics, and locked-Quai indexes.
   - `--prune-blocks <N>`: bounded block history retention.
 - **100% `go-quai` JSON-RPC Parity**: Serves all **175 / 175** `go-quai` zone RPC methods and WebSocket subscriptions (plus 21 standard wallet/admin/utility methods) across HTTP, WebSocket, and Unix Domain Socket IPC (`--ipc-path`, mode `0600`), with per-transport namespace allowlists, CORS, and `Host` vhost enforcement. See [docs/rpc-parity.md](docs/rpc-parity.md).
 - **Transaction Pool**: Full Quai + Qi transaction pool matching `go-quai` (363/363 differential oracle steps), local transaction journaling, and `http://` + `ws://` txpool sharing clients.
 - **Built-In Mining & Stratum v1 Pool Server**:
-  - Pending header builder, AuxPoW template & coinbase assembly, `getBlockTemplate` / `submitBlock` (SHA-256d, Scrypt, KAWPOW), workshare pool, and live `pendingHeader` / `blockTemplateUpdates` / `newWorkshares` WebSocket streams.
+  - Three mining modes: stateful full-block execution (`--mine` / `--compact-miner`, executing incoming ETXs, lockups, and txpool txs via `zone_execution::build_block`), stateless workshare-only mining (`--mine-workshares`, zero chain state), and zero-storage full-block template relay (`--builder-rpc <URL>`, independently verifying remote templates against locally validated headers).
+  - AuxPoW template & coinbase assembly, `getBlockTemplate` / `submitBlock` (SHA-256d, Scrypt, KAWPOW), workshare pool, and live `pendingHeader` / `blockTemplateUpdates` / `newWorkshares` WebSocket streams.
   - Native async Stratum v1 server (`--stratum`) supporting SHA-256d (with BIP 310 ASICBoost version rolling), Scrypt, and KAWPOW, VarDiff, worker password directives (`d=`, `frequency=`, `skip=`, `lock=`, `parentupdate=`), PROXY protocol v1/v2, duplicate share detection, and an HTTP + WebSocket pool dashboard API.
 
 ---
@@ -68,14 +71,15 @@ The main node binary is `target/release/quai-node`.
 
 Supported `--network` values: `colosseum` (default), `garden`, `orchard`, `lighthouse`, `local`.
 
-### Run with Mining & Stratum v1 Server
+### Run a Compact Standalone Mining Node (Live Tries Only + Full Blocks)
+
+Keeps only the active live EVM/UTXO/ETX state tries (no historical tries, compacted frequently) and the last 256 canonical blocks (~13 MB), while executing and mining 100% consensus-valid full blocks and workshares with built-in Stratum v1:
 
 ```sh
 ./target/release/quai-node run \
   --datadir ~/.quai-node \
   --network colosseum \
-  --p2p-publish \
-  --mine \
+  --compact-miner \
   --coinbase 0x0000000000000000000000000000000000000001 \
   --miner-extra "quai-rust" \
   --stratum \
@@ -83,6 +87,33 @@ Supported `--network` values: `colosseum` (default), `garden`, `orchard`, `light
   --stratum-scrypt-addr 0.0.0.0:3334 \
   --stratum-kawpow-addr 0.0.0.0:3335 \
   --stratum-api-addr 0.0.0.0:3336
+```
+
+### Run a Trustless Light Client & Zero-Storage Mining Node
+
+```sh
+# Helios-style trustless light client (header-only P2P sync + MPT proof-verified RPC)
+./target/release/quai-node light \
+  --datadir ~/.quai-light \
+  --network colosseum \
+  --upstream-rpc http://127.0.0.1:8547 \
+  --rpc-listen 127.0.0.1:8548
+
+# Zero-state workshare-only Stratum mining node (~5 MB disk, no state trie required)
+./target/release/quai-node light \
+  --datadir ~/.quai-light \
+  --network colosseum \
+  --mine-workshares \
+  --coinbase 0x0000000000000000000000000000000000000001 \
+  --stratum
+
+# Zero-storage full-block + workshare Stratum node via verified remote builder relay
+./target/release/quai-node light \
+  --datadir ~/.quai-light \
+  --network colosseum \
+  --builder-rpc http://127.0.0.1:8547 \
+  --coinbase 0x0000000000000000000000000000000000000001 \
+  --stratum
 ```
 
 Default Stratum ports when `--stratum` is enabled:
@@ -193,8 +224,9 @@ cargo test --release --locked --workspace
 # Public/private libp2p transport tests
 cargo test --locked -p quai-network --features native-transport
 
-# End-to-end mining, Stratum v1, dashboard, IPC, and RPC security test
-cargo test --locked -p quai-node --test stratum_mining
+# End-to-end light client (MPT proof + fraud rejection), compact stateful block builder,
+# stateless workshare miner, builder relay, Stratum v1, dashboard, IPC, and RPC security tests
+cargo test --locked -p quai-node --test light_and_mining --test stratum_mining
 
 # Verify 175/175 go-quai RPC parity table consistency
 python3 scripts/render_rpc_parity.py --check

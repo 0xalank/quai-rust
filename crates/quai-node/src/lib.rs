@@ -12,6 +12,7 @@ pub mod cli;
 pub mod config;
 pub mod divergence;
 pub mod forkchoice;
+pub mod light;
 pub mod log;
 pub mod metrics;
 pub mod miner;

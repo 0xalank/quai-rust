@@ -723,6 +723,512 @@ pub fn diagnose<F: FnMut(&Header) -> Result<Hash, Error>>(
         outbound: executed.outbound,
     })
 }
+
+/// Complete execution outputs computed when assembling a candidate zone block
+/// for mining (`build_block`). Every field is consensus-exact so a mined block
+/// built from these commitments passes `Verifier::validate_block` and
+/// `zone_execution::project`.
+#[derive(Clone)]
+pub struct BuiltBlock {
+    pub transactions: Vec<Transaction>,
+    pub receipts: Vec<Receipt>,
+    pub outbound: Vec<Transaction>,
+    pub gas_used: u64,
+    pub state_used: u64,
+    pub evm_root: Hash,
+    pub etx_root: Hash,
+    pub utxo_root: Hash,
+    pub account_count: u64,
+    pub tx_root: Hash,
+    pub receipt_root: Hash,
+    pub outbound_root: Hash,
+    pub avg_tx_fees: Uint,
+    pub total_fees: Uint,
+}
+
+fn trim_uint(v: Uint) -> Vec<u8> {
+    use crypto_bigint::Encoding as _;
+    let b = v.to_be_bytes();
+    b[b.iter().position(|x| *x != 0).unwrap_or(32)..].to_vec()
+}
+
+/// Assemble and execute a candidate zone block on a COW clone of `state`.
+///
+/// Pops eligible queued incoming ETXs, executes valid `candidate_txs` in
+/// descending fee-price order (skipping failing/underpriced pool transactions),
+/// projects coinbase & uncle payouts, applies allocations and UTXO trimming,
+/// and returns all exact consensus roots and counters without mutating `state`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_block<F: FnMut(&Header) -> Result<Hash, Error>>(
+    state: &State,
+    history: &History,
+    past: &impl historical::History,
+    draft: &Record,
+    profile: &Profile,
+    inbound: &[Transaction],
+    candidate_txs: &[Transaction],
+    work: F,
+) -> Result<BuiltBlock, Error> {
+    if profile.official_allocations {
+        build_block_inner::<true, _>(
+            state,
+            history,
+            past,
+            draft,
+            profile,
+            inbound,
+            candidate_txs,
+            work,
+        )
+    } else {
+        build_block_inner::<false, _>(
+            state,
+            history,
+            past,
+            draft,
+            profile,
+            inbound,
+            candidate_txs,
+            work,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_block_inner<const OFFICIAL_ALLOCATIONS: bool, F: FnMut(&Header) -> Result<Hash, Error>>(
+    state: &State,
+    history: &History,
+    past: &impl historical::History,
+    draft: &Record,
+    profile: &Profile,
+    inbound: &[Transaction],
+    candidate_txs: &[Transaction],
+    work: F,
+) -> Result<BuiltBlock, Error> {
+    use prost::Message as _;
+
+    let body = draft.object.header().wire();
+    let wh = draft.header.wire();
+    if fields::location(&wh.location)? != &profile.location[..] {
+        return Err(invalid("execution location"));
+    }
+    let parent = history.get(&draft.parents[2])?;
+    if parent.numbers[2].checked_add(1) != Some(draft.numbers[2]) {
+        return Err(invalid("execution parent height"));
+    }
+    let genesis = profile.genesis.contains(&parent.id);
+    let empty = trie::secure_root(&[]).map_err(|_| invalid("empty root"))?;
+    let mut staged = state.clone();
+    if staged
+        .world
+        .root()
+        .map_err(|error| state_error(error, Error::ResourceLimit("parent account state")))?
+        != if genesis {
+            empty
+        } else {
+            fields::hash32(&parent.object.header().wire().evm_root, "missing evm root")?
+        }
+        || staged
+            .world
+            .etxs()
+            .root()
+            .map_err(|error| state_error(error, Error::ResourceLimit("parent ETX state")))?
+            != if genesis {
+                empty
+            } else {
+                fields::hash32(
+                    &parent.object.header().wire().etx_set_root,
+                    "missing etx set root",
+                )?
+            }
+        || if genesis {
+            !staged.utxos.is_empty()
+                || !staged
+                    .world
+                    .lockups_is_empty()
+                    .map_err(|e| state_error(e, Error::ResourceLimit("genesis lockups")))?
+        } else {
+            staged.utxos.root()
+                != fields::hash32(
+                    &parent.object.header().wire().utxo_root,
+                    "missing utxo root",
+                )?
+        }
+    {
+        return Err(invalid("execution parent state binding"));
+    }
+    let prime = history.get(&fields::hash32(
+        &body.prime_terminus_hash,
+        "missing prime terminus hash",
+    )?)?;
+    let exchange = uint(&prime.object.header().wire().exchange_rate)?;
+    let initial_avg = if genesis {
+        Uint::ZERO
+    } else {
+        uint(&parent.object.header().wire().avg_tx_fees).unwrap_or(Uint::ZERO)
+    };
+    let quote = economics::reward_quote(&draft.header, exchange, initial_avg)?;
+    let eligible = fields::hash32(
+        &prime.object.header().wire().etx_eligible_slices,
+        "missing etx eligible slices",
+    )?;
+    let parent_size = if genesis {
+        Uint::ZERO
+    } else {
+        uint(&parent.object.header().wire().quai_state_size)?
+    };
+    let gas_limit = fields::some(body.gas_limit, "missing gas limit")?;
+    let base_fee = uint(&body.base_fee)?;
+    let mut block_hashes = BTreeMap::new();
+    let mut cursor = parent.clone();
+    for _ in 0..256 {
+        block_hashes.insert(cursor.numbers[2], cursor.id);
+        if cursor.numbers[2] == 0 {
+            break;
+        }
+        match history.get(&cursor.parents[2]) {
+            Ok(v) => cursor = v,
+            Err(_) => break,
+        }
+    }
+    let mut c = incoming::Context {
+        block: BlockContext {
+            vm: evm::Context {
+                address: [0; 20],
+                caller: [0; 20],
+                origin: [0; 20],
+                coinbase: fields::address20(&wh.primary_coinbase, "missing primary coinbase")?,
+                etx_sender: [0; 20],
+                location: profile.location,
+                tx_type: 0,
+                value: Word::ZERO,
+                gas_price: Word::ZERO,
+                block_number: Uint::from_u64(draft.numbers[2]),
+                timestamp: Uint::from_u64(fields::some(parent.header.wire().time, "missing time")?),
+                difficulty: draft.difficulty()?,
+                base_fee,
+                chain_id: profile.chain_id,
+                state_size: parent_size,
+                block_gas_limit: gas_limit,
+                address_listed: false,
+                warm_slots: BTreeSet::new(),
+                read_only: false,
+                trace: false,
+            },
+            environment: Environment {
+                prime_number: Some(draft.prime),
+                eligible_slices: Some(eligible),
+                block_hashes,
+                delete_empty: true,
+                ..Default::default()
+            },
+            gas_remaining: gas_limit,
+            cumulative_gas: 0,
+            state_used: 0,
+        },
+        parent_height: parent.numbers[2],
+        total_etx_gas: 0,
+        region_remaining: ((parent.object.transactions().len() as u64).wrapping_mul(21000))
+            .max(1050000),
+        prime_remaining: ((parent.object.transactions().len() as u64).wrapping_mul(21000))
+            .max(1050000),
+    };
+    let base_utxos = staged.utxos.clone();
+    let scaling = (staged.utxos.consensus_size() as f64).ln();
+    staged.world.begin_block();
+    staged
+        .world
+        .etxs_mut()
+        .push(inbound)
+        .map_err(|error| state_error(error, Error::ResourceLimit("inbound ETX queue")))?;
+    let _unlocks = historical::redeem(
+        &mut staged.world,
+        past,
+        draft.numbers[2],
+        parent_size,
+        profile.location,
+    )
+    .map_err(execution)?;
+
+    let mut included_txs = Vec::new();
+    let mut receipts = Vec::new();
+    let mut outbound = Vec::new();
+    let mut deleted_hashes = Vec::new();
+    let mut quai_fees = Uint::ZERO;
+    let mut qi_fees = Uint::ZERO;
+
+    // 1. Pop and execute queued incoming ETXs within consensus ETX bounds.
+    let etx_gas_target = gas_limit / 5;
+    let etx_gas_max = etx_gas_target.wrapping_mul(2);
+    let mut etx_count = 0u64;
+    while let Some(etx) = staged
+        .world
+        .etxs()
+        .read(staged.world.etxs().oldest())
+        .map_err(|error| state_error(error, Error::ResourceLimit("ETX head lookup")))?
+    {
+        if draft.numbers[2] <= FORKS.start_tx {
+            if etx_count >= 100 {
+                break;
+            }
+        } else if c.total_etx_gas >= etx_gas_target {
+            break;
+        }
+        let state_snap = staged.clone();
+        let ctx_snap = c.clone();
+        match incoming::apply(&mut staged.world, &mut staged.utxos, &etx, &mut c) {
+            Ok(v) if draft.numbers[2] <= FORKS.start_tx || c.total_etx_gas <= etx_gas_max => {
+                deleted_hashes.extend(v.deleted_hashes);
+                outbound.extend(v.outbound);
+                receipts.extend(v.receipt.map(|r| r.receipt));
+                included_txs.push((*etx).clone());
+                etx_count += 1;
+            }
+            _ => {
+                staged = state_snap;
+                c = ctx_snap;
+                break;
+            }
+        }
+    }
+
+    // 2. Sort and execute candidate user transactions in descending fee-price order.
+    let mut ranked: Vec<(Uint, usize, &Transaction)> = Vec::new();
+    for (idx, tx) in candidate_txs.iter().enumerate() {
+        match tx.kind() {
+            Kind::Quai(q) => {
+                let p = from_bytes(&q.gas_price);
+                if p >= base_fee {
+                    ranked.push((p, idx, tx));
+                }
+            }
+            Kind::Qi(_) => {
+                if let Ok(block_gas) = gas::block_qi_gas(tx, scaling, profile.location) {
+                    if block_gas > 0 {
+                        // Exact Qi fee price is verified once inputs are resolved below.
+                        ranked.push((base_fee, idx, tx));
+                    }
+                }
+            }
+            Kind::External(_) => {}
+        }
+    }
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut previous_price = Uint::ZERO;
+    let mut previous_external = true;
+    let mut first_qi = true;
+    for (_est_price, _idx, tx) in ranked {
+        let state_snap = staged.clone();
+        let ctx_snap = c.clone();
+        match tx.kind() {
+            Kind::Quai(q) => {
+                let p = from_bytes(&q.gas_price);
+                if p < base_fee || (!previous_external && p > previous_price) {
+                    continue;
+                }
+                match settlement::apply_quai(&mut staged.world, tx, &mut c.block) {
+                    Ok(v) => {
+                        let mut ok = true;
+                        if v.receipt.status == 1
+                            && budgets(
+                                &v.receipt.outbound_etxs,
+                                profile.location,
+                                &mut c.region_remaining,
+                                &mut c.prime_remaining,
+                            )
+                            .is_err()
+                        {
+                            ok = false;
+                        }
+                        if ok {
+                            if v.receipt.status == 1 {
+                                for h in v.auxiliary.deleted_hashes {
+                                    staged.utxos.remove_auxiliary_hash(h);
+                                    deleted_hashes.push(h);
+                                }
+                                outbound.extend(v.receipt.outbound_etxs.iter().cloned());
+                            }
+                            quai_fees = add(quai_fees, v.fee)?;
+                            receipts.push(v.receipt);
+                            included_txs.push(tx.clone());
+                            previous_price = p;
+                            previous_external = false;
+                        } else {
+                            staged = state_snap;
+                            c = ctx_snap;
+                        }
+                    }
+                    Err(_) => {
+                        staged = state_snap;
+                        c = ctx_snap;
+                    }
+                }
+            }
+            Kind::Qi(qi_tx) => {
+                let spend_hashes: Result<Vec<Hash>, Error> = qi_tx
+                    .inputs
+                    .iter()
+                    .map(|input| {
+                        let point = qi::OutPoint {
+                            hash: input.hash,
+                            index: input.index,
+                        };
+                        let value = staged
+                            .utxos
+                            .get(&point)
+                            .map_err(|_| invalid("Qi spent record"))?
+                            .ok_or(invalid("Qi spent record"))?;
+                        Ok(utxo::utxo_hash(point, &value))
+                    })
+                    .collect();
+                let Ok(spend_hashes) = spend_hashes else {
+                    continue;
+                };
+                let mut qi_ctx = qi_settlement::Context {
+                    inputs: qi::Context {
+                        chain_id: quai_execution::economic_state::magnitude(profile.chain_id),
+                        block_height: draft.numbers[2],
+                        location: profile.location,
+                    },
+                    prime_number: draft.prime,
+                    scaling_factor: scaling,
+                    base_fee,
+                    quai_conversion_reward: quote.conversion_quai,
+                    qi_reward: quote.qi,
+                    eligible_slices: eligible,
+                    first_qi,
+                    block_gas_limit: gas_limit,
+                    gas_remaining: c.block.gas_remaining,
+                    used_gas: c.block.cumulative_gas,
+                    region_etx_remaining: c.region_remaining,
+                    prime_etx_remaining: c.prime_remaining,
+                };
+                match qi_settlement::apply_qi(&mut staged.utxos, tx, &mut qi_ctx) {
+                    Ok(v) => {
+                        let fee = payouts::convert_qi(&quote, Uint::from_u64(v.fee_qit))?;
+                        let block_gas = gas::block_qi_gas(tx, scaling, profile.location)
+                            .map_err(|_| Error::Unsupported("Qi price gas domain"))?;
+                        let p = fee.wrapping_div(&Uint::from_u64(block_gas));
+                        if p < base_fee || (!previous_external && p > previous_price) {
+                            staged = state_snap;
+                            c = ctx_snap;
+                            continue;
+                        }
+                        deleted_hashes.extend(spend_hashes);
+                        qi_fees = add(qi_fees, Uint::from_u64(v.fee_qit))?;
+                        c.block.gas_remaining = qi_ctx.gas_remaining;
+                        c.block.cumulative_gas = qi_ctx.used_gas;
+                        c.region_remaining = qi_ctx.region_etx_remaining;
+                        c.prime_remaining = qi_ctx.prime_etx_remaining;
+                        first_qi = false;
+                        outbound.extend(v.outbound);
+                        receipts.push(v.receipt);
+                        included_txs.push(tx.clone());
+                        previous_price = p;
+                        previous_external = false;
+                    }
+                    Err(_) => {
+                        staged = state_snap;
+                        c = ctx_snap;
+                    }
+                }
+            }
+            Kind::External(_) => {}
+        }
+    }
+
+    // 3. Fee accounting, payouts, official allocations, trimming and roots.
+    let expected_avg = payouts::average_fees(draft, &parent, genesis, &quote, quai_fees, qi_fees)?;
+    let final_quote = economics::reward_quote(&draft.header, exchange, expected_avg)?;
+    let expected_avg =
+        payouts::average_fees(draft, &parent, genesis, &final_quote, quai_fees, qi_fees)?;
+    let total_fees = add(quai_fees, payouts::convert_qi(&final_quote, qi_fees)?)?;
+
+    // Stamp computed avg_tx_fees / total_fees onto a transient copy of draft for payouts::project.
+    let mut proto_wo =
+        quai_primitives::schema::block::ProtoWorkObject::decode(draft.object.encode().as_slice())
+            .map_err(|_| invalid("draft work object decode"))?;
+    if let Some(body_obj) = proto_wo.wo_body.as_mut() {
+        if let Some(hdr) = body_obj.header.as_mut() {
+            hdr.avg_tx_fees = Some(trim_uint(expected_avg));
+            hdr.total_fees = Some(trim_uint(total_fees));
+        }
+    }
+    let fee_record = Record::decode(&proto_wo.encode_to_vec())?;
+    let payouts = payouts::project(
+        history,
+        &fee_record,
+        profile.location,
+        exchange,
+        outbound.len(),
+        work,
+    )?;
+    outbound.extend(payouts.outbound);
+    if OFFICIAL_ALLOCATIONS {
+        historical::allocate(
+            &mut staged.world,
+            draft.numbers[2],
+            draft.prime,
+            profile.location,
+        )
+        .map_err(execution)?;
+    }
+    if genesis {
+        let mut address = [0; 20];
+        address[0] = profile.location[0] << 4 | profile.location[1];
+        address[19] = 10;
+        let mut account = staged
+            .world
+            .account(&address)
+            .map_err(|e| state_error(e, Error::ResourceLimit("genesis lockup account")))?
+            .map(|v| (*v).clone())
+            .unwrap_or_else(Account::default);
+        account.nonce = 1;
+        staged
+            .world
+            .insert(address, account)
+            .map_err(|error| state_error(error, Error::ResourceLimit("genesis lockup account")))?;
+    }
+    let (_trimmed, _removed) = historical::trim(
+        &mut staged.utxos,
+        &base_utxos,
+        past,
+        draft.numbers[2],
+        draft.prime,
+        &deleted_hashes,
+    )
+    .map_err(execution)?;
+    staged
+        .world
+        .finish_block()
+        .map_err(|error| state_error(error, Error::Unsupported("block account finalization")))?;
+
+    let root = |r: Result<Hash, quai_execution::state_error::ReadError>, what| {
+        r.map_err(|e| state_error(e, Error::ResourceLimit(what)))
+    };
+    let tx_root = quai_primitives::work::transactions_root(&included_txs)
+        .map_err(|_| invalid("tx root encoding"))?;
+    let receipt_root = receipts_root(&receipts).map_err(|_| invalid("receipt encoding"))?;
+    let outbound_root = quai_primitives::work::transactions_root(&outbound)
+        .map_err(|_| invalid("outbound encoding"))?;
+    Ok(BuiltBlock {
+        transactions: included_txs,
+        receipts,
+        outbound,
+        gas_used: c.block.cumulative_gas,
+        state_used: c.block.state_used,
+        evm_root: root(staged.world.root(), "account root")?,
+        etx_root: root(staged.world.etxs().root(), "ETX root")?,
+        utxo_root: staged.utxos.root(),
+        account_count: staged.world.account_count(),
+        tx_root,
+        receipt_root,
+        outbound_root,
+        avg_tx_fees: expected_avg,
+        total_fees,
+    })
+}
 pub fn native_components(
     verifier: &mut Verifier,
     state: &mut State,

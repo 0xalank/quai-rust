@@ -46,10 +46,29 @@ use tokio::sync::broadcast;
 const PENDING_CACHE_CAP: usize = 1000;
 const WORKSHARE_LRU_CAP: usize = 1000;
 
+/// Operating mode of the local mining worker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MinerMode {
+    /// Stateful full-block & workshare mining (executes ETXs, lockups, and
+    /// txpool transactions when a [`StateBlockBuilder`] is attached).
+    #[default]
+    Full,
+    /// Stateless workshare-only mining: requires zero chain state, computes
+    /// exact consensus header targets and share controllers from the parent
+    /// header, and broadcasts valid workshares (never publishing unexecuted
+    /// full blocks).
+    WorksharesOnly,
+    /// Zero-storage full-block + workshare mining backed by an upstream
+    /// stateful builder node (`--builder-rpc <URL>`) whose executed pending
+    /// templates are independently verified against our local validated head.
+    BuilderRelay,
+}
+
 /// Miner runtime configuration (editable live via `miner_*` RPCs).
 #[derive(Clone, Debug)]
 pub struct MinerConfig {
     pub enabled: bool,
+    pub mode: MinerMode,
     pub primary_coinbase: Address,
     pub extra: Vec<u8>,
     pub gas_ceil: u64,
@@ -70,6 +89,7 @@ impl Default for MinerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: MinerMode::Full,
             primary_coinbase: [0u8; 20],
             extra: b"quai-rust".to_vec(),
             gas_ceil: spec::STATE_CEIL,
@@ -195,6 +215,23 @@ pub type PublishHook = Arc<dyn Fn(String, Vec<u8>) + Send + Sync>;
 /// node's processor can immediately ingest it.
 pub type BlockSink = Arc<dyn Fn(Vec<u8>) + Send + Sync>;
 
+/// Optional stateful block-execution hook supplied by a stateful node
+/// (`ExportView::make_state_block_builder`) so `generate_pending_header`
+/// executes incoming ETXs, matured lockups, and txpool transactions to produce
+/// 100% consensus-valid EVM/UTXO/ETX/receipt roots.
+pub type StateBlockBuilder = Arc<
+    dyn Fn(
+            &quai_consensus::history::Record,
+            &[quai_primitives::transaction::Transaction],
+        ) -> Result<quai_consensus::zone_execution::BuiltBlock, String>
+        + Send
+        + Sync,
+>;
+
+/// Optional callback invoked in `MinerMode::BuilderRelay` to submit a solved
+/// full block back to the upstream builder node (`quai_receiveMinedHeader`).
+pub type BuilderSubmitHook = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
 /// Thread-safe Quai miner, pending header generator, AuxPoW template store and
 /// workshare manager.
 pub struct Miner {
@@ -214,6 +251,9 @@ pub struct Miner {
     workshare_tx: broadcast::Sender<Arc<WorkObject>>,
     publish_hook: RwLock<Option<PublishHook>>,
     block_sink: RwLock<Option<BlockSink>>,
+    state_builder: RwLock<Option<StateBlockBuilder>>,
+    builder_template: RwLock<Option<super::relay::VerifiedBuilderTemplate>>,
+    builder_submit_hook: RwLock<Option<BuilderSubmitHook>>,
 }
 
 fn unix_now() -> u64 {
@@ -268,6 +308,9 @@ impl Miner {
             workshare_tx,
             publish_hook: RwLock::new(None),
             block_sink: RwLock::new(None),
+            state_builder: RwLock::new(None),
+            builder_template: RwLock::new(None),
+            builder_submit_hook: RwLock::new(None),
         })
     }
 
@@ -277,6 +320,39 @@ impl Miner {
 
     pub fn set_block_sink(&self, sink: BlockSink) {
         *self.block_sink.write().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+    }
+
+    pub fn set_state_builder(&self, builder: StateBlockBuilder) {
+        *self
+            .state_builder
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(builder);
+    }
+
+    pub fn set_builder_template(&self, tpl: super::relay::VerifiedBuilderTemplate) {
+        *self
+            .builder_template
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(tpl);
+        let _ = self.template_update_tx.send(POW_KAWPOW);
+    }
+
+    pub fn set_builder_submit_hook(&self, hook: BuilderSubmitHook) {
+        *self
+            .builder_submit_hook
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(hook);
+    }
+
+    pub fn mode(&self) -> MinerMode {
+        self.config.read().unwrap_or_else(|e| e.into_inner()).mode
+    }
+
+    /// Wake Stratum/RPC subscribers after a canonical head update.
+    pub fn notify_new_head(&self) {
+        if let Ok(wo) = self.generate_pending_header(POW_KAWPOW, None, &[], None) {
+            let _ = self.pending_header_tx.send(wo.encode());
+        }
     }
 
     pub fn chain(&self) -> &Arc<Chain> {
@@ -595,12 +671,89 @@ impl Miner {
         let pb = parent.object.header().wire();
         let now = unix_now().max(pw.time.unwrap_or(0).saturating_add(1));
         let next_num = head_num.saturating_add(1);
-        let parent_prime =
+        let fallback_prime =
             share_rules::number(pw.prime_terminus_number.as_deref().unwrap_or_default())
                 .unwrap_or(0);
-        let parent_diff = share_rules::uint(pw.difficulty.as_deref().unwrap_or_default())
+        let fallback_diff = share_rules::uint(pw.difficulty.as_deref().unwrap_or_default())
             .unwrap_or_else(|_| U256::from_u128(self.chain.spec().header.minimum_difficulty))
             .max(U256::ONE);
+
+        // Derive consensus-exact difficulty, prime terminus, share targets, and
+        // SHA/Scrypt controllers from the validated parent + grandparent window.
+        let mut derived_rules = None;
+        if let Ok(parent_rec) = quai_consensus::history::Record::decode(&parent.object.encode()) {
+            let mut hist = quai_consensus::history::History::default();
+            let _ = hist.insert(parent_rec.clone());
+            if head_num > 0 {
+                if let Ok(Some(gp)) = view.block_by_number(head_num - 1) {
+                    if let Ok(gp_rec) = quai_consensus::history::Record::decode(&gp.object.encode())
+                    {
+                        let _ = hist.insert(gp_rec);
+                    }
+                }
+            }
+            let profile = self.chain.zone_profile();
+            if let Ok(rules) = validation::derive_next_header_rules(
+                &hist,
+                &parent_rec,
+                &profile,
+                parent.order,
+                now,
+            ) {
+                derived_rules = Some(rules);
+            }
+        }
+        let parent_prime = derived_rules
+            .as_ref()
+            .map_or(fallback_prime, |r| r.prime_terminus_number);
+        let next_diff = derived_rules
+            .as_ref()
+            .map_or(fallback_diff, |r| r.difficulty)
+            .max(U256::ONE);
+
+        // BuilderRelay fast path: when an independently verified executed template
+        // from `--builder-rpc` matches our local validated head, reuse its real
+        // executed body/roots/txs and stamp fresh AuxPoW for `pow_id`.
+        if cfg.mode == MinerMode::BuilderRelay {
+            let cached_tpl = self
+                .builder_template
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(tpl) = cached_tpl {
+                if tpl.parent_hash == parent.hash {
+                    if let Ok(mut proto_wo) = ProtoWorkObject::decode(tpl.raw.as_slice()) {
+                        if let Some(mut wo_header) = proto_wo.wo_header.take() {
+                            if let Some(c) = coinbase_override {
+                                if c != [0u8; 20] {
+                                    wo_header.primary_coinbase =
+                                        Some(ProtoAddress { value: c.to_vec() });
+                                }
+                            }
+                            wo_header.time = Some(now);
+                            let schedule = self.aux_schedule();
+                            let aux_key_opt = self.attach_aux_pow(
+                                &mut wo_header,
+                                pow_id,
+                                now,
+                                next_num,
+                                &cfg,
+                                schedule,
+                            )?;
+                            proto_wo.wo_header = Some(wo_header);
+                            let encoded = proto_wo.encode_to_vec();
+                            let wo = WorkObject::decode_auxiliary(&encoded, schedule)
+                                .map_err(|e| format!("decode relayed work object: {e}"))?;
+                            let final_hdr = wo
+                                .auxiliary_work_header(schedule)
+                                .map_err(|e| format!("relayed work header: {e}"))?;
+                            self.cache_pending(final_hdr.seal_hash(), aux_key_opt, &wo, encoded);
+                            return Ok(wo);
+                        }
+                    }
+                }
+            }
+        }
 
         // Include recent pending workshares matching `parent_num` (within inclusion depth)
         let uncles: Vec<ProtoWorkObjectHeader> = {
@@ -648,7 +801,7 @@ impl Miner {
             chosen
         };
 
-        // Select pending Quai transactions from the pool (respecting gas limit)
+        // Select pending Quai/Qi transactions from the pool (respecting gas limit)
         let gas_limit = pb
             .gas_limit
             .unwrap_or(self.chain.spec().genesis.gas_limit)
@@ -656,47 +809,79 @@ impl Miner {
         let mut proto_txs = Vec::new();
         let mut tx_models = Vec::new();
         let mut gas_accum = 0u64;
-        if let Some(content) = view.pool_content(None) {
-            for (_addr, txs) in content.pending {
-                for ptx in txs {
-                    let g = match ptx.tx.kind() {
-                        quai_primitives::transaction::Kind::Quai(q) => q.gas,
-                        quai_primitives::transaction::Kind::External(e) => e.gas,
-                        quai_primitives::transaction::Kind::Qi(_) => 0,
-                    };
-                    if gas_accum.saturating_add(g) > gas_limit {
-                        continue;
-                    }
-                    gas_accum += g;
-                    let raw_tx = ptx.tx.encode();
-                    if let Ok(pt) =
-                        quai_primitives::schema::block::ProtoTransaction::decode(raw_tx.as_slice())
-                    {
-                        proto_txs.push(pt);
-                        tx_models.push(ptx.tx);
+        if cfg.mode != MinerMode::WorksharesOnly {
+            if let Some(content) = view.pool_content(None) {
+                for (_addr, txs) in content.pending {
+                    for ptx in txs {
+                        let g = match ptx.tx.kind() {
+                            quai_primitives::transaction::Kind::Quai(q) => q.gas,
+                            quai_primitives::transaction::Kind::External(e) => e.gas,
+                            quai_primitives::transaction::Kind::Qi(_) => 0,
+                        };
+                        if gas_accum.saturating_add(g) > gas_limit {
+                            continue;
+                        }
+                        gas_accum += g;
+                        let raw_tx = ptx.tx.encode();
+                        if let Ok(pt) = quai_primitives::schema::block::ProtoTransaction::decode(
+                            raw_tx.as_slice(),
+                        ) {
+                            proto_txs.push(pt);
+                            tx_models.push(ptx.tx);
+                        }
                     }
                 }
             }
         }
-        let tx_root = work::transactions_root(&tx_models).unwrap_or(crate::rpc_view::EMPTY_ROOT);
+        let mut tx_root =
+            work::transactions_root(&tx_models).unwrap_or(crate::rpc_view::EMPTY_ROOT);
         let uncle_root = work::uncles_root(&ProtoWorkObjectHeaders {
             wo_headers: uncles.clone(),
         });
+        let mut proto_outbound_etxs = Vec::new();
 
-        // Build body Header extending parent
+        // Build body Header extending parent (advancing dominant parent links
+        // and prime_terminus_hash whenever parent is genesis or a dominant block).
         let mut next_body_header = pb.clone();
+        let dom_order = if head_num == 0 {
+            0usize
+        } else {
+            usize::from(parent.order).min(2)
+        };
         if next_body_header.parent_hash.len() == 3 {
-            next_body_header.parent_hash[2] = ProtoHash {
-                value: parent.hash.to_vec(),
-            };
+            for ctx in dom_order..=2 {
+                next_body_header.parent_hash[ctx] = ProtoHash {
+                    value: parent.hash.to_vec(),
+                };
+            }
         }
         if next_body_header.number.len() == 3 {
-            next_body_header.number[2] = trim_u64(next_num);
+            if head_num == 0 {
+                for ctx in 0..=2 {
+                    next_body_header.number[ctx] = trim_u64(1);
+                }
+            } else {
+                for ctx in dom_order..=2 {
+                    let prev_n = share_rules::number(&next_body_header.number[ctx]).unwrap_or(0);
+                    next_body_header.number[ctx] = trim_u64(prev_n.saturating_add(1));
+                }
+            }
+        }
+        if dom_order == 0 {
+            next_body_header.prime_terminus_hash = Some(ProtoHash {
+                value: parent.hash.to_vec(),
+            });
         }
         next_body_header.gas_limit = Some(gas_limit);
         next_body_header.gas_used = Some(0);
+        next_body_header.tx_hash = Some(ProtoHash {
+            value: tx_root.to_vec(),
+        });
         next_body_header.uncle_hash = Some(ProtoHash {
             value: uncle_root.to_vec(),
+        });
+        next_body_header.outbound_etx_hash = Some(ProtoHash {
+            value: crate::rpc_view::EMPTY_ROOT.to_vec(),
         });
         let base_fee = view.calc_base_fee(&parent).unwrap_or([0u8; 32]);
         let bf_trimmed = &base_fee[base_fee.iter().position(|b| *b != 0).unwrap_or(32)..];
@@ -713,14 +898,35 @@ impl Miner {
                 next_body_header.parent_entropy[2] = trimmed.to_vec();
             }
         }
-        let body_header_hash = {
-            let encoded = next_body_header.encode_to_vec();
-            quai_primitives::transaction::keccak(&encoded)
-        };
 
-        // Compute SHA/Scrypt share triples & targets
-        let sha_triple = Triple::from_header(&parent.header, true).unwrap_or_default();
-        let scrypt_triple = Triple::from_header(&parent.header, false).unwrap_or_default();
+        // Compute consensus-exact SHA/Scrypt share triples & targets.
+        let (sha_triple, scrypt_triple, sha_share_target, scrypt_share_target, kawpow_diff) =
+            match &derived_rules {
+                Some(r) if parent_prime >= FORKS.kawpow => (
+                    r.sha_triple.clone(),
+                    r.scrypt_triple.clone(),
+                    trim_be(r.sha_share_target),
+                    trim_be(r.scrypt_share_target),
+                    trim_be(r.kawpow_difficulty),
+                ),
+                _ => {
+                    let st = Triple::from_header(&parent.header, true).unwrap_or_default();
+                    let sct = Triple::from_header(&parent.header, false).unwrap_or_default();
+                    let sha_st = pw
+                        .sha_share_target
+                        .clone()
+                        .unwrap_or_else(|| trim_u64(3 * (1u64 << 32)));
+                    let scrypt_st = pw
+                        .scrypt_share_target
+                        .clone()
+                        .unwrap_or_else(|| trim_u64(3 * (1u64 << 32)));
+                    let kd = pw
+                        .kawpow_difficulty
+                        .clone()
+                        .unwrap_or_else(|| trim_be(next_diff));
+                    (st, sct, sha_st, scrypt_st, kd)
+                }
+            };
         let sha_diff = if sha_triple.difficulty == U256::ZERO {
             U256::from_u64(7_000_000_000_000_000)
         } else {
@@ -732,16 +938,32 @@ impl Miner {
             scrypt_triple.difficulty
         };
 
+        // Work-object header `data` must satisfy `validation::data_policy`:
+        // byte 0 is the lockup byte (0..=3), optionally followed by lockup
+        // contract / beneficiary addresses.
+        let wo_data = if !extra_data.is_empty()
+            && usize::from(extra_data[0]) < spec::LOCK_PERIODS.by_lock_byte.len()
+        {
+            extra_data[..extra_data.len().min(spec::MAXIMUM_EXTRA_DATA_SIZE)].to_vec()
+        } else {
+            vec![lock]
+        };
+
+        let initial_body_hash = work::BodyHeader::decode(&next_body_header.encode_to_vec())
+            .map(|bh| bh.hash())
+            .unwrap_or_else(|_| {
+                quai_primitives::transaction::keccak(&next_body_header.encode_to_vec())
+            });
         let mut wo_header = ProtoWorkObjectHeader {
             header_hash: Some(ProtoHash {
-                value: body_header_hash.to_vec(),
+                value: initial_body_hash.to_vec(),
             }),
             parent_hash: Some(ProtoHash {
                 value: parent.hash.to_vec(),
             }),
             number: Some(trim_u64(next_num)),
-            difficulty: Some(trim_be(parent_diff)),
-            prime_terminus_number: Some(pw.prime_terminus_number.clone().unwrap_or_default()),
+            difficulty: Some(trim_be(next_diff)),
+            prime_terminus_number: Some(trim_u64(parent_prime)),
             tx_hash: Some(ProtoHash {
                 value: tx_root.to_vec(),
             }),
@@ -757,7 +979,7 @@ impl Miner {
             primary_coinbase: Some(ProtoAddress {
                 value: coinbase.to_vec(),
             }),
-            data: extra_data[..extra_data.len().min(spec::MAXIMUM_EXTRA_DATA_SIZE)].to_vec(),
+            data: wo_data,
             aux_pow: None,
             sha_diff_and_count: Some(ProtoPowShareDiffAndCount {
                 difficulty: Some(trim_be(sha_diff)),
@@ -769,78 +991,107 @@ impl Miner {
                 count: Some(trim_be(scrypt_triple.count)),
                 uncled: Some(trim_be(scrypt_triple.uncled)),
             }),
-            sha_share_target: Some(
-                pw.sha_share_target
-                    .clone()
-                    .unwrap_or_else(|| trim_u64(3 * (1u64 << 32))),
-            ),
-            scrypt_share_target: Some(
-                pw.scrypt_share_target
-                    .clone()
-                    .unwrap_or_else(|| trim_u64(3 * (1u64 << 32))),
-            ),
-            kawpow_difficulty: Some(
-                pw.kawpow_difficulty
-                    .clone()
-                    .unwrap_or_else(|| trim_be(parent_diff)),
-            ),
+            sha_share_target: Some(sha_share_target),
+            scrypt_share_target: Some(scrypt_share_target),
+            kawpow_difficulty: Some(kawpow_diff),
         };
+
+        // Full stateful execution: when a `StateBlockBuilder` is wired (stateful
+        // `quai-node run --mine`), execute incoming ETXs, matured lockup unlocks,
+        // and txpool transactions to stamp 100% consensus-exact state roots.
+        if cfg.mode == MinerMode::Full {
+            let builder = self
+                .state_builder
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(build_fn) = builder {
+                let draft_wo = ProtoWorkObject {
+                    wo_header: Some(wo_header.clone()),
+                    wo_body: Some(ProtoWorkObjectBody {
+                        header: Some(next_body_header.clone()),
+                        transactions: Some(ProtoTransactions {
+                            transactions: vec![],
+                        }),
+                        uncles: Some(ProtoWorkObjectHeaders {
+                            wo_headers: uncles.clone(),
+                        }),
+                        outbound_etxs: Some(ProtoTransactions {
+                            transactions: vec![],
+                        }),
+                        manifest: None,
+                        interlink_hashes: None,
+                    }),
+                    tx: None,
+                };
+                let draft_rec = quai_consensus::history::Record::decode(&draft_wo.encode_to_vec())
+                    .map_err(|e| format!("decode draft block record: {e}"))?;
+                let built = build_fn(&draft_rec, &tx_models)?;
+                {
+                    {
+                        next_body_header.gas_used = Some(built.gas_used);
+                        next_body_header.state_used = Some(built.state_used);
+                        next_body_header.evm_root = Some(ProtoHash {
+                            value: built.evm_root.to_vec(),
+                        });
+                        next_body_header.etx_set_root = Some(ProtoHash {
+                            value: built.etx_root.to_vec(),
+                        });
+                        next_body_header.utxo_root = Some(ProtoHash {
+                            value: built.utxo_root.to_vec(),
+                        });
+                        next_body_header.quai_state_size = Some(trim_u64(built.account_count));
+                        next_body_header.receipt_hash = Some(ProtoHash {
+                            value: built.receipt_root.to_vec(),
+                        });
+                        next_body_header.outbound_etx_hash = Some(ProtoHash {
+                            value: built.outbound_root.to_vec(),
+                        });
+                        next_body_header.avg_tx_fees = Some(trim_be(built.avg_tx_fees));
+                        next_body_header.total_fees = Some(trim_be(built.total_fees));
+                        tx_root = built.tx_root;
+                        next_body_header.tx_hash = Some(ProtoHash {
+                            value: tx_root.to_vec(),
+                        });
+                        wo_header.tx_hash = Some(ProtoHash {
+                            value: tx_root.to_vec(),
+                        });
+                        let final_body_hash =
+                            work::BodyHeader::decode(&next_body_header.encode_to_vec())
+                                .map_err(|e| format!("encode executed body header: {e}"))?
+                                .hash();
+                        wo_header.header_hash = Some(ProtoHash {
+                            value: final_body_hash.to_vec(),
+                        });
+                        proto_txs = built
+                            .transactions
+                            .iter()
+                            .filter_map(|t| {
+                                quai_primitives::schema::block::ProtoTransaction::decode(
+                                    t.encode().as_slice(),
+                                )
+                                .ok()
+                            })
+                            .collect();
+                        proto_outbound_etxs = built
+                            .outbound
+                            .iter()
+                            .filter_map(|t| {
+                                quai_primitives::schema::block::ProtoTransaction::decode(
+                                    t.encode().as_slice(),
+                                )
+                                .ok()
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
 
         // Attach AuxPoW when pow_id is KAWPOW, SHA, or Scrypt.
         let schedule = self.aux_schedule();
-        let mut aux_key_opt = None;
-        if matches!(pow_id, POW_KAWPOW | POW_SHA_BTC | POW_SHA_BCH | POW_SCRYPT) {
-            let seal_header = Header::decode_auxiliary(&wo_header.encode_to_vec(), schedule)
-                .map_err(|e| format!("encode pending header: {e}"))?;
-            let quai_seal = seal_header.seal_hash();
-            let tpl = match self.best_aux_template(pow_id) {
-                Some(t) => t,
-                None if cfg.allow_unsigned_fallback => {
-                    default_fallback_template(pow_id, now as u32, next_num)
-                }
-                None => return Err(format!("no aux template available for powId {pow_id}")),
-            };
-            let aux_pow2 = tpl.aux_pow2.clone().unwrap_or_default();
-            let commitment = aux_commitment(pow_id, &aux_pow2, quai_seal)?;
-            let sig_time = tpl.signature_time.unwrap_or(now as u32);
-            let donor_height = tpl.height.unwrap_or(next_num as u32).max(1);
-            let coinbase_out = tpl.coinbase_out.as_deref().unwrap_or_default();
-            let coinbase_tx =
-                build_coinbase_tx(pow_id, donor_height, coinbase_out, commitment, sig_time);
-            let merkle_root = coinbase::merkle_root(&coinbase_tx, &tpl.merkle_branch)
-                .map_err(|e| format!("aux merkle root: {e}"))?;
-            let mut prev_hash = [0u8; 32];
-            if let Some(ph) = tpl.prev_hash.as_deref() {
-                let n = ph.len().min(32);
-                prev_hash[..n].copy_from_slice(&ph[..n]);
-            }
-            let donor_header = build_donor_header(
-                pow_id,
-                tpl.version.unwrap_or(0x2000_0000),
-                prev_hash,
-                merkle_root,
-                now.max(u64::from(sig_time)) as u32,
-                tpl.bits.unwrap_or(0x1f00_ffff),
-                0,
-                donor_height,
-                [0u8; 32],
-            );
-            let proto_aux = ProtoAuxPow {
-                chain_id: Some(u32::from(pow_id)),
-                header: Some(donor_header),
-                signature: tpl.sigs.clone(),
-                merkle_branch: tpl.merkle_branch.clone(),
-                transaction: Some(coinbase_tx),
-                signature_time: Some(u64::from(sig_time)),
-                auxpow2: if pow_id == POW_SCRYPT {
-                    Some(aux_pow2)
-                } else {
-                    None
-                },
-            };
-            wo_header.aux_pow = Some(proto_aux);
-            aux_key_opt = Some(aux_lookup_key(commitment, sig_time));
-        }
+        let aux_key_opt =
+            self.attach_aux_pow(&mut wo_header, pow_id, now, next_num, &cfg, schedule)?;
 
         let proto_wo = ProtoWorkObject {
             wo_header: Some(wo_header),
@@ -851,7 +1102,7 @@ impl Miner {
                 }),
                 uncles: Some(ProtoWorkObjectHeaders { wo_headers: uncles }),
                 outbound_etxs: Some(ProtoTransactions {
-                    transactions: vec![],
+                    transactions: proto_outbound_etxs,
                 }),
                 manifest: None,
                 interlink_hashes: None,
@@ -865,12 +1116,88 @@ impl Miner {
             .auxiliary_work_header(schedule)
             .map_err(|e| format!("pending work header: {e}"))?;
 
+        self.cache_pending(final_hdr.seal_hash(), aux_key_opt, &wo, encoded);
+        Ok(wo)
+    }
+
+    fn attach_aux_pow(
+        &self,
+        wo_header: &mut ProtoWorkObjectHeader,
+        pow_id: u8,
+        now: u64,
+        next_num: u64,
+        cfg: &MinerConfig,
+        schedule: quai_primitives::Schedule,
+    ) -> Result<Option<Hash>, String> {
+        if !matches!(pow_id, POW_KAWPOW | POW_SHA_BTC | POW_SHA_BCH | POW_SCRYPT) {
+            return Ok(None);
+        }
+        wo_header.aux_pow = None;
+        let seal_header = Header::decode_auxiliary(&wo_header.encode_to_vec(), schedule)
+            .map_err(|e| format!("encode pending header: {e}"))?;
+        let quai_seal = seal_header.seal_hash();
+        let tpl = match self.best_aux_template(pow_id) {
+            Some(t) => t,
+            None if cfg.allow_unsigned_fallback => {
+                default_fallback_template(pow_id, now as u32, next_num)
+            }
+            None => return Err(format!("no aux template available for powId {pow_id}")),
+        };
+        let aux_pow2 = tpl.aux_pow2.clone().unwrap_or_default();
+        let commitment = aux_commitment(pow_id, &aux_pow2, quai_seal)?;
+        let sig_time = tpl.signature_time.unwrap_or(now as u32);
+        let donor_height = tpl.height.unwrap_or(next_num as u32).max(1);
+        let coinbase_out = tpl.coinbase_out.as_deref().unwrap_or_default();
+        let coinbase_tx =
+            build_coinbase_tx(pow_id, donor_height, coinbase_out, commitment, sig_time);
+        let merkle_root = coinbase::merkle_root(&coinbase_tx, &tpl.merkle_branch)
+            .map_err(|e| format!("aux merkle root: {e}"))?;
+        let mut prev_hash = [0u8; 32];
+        if let Some(ph) = tpl.prev_hash.as_deref() {
+            let n = ph.len().min(32);
+            prev_hash[..n].copy_from_slice(&ph[..n]);
+        }
+        let donor_header = build_donor_header(
+            pow_id,
+            tpl.version.unwrap_or(0x2000_0000),
+            prev_hash,
+            merkle_root,
+            now.max(u64::from(sig_time)) as u32,
+            tpl.bits.unwrap_or(0x1f00_ffff),
+            0,
+            donor_height,
+            [0u8; 32],
+        );
+        let proto_aux = ProtoAuxPow {
+            chain_id: Some(u32::from(pow_id)),
+            header: Some(donor_header),
+            signature: tpl.sigs.clone(),
+            merkle_branch: tpl.merkle_branch.clone(),
+            transaction: Some(coinbase_tx),
+            signature_time: Some(u64::from(sig_time)),
+            auxpow2: if pow_id == POW_SCRYPT {
+                Some(aux_pow2)
+            } else {
+                None
+            },
+        };
+        wo_header.aux_pow = Some(proto_aux);
+        Ok(Some(aux_lookup_key(commitment, sig_time)))
+    }
+
+    fn cache_pending(
+        &self,
+        seal_hash: Hash,
+        aux_key_opt: Option<Hash>,
+        wo: &WorkObject,
+        encoded: Vec<u8>,
+    ) {
         {
             let mut by_seal = self
                 .pending_by_seal
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            by_seal.insert(final_hdr.seal_hash(), wo.clone());
+            by_seal.insert(seal_hash, wo.clone());
         }
         if let Some(aux_key) = aux_key_opt {
             let mut by_aux = self
@@ -880,7 +1207,6 @@ impl Miner {
             by_aux.insert(aux_key, wo.clone());
         }
         let _ = self.pending_header_tx.send(encoded);
-        Ok(wo)
     }
 
     /// Answer `quai_getBlockTemplate`.
@@ -1048,6 +1374,7 @@ impl Miner {
         class: Classification,
         mined: bool,
     ) {
+        let mode = self.mode();
         if matches!(class, Classification::Valid | Classification::Block) {
             self.workshares
                 .lock()
@@ -1055,7 +1382,22 @@ impl Miner {
                 .record(header, mined);
             let _ = self.workshare_tx.send(Arc::new(wo.clone()));
         }
+        // In stateless WorksharesOnly mode we have no executed state body, so
+        // never broadcast an unexecuted full block onto the network.
+        if class == Classification::Block && mode == MinerMode::WorksharesOnly {
+            return;
+        }
         if class == Classification::Block {
+            if mode == MinerMode::BuilderRelay {
+                if let Some(submit) = self
+                    .builder_submit_hook
+                    .read()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+                {
+                    submit(&wo.encode());
+                }
+            }
             if let Some(sink) = self
                 .block_sink
                 .read()

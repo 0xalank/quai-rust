@@ -683,6 +683,9 @@ pub struct ExportView {
     miner: Option<Arc<crate::miner::Miner>>,
     /// State checkpoint directory for `--archive` historical state lookups.
     state_dir: Option<std::path::PathBuf>,
+    /// Concurrent read handle on `past.redb` for lockup/trim history when
+    /// building full blocks with pruned block storage (`--compact-miner`).
+    past_reader: Option<crate::store::PastReader>,
 }
 /// A small cache by block hash, oldest entry out first.
 type Lru<T> = (HashMap<Hash, T>, VecDeque<Hash>);
@@ -778,6 +781,7 @@ impl ExportView {
             pool: None,
             miner: None,
             state_dir: None,
+            past_reader: None,
         })
     }
     /// Another handle on the same view (blocks, head and caches).
@@ -793,6 +797,7 @@ impl ExportView {
             pool: self.pool.clone(),
             miner: self.miner.clone(),
             state_dir: self.state_dir.clone(),
+            past_reader: self.past_reader.clone(),
         }
     }
     /// Answer the pool's RPC methods from `pool`.
@@ -1032,6 +1037,118 @@ impl ExportView {
             Some(l) => l.current.read().unwrap_or_else(|e| e.into_inner()).clone(),
             None => self.snap.clone(),
         }
+    }
+
+    pub fn set_past_reader(&mut self, reader: crate::store::PastReader) {
+        self.past_reader = Some(reader);
+    }
+
+    /// Build a [`crate::miner::StateBlockBuilder`] closure backed by this view's
+    /// live pinned `Snapshot` (active `HeadState` + canonical `History` +
+    /// lock-free `PastReader` / block store fallback), allowing stateful
+    /// `quai-node run --mine` (including `--compact-miner` with `--prune-blocks 256`)
+    /// to execute candidate blocks and stamp 100% consensus-exact state roots.
+    pub fn make_state_block_builder(&self) -> crate::miner::StateBlockBuilder {
+        struct SnapPast {
+            blocks: Arc<dyn Blocks>,
+            past_reader: Option<crate::store::PastReader>,
+        }
+        impl quai_execution::historical::History for SnapPast {
+            fn incoming_at(
+                &self,
+                height: u64,
+            ) -> Result<
+                Vec<quai_primitives::transaction::Transaction>,
+                quai_execution::settlement::Error,
+            > {
+                if let Some(pr) = &self.past_reader {
+                    if let Some(txs) = pr.incoming_opt(height) {
+                        return Ok(txs);
+                    }
+                }
+                let Some(hash) = self.blocks.hash_at(height).ok().flatten() else {
+                    return Ok(vec![]);
+                };
+                let Ok(raw) = self.blocks.block(height, &hash) else {
+                    return Ok(vec![]);
+                };
+                let Ok(wo) = WorkObject::decode_auxiliary(&raw.bytes, PINNED_SCHEDULE) else {
+                    return Ok(vec![]);
+                };
+                Ok(wo
+                    .transactions()
+                    .iter()
+                    .filter(|t| matches!(t.kind(), quai_primitives::transaction::Kind::External(_)))
+                    .cloned()
+                    .collect())
+            }
+            fn created_at(
+                &self,
+                height: u64,
+            ) -> Result<Vec<(OutPoint, u8)>, quai_execution::settlement::Error> {
+                if let Some(pr) = &self.past_reader {
+                    if let Some(c) = pr.created_opt(height) {
+                        return Ok(c);
+                    }
+                }
+                match self.blocks.created_entries(height) {
+                    Ok(Some(entries)) => Ok(entries
+                        .into_iter()
+                        .map(|c| (c.point, c.denomination))
+                        .collect()),
+                    _ => Ok(vec![]),
+                }
+            }
+        }
+
+        let view = self.share();
+        Arc::new(move |draft, candidate_txs| {
+            let snap = view.snap();
+            let head_state = snap
+                .state
+                .as_ref()
+                .ok_or_else(|| "stateful block builder requires node state".to_string())?;
+            let profile = view
+                .chain
+                .execution_profile()
+                .map_err(|e| format!("execution profile: {e}"))?;
+            let mut history = History::default();
+            let start = snap.head.saturating_sub(256);
+            for h in start..=snap.head {
+                if let Ok(Some(hash)) = snap.blocks.hash_at(h) {
+                    if let Ok(Some(rec)) = snap.blocks.record_by_hash(&hash) {
+                        let _ = history.insert(rec);
+                    }
+                }
+            }
+            let prime_hash = hash_of(&draft.object().header().wire().prime_terminus_hash);
+            if history.get(&prime_hash).is_err() {
+                if let Ok(Some(rec)) = snap.blocks.record_by_hash(&prime_hash) {
+                    let _ = history.insert(rec);
+                } else {
+                    let _ = history.insert(view.chain.genesis().clone());
+                }
+            }
+            let past = SnapPast {
+                blocks: snap.blocks.clone(),
+                past_reader: view.past_reader.clone(),
+            };
+            let caches = view.caches.clone();
+            quai_consensus::zone_execution::build_block(
+                &head_state.state,
+                &history,
+                &past,
+                draft,
+                &profile,
+                &[],
+                candidate_txs,
+                |hdr| {
+                    uncles::pow_hash(&caches, hdr)
+                        .map_err(|_| quai_consensus::Error::Invalid("uncle pow"))
+                },
+            )
+            .map_err(|e| format!("stateful block execution: {e}"))
+        })
     }
 
     fn load(&self, snap: &Snapshot, height: u64) -> Result<Option<Arc<BlockData>>, ViewError> {
@@ -1783,6 +1900,7 @@ impl ChainView for ExportView {
             pool: self.pool.clone(),
             miner: self.miner.clone(),
             state_dir: self.state_dir.clone(),
+            past_reader: self.past_reader.clone(),
         }))
     }
     fn submit_transaction(&self, raw: &[u8]) -> Result<Hash, ViewError> {

@@ -18,8 +18,11 @@ Commands:
   rpc       Serve JSON-RPC from the block store and the latest checkpoint of
             the data directory, or from an export (--export): blocks,
             receipts, logs, state, calls
-  run       Sync zone [0 0] from go-quai peers, validate and store every
-            block, follow the peers' head, and serve RPC and metrics
+  run       Sync a zone slice from go-quai peers, validate and store every
+            block, follow the peers' head, and serve RPC, mining/Stratum and metrics
+  light     Run a zero-state Helios-style light client (header-only P2P sync,
+            MPT proof-verified JSON-RPC via --upstream-rpc) and/or a zero-storage
+            mining node (--mine-workshares or --builder-rpc with Stratum v1)
   observe   Apply go-quai's head choice to the live gossip of slice [0 0]
             without validating (proof-of-work and entropy only); count reorgs
   help      Print this help
@@ -95,9 +98,16 @@ Run options:
   --no-store            Keep no block store (about 50 KB per zone block);
                         needs --rpc-listen off. For a long shadow run
   --archive             Persist per-height state versions for historical RPC reads
+  --compact-miner       Low-storage full-block mining preset: keeps only the active
+                        live state tries (compacted) and the last 256 canonical
+                        blocks (~13 MB), enables stateful mining & P2P publishing
   --index-address-utxos Index workshares, donors, supply analytics and locked Quai
   --prune-blocks <N>    Retain at most N recent canonical blocks in the block store
   --mine                Enable the pending-header and AuxPoW block template miner
+  --mine-workshares     Stateless workshare-only mining (zero chain state required;
+                        produces consensus-valid workshares without full blocks)
+  --builder-rpc <URL>   Remote stateful builder RPC (http://...) for zero-storage
+                        full-block + workshare mining with local consensus checks
   --coinbase <ADDR>     20-byte hex miner reward address
   --miner-extra <STR>   Extra data string embedded in mined headers
   --miner-gaslimit <N>  Target gas limit for mined blocks
@@ -136,6 +146,16 @@ Run options:
 
 Observe options:
   --seconds <N>         Stop after N seconds (default: 1800)
+
+Light options:
+  --upstream-rpc <URL>  Untrusted upstream JSON-RPC (http://...) queried for
+                        quai_getProof / quai_getCode / receipts and cryptographically
+                        verified against locally PoW-validated header roots
+  --light-max-headers <N>  Maximum canonical headers kept locally (default: 4096)
+  --light-checkpoint <N>   Anchor header-only sync at PoW-verified height N
+  Also accepts --rpc-listen, --metrics-listen, --peer, --no-public, --p2p-publish,
+  --ipc-path, --rpc-*, --mine, --mine-workshares, --builder-rpc, --coinbase,
+  --miner-*, and --stratum* options.
 
 `run` starts from the latest checkpoint of the data directory (or the
 genesis), keeps checkpoints and the block store in
@@ -184,6 +204,7 @@ pub enum Command {
     /// `observe` for this many seconds.
     Observe(u64),
     Run(crate::node::Options),
+    Light(crate::light::LightOptions),
     Replay(ReplayArgs),
     Rpc(RpcArgs),
 }
@@ -208,6 +229,7 @@ pub struct RpcSecurityOptions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MinerOptions {
     pub enabled: bool,
+    pub workshares_only: bool,
     pub coinbase: Option<quai_primitives::transaction::Address>,
     pub extra: String,
     pub gas_limit: u64,
@@ -220,6 +242,7 @@ impl Default for MinerOptions {
     fn default() -> Self {
         Self {
             enabled: false,
+            workshares_only: false,
             coinbase: None,
             extra: "quai-rust".into(),
             gas_limit: quai_primitives::spec::STATE_CEIL,
@@ -232,7 +255,12 @@ impl Default for MinerOptions {
 impl MinerOptions {
     pub fn to_miner_config(&self, pool_tag: Option<&str>) -> crate::miner::MinerConfig {
         crate::miner::MinerConfig {
-            enabled: self.enabled,
+            enabled: self.enabled || self.workshares_only,
+            mode: if self.workshares_only {
+                crate::miner::MinerMode::WorksharesOnly
+            } else {
+                crate::miner::MinerMode::Full
+            },
             primary_coinbase: self.coinbase.unwrap_or([0u8; 20]),
             extra: self.extra.as_bytes().to_vec(),
             gas_ceil: self.gas_limit,
@@ -373,6 +401,7 @@ struct Flags {
     sync_tx_with_return: Option<bool>,
     // Storage & P2P extensions
     archive: bool,
+    compact_miner: bool,
     index_address_utxos: bool,
     prune_blocks: Option<u64>,
     p2p_relay_service: bool,
@@ -385,12 +414,18 @@ struct Flags {
     rpc_vhosts: Option<Vec<String>>,
     // Miner
     mine: bool,
+    mine_workshares: bool,
+    builder_rpc: Option<String>,
     coinbase: Option<quai_primitives::transaction::Address>,
     miner_extra: Option<String>,
     miner_gaslimit: Option<u64>,
     miner_gasprice: Option<u64>,
     miner_lockup_byte: Option<u8>,
     miner_preference_bps: Option<u16>,
+    // Light client
+    upstream_rpc: Option<String>,
+    light_max_headers: Option<usize>,
+    light_checkpoint: Option<u64>,
     // Stratum
     stratum: bool,
     stratum_sha_addr: Option<String>,
@@ -406,10 +441,6 @@ struct Flags {
 const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report", "--pow-dag"];
 const RUN_ONLY: &[&str] = &[
     "--stateless",
-    "--rpc-listen",
-    "--metrics-listen",
-    "--peer",
-    "--no-public",
     "--no-gossip",
     "--no-store",
     "--margin",
@@ -418,11 +449,20 @@ const RUN_ONLY: &[&str] = &[
     "--shadow-bootstrap-quorum",
     "--shadow-bootstrap-depth",
     "--archive",
+    "--compact-miner",
     "--index-address-utxos",
     "--prune-blocks",
     "--p2p-relay-service",
+];
+const RUN_AND_LIGHT: &[&str] = &[
+    "--rpc-listen",
+    "--metrics-listen",
+    "--peer",
+    "--no-public",
     "--p2p-publish",
     "--mine",
+    "--mine-workshares",
+    "--builder-rpc",
     "--coinbase",
     "--miner-extra",
     "--miner-gaslimit",
@@ -439,6 +479,11 @@ const RUN_ONLY: &[&str] = &[
     "--stratum-no-vardiff",
     "--stratum-proxy-protocol",
     "--stratum-api-ws-origins",
+];
+const LIGHT_ONLY: &[&str] = &[
+    "--upstream-rpc",
+    "--light-max-headers",
+    "--light-checkpoint",
 ];
 const RPC_AND_RUN: &[&str] = &[
     "--slice",
@@ -501,6 +546,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--rpc-ws-api"
                 | "--rpc-cors-domain"
                 | "--rpc-vhosts"
+                | "--builder-rpc"
+                | "--upstream-rpc"
+                | "--light-max-headers"
+                | "--light-checkpoint"
                 | "--coinbase"
                 | "--miner-extra"
                 | "--miner-gaslimit"
@@ -624,6 +673,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--slice" => f.slice = Some(parse_slice("--slice", &v)?),
             "--archive" => f.archive = true,
+            "--compact-miner" => f.compact_miner = true,
             "--index-address-utxos" => f.index_address_utxos = true,
             "--prune-blocks" => f.prune_blocks = Some(number("--prune-blocks", &v)?),
             "--p2p-relay-service" => f.p2p_relay_service = true,
@@ -634,6 +684,11 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--rpc-cors-domain" => f.rpc_cors_domain = Some(parse_csv(&v)),
             "--rpc-vhosts" => f.rpc_vhosts = Some(parse_csv(&v)),
             "--mine" => f.mine = true,
+            "--mine-workshares" => f.mine_workshares = true,
+            "--builder-rpc" => f.builder_rpc = Some(v),
+            "--upstream-rpc" => f.upstream_rpc = Some(v),
+            "--light-max-headers" => f.light_max_headers = Some(number("--light-max-headers", &v)?),
+            "--light-checkpoint" => f.light_checkpoint = Some(number("--light-checkpoint", &v)?),
             "--coinbase" => f.coinbase = Some(parse_address("--coinbase", &v)?),
             "--miner-extra" => f.miner_extra = Some(v),
             "--miner-gaslimit" => f.miner_gaslimit = Some(number("--miner-gaslimit", &v)?),
@@ -713,6 +768,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     belongs(&["--export"], &["replay", "rpc"])?;
     belongs(REPLAY_ONLY, &["replay"])?;
     belongs(RUN_ONLY, &["run"])?;
+    belongs(RUN_AND_LIGHT, &["run", "light"])?;
+    belongs(LIGHT_ONLY, &["light"])?;
     belongs(SYNC, &["replay", "run"])?;
     belongs(&["--listen"], &["rpc"])?;
     belongs(&["--seconds"], &["observe"])?;
@@ -724,7 +781,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         ],
         &["rpc", "run"],
     )?;
-    belongs(RPC_AND_RUN, &["rpc", "run"])?;
+    belongs(RPC_AND_RUN, &["rpc", "run", "light"])?;
     let slice = match f.slice {
         Some(s) => s,
         None => match config.text("slice")? {
@@ -815,8 +872,12 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     None => 5_000,
                 },
             };
+            let compact_miner =
+                f.compact_miner || config.flag("sync.compact_miner")?.unwrap_or(false);
             let miner = MinerOptions {
-                enabled: f.mine || config.flag("miner.enabled")?.unwrap_or(false),
+                enabled: f.mine || compact_miner || config.flag("miner.enabled")?.unwrap_or(false),
+                workshares_only: f.mine_workshares
+                    || config.flag("miner.workshares_only")?.unwrap_or(false),
                 coinbase: miner_coinbase,
                 extra: f
                     .miner_extra
@@ -838,6 +899,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 },
                 preference_bps: miner_pref_bps,
             };
+            let builder_rpc = f.builder_rpc.or(config.text("miner.builder_rpc")?);
             let default_stratum = crate::stratum::StratumConfig::default();
             let stratum = crate::stratum::StratumConfig {
                 enabled: f.stratum || config.flag("stratum.enabled")?.unwrap_or(false),
@@ -913,26 +975,37 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 to: f.to,
                 checkpoint_every: match f.checkpoint_every {
                     Some(n) => n,
-                    None => config.number("sync.checkpoint_every")?.unwrap_or(10_000),
+                    None => config
+                        .number("sync.checkpoint_every")?
+                        .unwrap_or(if compact_miner { 2_000 } else { 10_000 }),
                 },
                 commit_every: match f.commit_every {
                     Some(n) => n,
-                    None => config.number("sync.commit_every")?.unwrap_or(1_000),
+                    None => config
+                        .number("sync.commit_every")?
+                        .unwrap_or(if compact_miner { 500 } else { 1_000 }),
                 },
                 gossip: !f.no_gossip,
                 shadow_bootstrap: f.shadow_bootstrap,
                 bootstrap_quorum: f.bootstrap_quorum.unwrap_or(crate::bootstrap::QUORUM),
                 bootstrap_depth: f.bootstrap_depth.unwrap_or(crate::bootstrap::DEPTH),
                 store: !f.no_store,
-                archive: f.archive || config.flag("sync.archive")?.unwrap_or(false),
+                archive: (f.archive || config.flag("sync.archive")?.unwrap_or(false))
+                    && !compact_miner,
                 index_address_utxos: f.index_address_utxos
                     || config.flag("sync.index_address_utxos")?.unwrap_or(false),
-                prune_blocks: f.prune_blocks.or(config.number("sync.prune_blocks")?),
+                prune_blocks: f
+                    .prune_blocks
+                    .or(config.number("sync.prune_blocks")?)
+                    .or(if compact_miner { Some(256) } else { None }),
                 p2p_relay_service: f.p2p_relay_service
                     || config.flag("p2p.relay_service")?.unwrap_or(false),
-                p2p_publish: f.p2p_publish || config.flag("p2p.publish")?.unwrap_or(false),
+                p2p_publish: f.p2p_publish
+                    || compact_miner
+                    || config.flag("p2p.publish")?.unwrap_or(false),
                 rpc_security,
                 miner,
+                builder_rpc,
                 stratum,
                 txpool: txpool.clone(),
             };
@@ -945,6 +1018,124 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 return Err("--shadow-bootstrap needs --stateless: peers serve no state, so execution has no parent state at the trusted block".into());
             }
             Command::Run(o)
+        }
+        "light" => {
+            let miner_coinbase = match f.coinbase {
+                Some(c) => Some(c),
+                None => match config.text("miner.coinbase")? {
+                    Some(s) => Some(parse_address("miner.coinbase", &s)?),
+                    None => None,
+                },
+            };
+            let miner_pref_bps = match f.miner_preference_bps {
+                Some(p) => p,
+                None => match config.text("miner.preference")? {
+                    Some(s) => parse_preference_bps("miner.preference", &s)?,
+                    None => 5_000,
+                },
+            };
+            let miner = MinerOptions {
+                enabled: f.mine || config.flag("miner.enabled")?.unwrap_or(false),
+                workshares_only: f.mine_workshares
+                    || config.flag("miner.workshares_only")?.unwrap_or(false),
+                coinbase: miner_coinbase,
+                extra: f
+                    .miner_extra
+                    .or(config.text("miner.extra")?)
+                    .unwrap_or_else(|| "quai-rust".into()),
+                gas_limit: match f.miner_gaslimit {
+                    Some(g) => g,
+                    None => config
+                        .number("miner.gas_limit")?
+                        .unwrap_or(quai_primitives::spec::STATE_CEIL),
+                },
+                gas_price: match f.miner_gasprice {
+                    Some(g) => g,
+                    None => config.number("miner.gas_price")?.unwrap_or(1_000_000_000),
+                },
+                lockup_byte: match f.miner_lockup_byte {
+                    Some(b) => b,
+                    None => config.number("miner.lockup_byte")?.unwrap_or(0).min(3) as u8,
+                },
+                preference_bps: miner_pref_bps,
+            };
+            let default_stratum = crate::stratum::StratumConfig::default();
+            let stratum = crate::stratum::StratumConfig {
+                enabled: f.stratum || config.flag("stratum.enabled")?.unwrap_or(false),
+                sha_addr: match f.stratum_sha_addr.or(config.text("stratum.sha_addr")?) {
+                    Some(v) => off(v),
+                    None => default_stratum.sha_addr,
+                },
+                scrypt_addr: match f
+                    .stratum_scrypt_addr
+                    .or(config.text("stratum.scrypt_addr")?)
+                {
+                    Some(v) => off(v),
+                    None => default_stratum.scrypt_addr,
+                },
+                kawpow_addr: match f
+                    .stratum_kawpow_addr
+                    .or(config.text("stratum.kawpow_addr")?)
+                {
+                    Some(v) => off(v),
+                    None => default_stratum.kawpow_addr,
+                },
+                api_addr: match f.stratum_api_addr.or(config.text("stratum.api_addr")?) {
+                    Some(v) => off(v),
+                    None => default_stratum.api_addr,
+                },
+                pool_name: f
+                    .stratum_name
+                    .or(config.text("stratum.name")?)
+                    .unwrap_or(default_stratum.pool_name),
+                pool_tag: f
+                    .stratum_pool_tag
+                    .or(config.text("stratum.pool_tag")?)
+                    .unwrap_or(default_stratum.pool_tag),
+                vardiff_enabled: !f.stratum_no_vardiff
+                    && !config.flag("stratum.no_vardiff")?.unwrap_or(false),
+                proxy_protocol: f.stratum_proxy_protocol
+                    || config.flag("stratum.proxy_protocol")?.unwrap_or(false),
+                ws_origins: match f.stratum_api_ws_origins {
+                    Some(v) => v,
+                    None => config.list("stratum.api_ws_origins")?.unwrap_or_default(),
+                },
+                ..default_stratum
+            };
+            Command::Light(crate::light::LightOptions {
+                datadir: datadir.clone(),
+                network: network.clone(),
+                slice,
+                rpc_listen: match f.rpc_listen.or(config.text("rpc.listen")?) {
+                    Some(v) => off(v),
+                    None => Some("127.0.0.1:8547".into()),
+                },
+                metrics_listen: match f.metrics_listen.or(config.text("metrics.listen")?) {
+                    Some(v) => off(v),
+                    None => Some("127.0.0.1:9101".into()),
+                },
+                upstream_rpc: f.upstream_rpc.or(config.text("light.upstream_rpc")?),
+                builder_rpc: f.builder_rpc.or(config.text("miner.builder_rpc")?),
+                peers: if f.peers.is_empty() {
+                    config.list("sync.peers")?.unwrap_or_default()
+                } else {
+                    f.peers
+                },
+                public: !f.no_public && config.flag("sync.public")?.unwrap_or(true),
+                p2p_publish: f.p2p_publish || config.flag("p2p.publish")?.unwrap_or(false),
+                max_headers: match f.light_max_headers {
+                    Some(n) => n,
+                    None => config
+                        .number("light.max_headers")?
+                        .map_or(crate::light::DEFAULT_MAX_HEADERS, |n| n as usize),
+                },
+                checkpoint_height: f
+                    .light_checkpoint
+                    .or(config.number("light.checkpoint_height")?),
+                rpc_security,
+                miner,
+                stratum,
+            })
         }
         c => return Err(format!("unknown command {c:?}")),
     };
@@ -1151,6 +1342,14 @@ pub fn main_with(args: &[String]) -> i32 {
             Err(e) => {
                 log.error(&format!("run: {e}"));
                 println!("run ERROR: {e}");
+                2
+            }
+        },
+        Command::Light(l) => match crate::light::run_light(&l, &log) {
+            Ok(code) => code,
+            Err(e) => {
+                log.error(&format!("light: {e}"));
+                println!("light ERROR: {e}");
                 2
             }
         },

@@ -283,6 +283,7 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
         p2p_publish: false,
         rpc_security: quai_node::cli::RpcSecurityOptions::default(),
         miner: quai_node::cli::MinerOptions::default(),
+        builder_rpc: None,
         stratum: quai_node::stratum::StratumConfig::default(),
         txpool: quai_node::cli::TxpoolOptions::default(),
     };

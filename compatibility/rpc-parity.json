@@ -4,12 +4,12 @@
   {
    "class": "a",
    "method": "web3_clientVersion",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "web3_sha3",
-   "rust": false
+   "rust": true
   },
   {
    "class": "d",
@@ -64,52 +64,52 @@
   {
    "class": "a",
    "method": "eth_syncing",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "quai_syncing",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "eth_feeHistory",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "quai_feeHistory",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "eth_maxPriorityFeePerGas",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "quai_maxPriorityFeePerGas",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "eth_getBlockReceipts",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "quai_getBlockReceipts",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "eth_protocolVersion",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "quai_protocolVersion",
-   "rust": false
+   "rust": true
   },
   {
    "class": "d",
@@ -139,47 +139,47 @@
   {
    "class": "b",
    "method": "quai_mining",
-   "rust": false
+   "rust": true
   },
   {
    "class": "b",
    "method": "quai_hashrate",
-   "rust": false
+   "rust": true
   },
   {
    "class": "b",
    "method": "eth_hashrate",
-   "rust": false
+   "rust": true
   },
   {
    "class": "b",
    "method": "eth_coinbase",
-   "rust": false
+   "rust": true
   },
   {
    "class": "c",
    "method": "admin_nodeInfo",
-   "rust": false
+   "rust": true
   },
   {
    "class": "c",
    "method": "admin_peers",
-   "rust": false
+   "rust": true
   },
   {
    "class": "b",
    "method": "miner_start",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "txpool_getRollingFeeInfoV2",
-   "rust": false
+   "rust": true
   },
   {
    "class": "a",
    "method": "quai_getRollingFeeInfo",
-   "rust": false
+   "rust": true
   }
  ],
  "reference_revision": "33db82f2891b267ba898ca38bd2dd8bf75cbb072",
@@ -194,7 +194,7 @@
    "namespace": "admin",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:155",
    "ws": false
   },
@@ -208,7 +208,7 @@
    "namespace": "admin",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:202",
    "ws": false
   },
@@ -222,7 +222,7 @@
    "namespace": "debug",
    "note": "",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:311",
    "ws": true
   },
@@ -236,7 +236,7 @@
    "namespace": "debug",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1708",
    "ws": false
   },
@@ -250,7 +250,7 @@
    "namespace": "debug",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1697",
    "ws": false
   },
@@ -264,7 +264,7 @@
    "namespace": "debug",
    "note": "",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:263",
    "ws": true
   },
@@ -278,7 +278,7 @@
    "namespace": "debug",
    "note": "",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1644",
    "ws": true
   },
@@ -292,7 +292,7 @@
    "namespace": "debug",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:451",
    "ws": false
   },
@@ -306,7 +306,7 @@
    "namespace": "debug",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:422",
    "ws": false
   },
@@ -320,7 +320,7 @@
    "namespace": "debug",
    "note": "",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1676",
    "ws": true
   },
@@ -334,7 +334,7 @@
    "namespace": "debug",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:300",
    "ws": false
   },
@@ -348,7 +348,7 @@
    "namespace": "debug",
    "note": "",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1657",
    "ws": true
   },
@@ -362,7 +362,7 @@
    "namespace": "debug",
    "note": "",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1666",
    "ws": true
   },
@@ -376,7 +376,7 @@
    "namespace": "debug",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:373",
    "ws": false
   },
@@ -838,7 +838,7 @@
    "namespace": "eth",
    "note": "true: the worker always runs",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:71",
    "ws": true
   },
@@ -894,7 +894,7 @@
    "namespace": "eth",
    "note": "the coinbase of the last pending header (one of the two default coinbases)",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:55",
    "ws": true
   },
@@ -964,7 +964,7 @@
    "namespace": "eth",
    "note": "as quai_subscribe \"blockTemplateUpdates\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:1182",
    "ws": true
   },
@@ -1062,7 +1062,7 @@
    "namespace": "eth",
    "note": "as quai_subscribe \"newWorkshares\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:266",
    "ws": true
   },
@@ -1076,7 +1076,7 @@
    "namespace": "eth",
    "note": "as quai_subscribe \"newWorksharesV2\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:349",
    "ws": true
   },
@@ -1090,7 +1090,7 @@
    "namespace": "eth",
    "note": "as quai_subscribe \"pendingHeader\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:1089",
    "ws": true
   },
@@ -1104,7 +1104,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:87",
    "ws": false
   },
@@ -1118,7 +1118,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:105",
    "ws": false
   },
@@ -1132,7 +1132,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:95",
    "ws": false
   },
@@ -1146,7 +1146,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:116",
    "ws": false
   },
@@ -1160,7 +1160,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:124",
    "ws": false
   },
@@ -1174,7 +1174,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:111",
    "ws": false
   },
@@ -1188,7 +1188,7 @@
    "namespace": "miner",
    "note": "",
    "public": false,
-   "rust": false,
+   "rust": true,
    "source": "quai/api.go:137",
    "ws": false
   },
@@ -1286,7 +1286,7 @@
    "namespace": "quai",
    "note": "the order (0x0, 0x1, 0x2) of a submitted work object after its seal check; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1628",
    "ws": true
   },
@@ -1468,7 +1468,7 @@
    "namespace": "quai",
    "note": "no miner needed: a getblocktemplate map from the pending header and the newest aux template (hardcoded defaults before any arrive); each call adds entries to two 1,000-entry caches; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1198",
    "ws": true
   },
@@ -1524,7 +1524,7 @@
    "namespace": "quai",
    "note": "needs `--node.index-address-utxos` (default off): a default node answers \"no block found for workshare hash\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:2160",
    "ws": true
   },
@@ -1552,7 +1552,7 @@
    "namespace": "quai",
    "note": "needs `--node.index-address-utxos` (default off): a default node answers \"block not found for work share hash\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:2182",
    "ws": true
   },
@@ -1692,7 +1692,7 @@
    "namespace": "quai",
    "note": "head and last-15-minute figures; its quaiSupplyTotal is the negated burn balance without the supply index; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:2335",
    "ws": true
   },
@@ -1748,7 +1748,7 @@
    "namespace": "quai",
    "note": "no miner needed: \"0x\" protobuf of the best pending header (header only, AuxPow nil), rebuilt on each head and each second; \"method handler crashed\" before the first (CopyWorkObject(nil)); a Progpow job, invalid after the KawPow transition. Quais.js exposes `getPendingHeader()` and calls it nowhere; Pelagus does not use it",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1536",
    "ws": true
   },
@@ -1762,7 +1762,7 @@
    "namespace": "quai",
    "note": "gossip workshares by PoW name ({} without any); no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1529",
    "ws": true
   },
@@ -1804,7 +1804,7 @@
    "namespace": "quai",
    "note": "needs `--node.index-address-utxos` (default off): a default node answers \"no quai header found for donor hash\"",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:2152",
    "ws": true
   },
@@ -1874,7 +1874,7 @@
    "namespace": "quai",
    "note": "heights of the newest aux templates (defaults before any arrive); no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:2298",
    "ws": true
   },
@@ -2042,7 +2042,7 @@
    "namespace": "quai",
    "note": "\"0x7\"; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1656",
    "ws": true
   },
@@ -2182,7 +2182,7 @@
    "namespace": "quai",
    "note": "miner submission; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1482",
    "ws": true
   },
@@ -2196,7 +2196,7 @@
    "namespace": "quai",
    "note": "miner submission; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1499",
    "ws": true
   },
@@ -2224,7 +2224,7 @@
    "namespace": "quai",
    "note": "miner submission; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1524",
    "ws": true
   },
@@ -2266,7 +2266,7 @@
    "namespace": "quai",
    "note": "a setter on the public API",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1660",
    "ws": true
   },
@@ -2280,7 +2280,7 @@
    "namespace": "quai",
    "note": "\"MuSig2 keys not configured - set MUSIG2_PRIVKEY environment variable\"; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1910",
    "ws": true
   },
@@ -2294,7 +2294,7 @@
    "namespace": "quai",
    "note": "null for a template with a valid 2-of-3 MuSig2 signature, then gossip; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:2049",
    "ws": true
   },
@@ -2308,7 +2308,7 @@
    "namespace": "quai",
    "note": "as quai_submitScryptBlock",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1441",
    "ws": true
   },
@@ -2322,7 +2322,7 @@
    "namespace": "quai",
    "note": "\"could not get the pending block body for cache key 0x...\" unless this node issued the template; no wallet use",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1422",
    "ws": true
   },
@@ -2336,7 +2336,7 @@
    "namespace": "quai",
    "note": "as quai_submitScryptBlock",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/quai_api.go:1461",
    "ws": true
   },
@@ -2392,7 +2392,7 @@
    "namespace": "quai",
    "note": "the template, then on changes and every 5 s",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:1182",
    "ws": true
   },
@@ -2490,7 +2490,7 @@
    "namespace": "quai",
    "note": "gossip workshares (fires with no local miner)",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:266",
    "ws": true
   },
@@ -2504,7 +2504,7 @@
    "namespace": "quai",
    "note": "gossip workshares, RPC version v2",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:349",
    "ws": true
   },
@@ -2518,7 +2518,7 @@
    "namespace": "quai",
    "note": "fires on every new pending header (each head and each second); a base64 protobuf payload",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "quai/filters/api.go:1089",
    "ws": true
   },
@@ -2616,7 +2616,7 @@
    "namespace": "workshare",
    "note": "13, a JSON number",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1826",
    "ws": true
   },
@@ -2630,7 +2630,7 @@
    "namespace": "workshare",
    "note": "sub-workshare intake",
    "public": true,
-   "rust": false,
+   "rust": true,
    "source": "internal/quaiapi/api.go:1830",
    "ws": true
   }
@@ -2647,6 +2647,6 @@
   "default_http": 85,
   "default_ws": 160,
   "methods": 175,
-  "rust_served": 123
+  "rust_served": 175
  }
 }

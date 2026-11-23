@@ -9,7 +9,6 @@
 //! are kept uncompressed and re-encoded compressed, as `TxIn.ProtoDecode`
 //! and `TxIn.ProtoEncode` do, so a key sent uncompressed gives the same hash.
 use super::big;
-use k256::elliptic_curve::sec1::ToEncodedPoint;
 use prost::Message;
 use quai_primitives::{
     transaction::{keccak, AccessTuple, Transaction as Primitive},
@@ -196,18 +195,18 @@ fn low_byte(v: &[u8]) -> u8 {
 }
 
 /// Decompress or check an input key as `decompressPubKeyIfNeeded`
-/// (go-quai built with cgo, as its release binaries are).
+/// (go-quai built with cgo/libsecp256k1, as its release binaries are).
 fn decompress(key: &[u8]) -> Result<Vec<u8>, String> {
     match key.len() {
-        33 => match k256::PublicKey::from_sec1_bytes(key) {
-            Ok(k) => Ok(k.to_encoded_point(false).as_bytes().to_vec()),
+        33 => match secp256k1::PublicKey::from_slice(key) {
+            Ok(k) => Ok(k.serialize_uncompressed().to_vec()),
             Err(_) => Err("invalid public key".into()),
         },
         65 => {
             if key[0] != 4 {
                 return Err("invalid secp256k1 public key".into());
             }
-            match k256::PublicKey::from_sec1_bytes(key) {
+            match secp256k1::PublicKey::from_slice(key) {
                 Ok(_) => Ok(key.to_vec()),
                 Err(_) => Err("invalid secp256k1 public key".into()),
             }
@@ -216,8 +215,8 @@ fn decompress(key: &[u8]) -> Result<Vec<u8>, String> {
     }
 }
 fn compress(key: &[u8]) -> Vec<u8> {
-    k256::PublicKey::from_sec1_bytes(key)
-        .map(|k| k.to_encoded_point(true).as_bytes().to_vec())
+    secp256k1::PublicKey::from_slice(key)
+        .map(|k| k.serialize().to_vec())
         .unwrap_or_default()
 }
 

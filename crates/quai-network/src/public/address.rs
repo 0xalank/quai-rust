@@ -171,6 +171,13 @@ pub fn circuit_target(a: &Multiaddr) -> Option<PeerId> {
             _ => None,
         })
 }
+/// The relay's peer ID of a circuit address: the `/p2p/` part before `/p2p-circuit`.
+pub fn relay_peer(a: &Multiaddr) -> Option<PeerId> {
+    relay_part(a)?.iter().find_map(|p| match p {
+        Protocol::P2p(peer) => Some(peer),
+        _ => None,
+    })
+}
 
 /// The relay client, dialing circuits only to peers the node chose (explicit
 /// dials and DHT providers), not to every peer a Kademlia walk meets. Each

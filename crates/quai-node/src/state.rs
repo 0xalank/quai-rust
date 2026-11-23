@@ -61,9 +61,11 @@ pub struct KnownView<'a> {
     pub region_rollups: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
     pub maps: Option<Maps<'a>>,
 }
-/// The recorded confirmations of a state replay.
+/// The recorded confirmations of a state replay, with an optional overlay for
+/// isolated staged execution of a candidate tip branch.
 pub struct Maps<'a> {
     confirmed: &'a HashMap<Hash, Arc<Vec<Transaction>>>,
+    extra: Option<&'a HashMap<Hash, Arc<Vec<Transaction>>>>,
 }
 impl Known for KnownView<'_> {
     fn order(&self, id: &Hash) -> Result<u8, Error> {
@@ -81,8 +83,65 @@ impl Known for KnownView<'_> {
     fn confirmed(&self, id: &Hash) -> Result<Arc<Vec<Transaction>>, Error> {
         self.maps
             .as_ref()
-            .and_then(|m| m.confirmed.get(id).cloned())
+            .and_then(|m| {
+                m.extra
+                    .and_then(|e| e.get(id).cloned())
+                    .or_else(|| m.confirmed.get(id).cloned())
+            })
             .ok_or(Error::Unavailable("confirmed parent ETXs"))
+    }
+}
+
+type StagedOverlay = (Vec<Transaction>, Vec<(OutPoint, u8)>);
+
+/// Overlay on [`PastDb`] for isolated pre-execution of a candidate fork above
+/// `floor` (the common ancestor height) without modifying `past.redb`.
+pub struct StagedPast<'a> {
+    base: &'a PastDb,
+    floor: u64,
+    overlay: HashMap<u64, StagedOverlay>,
+}
+impl<'a> StagedPast<'a> {
+    pub fn new(base: &'a PastDb, floor: u64) -> Self {
+        Self {
+            base,
+            floor,
+            overlay: HashMap::new(),
+        }
+    }
+    pub fn record(
+        &mut self,
+        height: u64,
+        incoming: Vec<Transaction>,
+        created: Vec<(OutPoint, u8)>,
+    ) {
+        self.overlay.insert(height, (incoming, created));
+    }
+}
+impl quai_execution::historical::History for StagedPast<'_> {
+    fn incoming_at(
+        &self,
+        height: u64,
+    ) -> Result<Vec<Transaction>, quai_execution::settlement::Error> {
+        if height > self.floor {
+            return self.overlay.get(&height).map(|(i, _)| i.clone()).ok_or(
+                quai_execution::settlement::Error::Invalid(
+                    "missing staged replay redemption ancestry",
+                ),
+            );
+        }
+        self.base.incoming_at(height)
+    }
+    fn created_at(
+        &self,
+        height: u64,
+    ) -> Result<Vec<(OutPoint, u8)>, quai_execution::settlement::Error> {
+        if height > self.floor {
+            return self.overlay.get(&height).map(|(_, c)| c.clone()).ok_or(
+                quai_execution::settlement::Error::Invalid("missing staged replay trim ancestry"),
+            );
+        }
+        self.base.created_at(height)
     }
 }
 impl StateReplay {
@@ -193,12 +252,26 @@ impl StateReplay {
                 .collect(),
         }
     }
+    /// Restore an isolated lazy state at `version` without modifying this
+    /// replay's active head version or `past.redb`.
+    pub fn restore_detached(&self, version: &Version) -> io::Result<State> {
+        self.store.restore_version(version.0, &version.1)
+    }
+    /// Confirmation view backed by both the committed replay history and an
+    /// isolated staged overlay.
+    pub fn staged_maps<'a>(&'a self, extra: &'a HashMap<Hash, Arc<Vec<Transaction>>>) -> Maps<'a> {
+        Maps {
+            confirmed: &self.confirmed,
+            extra: Some(extra),
+        }
+    }
     /// The recorded confirmations and the execution parent state, borrowed
     /// together for one `Verifier::validate_block` call.
     pub fn split(&mut self) -> (Maps<'_>, ParentState<'_, PastDb>) {
         (
             Maps {
                 confirmed: &self.confirmed,
+                extra: None,
             },
             ParentState {
                 state: &mut self.state,

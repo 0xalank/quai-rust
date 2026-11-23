@@ -61,6 +61,27 @@ const DOM_CANON: TableDefinition<&[u8], &[u8]> =
 /// The dominant (context, number) pairs each canonical zone height added,
 /// for rollbacks.
 const DOM_AT: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.dominant.at.v1");
+/// Canonical height -> compact 256-byte log bloom (empty slice when confirmed
+/// to have zero logs). Allows `quai_getLogs` to skip non-matching blocks
+/// without reading `BLOCKS` or decoding receipts.
+const BLOOMS: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.blooms.v1");
+/// Workshare hash (32B) -> containing or matching zone block hash (32B).
+const WORKSHARE_INDEX: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks.workshares.v1");
+/// Canonical height -> concatenated 32B workshare hashes added at that height.
+const WORKSHARES_AT: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.workshares.at.v1");
+/// AuxPoW donor PoW hash (32B) -> Quai zone block hash (32B).
+const DONOR_INDEX: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks.donors.v1");
+/// Canonical height -> concatenated 32B donor PoW hashes added at that height.
+const DONORS_AT: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.donors.at.v1");
+/// Zone block hash (32B) -> 192B SupplyAnalytics (6x 32B big-endian U256).
+const SUPPLY: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks.supply.v1");
+/// Address (20B) -> 32B big-endian U256 locked Quai balance.
+const LOCKED_QUAI: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blocks.locked_quai.v1");
+/// Canonical height -> concatenated 53B locked balance deltas (20B addr, 1B is_add, 32B amount).
+const LOCKED_DELTAS: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks.locked_deltas.v1");
+/// Canonical height -> 184B archived state version reference for `--archive` historical queries.
+const STATE_VERSIONS: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("blocks.state_versions.v1");
 const ENTRY_VERSION: u8 = 1;
 
 fn bad(e: impl std::fmt::Display) -> io::Error {
@@ -105,7 +126,35 @@ pub struct Accepted {
     /// The prime and region views of a coincident block (go-quai keeps a
     /// block in each context it is coincident in).
     pub dominant: Vec<DominantView>,
+    /// Workshare hashes included in or matching this block (for donor/workshare RPCs).
+    pub workshare_hashes: Vec<Hash>,
+    /// AuxPoW donor PoW hashes linked to this block or its workshares.
+    pub donor_hashes: Vec<Hash>,
+    /// Persisted supply analytics for this block (`--index-address-utxos`).
+    pub supply: Option<quai_rpc::view::SupplyAnalytics>,
+    /// Locked Quai balance deltas `(address, is_add, amount)` (`--index-address-utxos`).
+    pub locked_deltas: Vec<(Address, bool, [u8; 32])>,
 }
+/// Archived state version pointer persisted per committed height (`--archive`).
+#[derive(Clone, Debug)]
+pub struct StateVersionEntry {
+    pub file_height: u64,
+    pub version: Hash,
+    pub commitment: quai_execution::state_store::Commitment,
+}
+impl PartialEq for StateVersionEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_height == other.file_height
+            && self.version == other.version
+            && self.commitment.digest == other.commitment.digest
+            && self.commitment.roots.evm == other.commitment.roots.evm
+            && self.commitment.roots.etx == other.commitment.roots.etx
+            && self.commitment.roots.utxo == other.commitment.roots.utxo
+            && self.commitment.roots.accounts == other.commitment.roots.accounts
+            && self.commitment.roots.utxo_count == other.commitment.roots.utxo_count
+    }
+}
+impl Eq for StateVersionEntry {}
 /// A prime (0) or region (1) view of a zone block: its number in that
 /// context and its work object bytes as the source sent them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -315,6 +364,124 @@ fn parse_head(v: &[u8]) -> io::Result<(u64, Hash)> {
 fn hash_of(v: &[u8]) -> io::Result<Hash> {
     v.try_into().map_err(|_| bad("block store hash width"))
 }
+fn encode_supply(s: &quai_rpc::view::SupplyAnalytics) -> [u8; 192] {
+    let mut out = [0u8; 192];
+    out[0..32].copy_from_slice(&s.quai_added);
+    out[32..64].copy_from_slice(&s.quai_removed);
+    out[64..96].copy_from_slice(&s.quai_total);
+    out[96..128].copy_from_slice(&s.qi_added);
+    out[128..160].copy_from_slice(&s.qi_removed);
+    out[160..192].copy_from_slice(&s.qi_total);
+    out
+}
+fn decode_supply(raw: &[u8]) -> io::Result<quai_rpc::view::SupplyAnalytics> {
+    if raw.len() != 192 {
+        return Err(bad("supply analytics width"));
+    }
+    Ok(quai_rpc::view::SupplyAnalytics {
+        quai_added: hash_of(&raw[0..32])?,
+        quai_removed: hash_of(&raw[32..64])?,
+        quai_total: hash_of(&raw[64..96])?,
+        qi_added: hash_of(&raw[96..128])?,
+        qi_removed: hash_of(&raw[128..160])?,
+        qi_total: hash_of(&raw[160..192])?,
+    })
+}
+fn encode_locked_deltas(deltas: &[(Address, bool, [u8; 32])]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(deltas.len() * 53);
+    for (addr, is_add, amt) in deltas {
+        out.extend_from_slice(addr);
+        out.push(u8::from(*is_add));
+        out.extend_from_slice(amt);
+    }
+    out
+}
+fn decode_locked_deltas(raw: &[u8]) -> io::Result<Vec<(Address, bool, [u8; 32])>> {
+    if !raw.len().is_multiple_of(53) {
+        return Err(bad("locked deltas width"));
+    }
+    let mut out = Vec::with_capacity(raw.len() / 53);
+    for chunk in raw.chunks_exact(53) {
+        let addr: Address = chunk[0..20].try_into().map_err(bad)?;
+        let is_add = chunk[20] != 0;
+        let amt = hash_of(&chunk[21..53])?;
+        out.push((addr, is_add, amt));
+    }
+    Ok(out)
+}
+fn apply_locked_delta(current: [u8; 32], is_add: bool, delta: [u8; 32]) -> [u8; 32] {
+    use crypto_bigint::{Encoding as _, U256};
+    let cur = U256::from_be_bytes(current);
+    let d = U256::from_be_bytes(delta);
+    let next = if is_add {
+        cur.saturating_add(&d)
+    } else {
+        cur.saturating_sub(&d)
+    };
+    next.to_be_bytes()
+}
+fn encode_state_version(e: &StateVersionEntry) -> [u8; 184] {
+    let mut out = [0u8; 184];
+    out[0..8].copy_from_slice(&e.file_height.to_be_bytes());
+    out[8..40].copy_from_slice(&e.version);
+    out[40..72].copy_from_slice(&e.commitment.roots.evm);
+    out[72..104].copy_from_slice(&e.commitment.roots.etx);
+    out[104..136].copy_from_slice(&e.commitment.roots.utxo);
+    out[136..144].copy_from_slice(&e.commitment.roots.accounts.to_be_bytes());
+    out[144..152].copy_from_slice(&e.commitment.roots.utxo_count.to_be_bytes());
+    out[152..184].copy_from_slice(&e.commitment.digest);
+    out
+}
+fn decode_state_version(raw: &[u8]) -> io::Result<StateVersionEntry> {
+    if raw.len() != 184 {
+        return Err(bad("state version width"));
+    }
+    Ok(StateVersionEntry {
+        file_height: u64::from_be_bytes(raw[0..8].try_into().map_err(bad)?),
+        version: hash_of(&raw[8..40])?,
+        commitment: quai_execution::state_store::Commitment {
+            roots: quai_execution::state_image::Roots {
+                evm: hash_of(&raw[40..72])?,
+                etx: hash_of(&raw[72..104])?,
+                utxo: hash_of(&raw[104..136])?,
+                accounts: u64::from_be_bytes(raw[136..144].try_into().map_err(bad)?),
+                utxo_count: u64::from_be_bytes(raw[144..152].try_into().map_err(bad)?),
+            },
+            digest: hash_of(&raw[152..184])?,
+        },
+    })
+}
+/// Build the 256-byte log bloom for encoded `ProtoReceiptsForStorage` bytes
+/// (matching `quai_primitives::receipt::logs_bloom`'s 11-bit Keccak indices).
+/// Returns `Some(vec![])` when confirmed to have zero logs, `Some(256 bytes)`
+/// when logs exist, or `None` if decoding fails.
+fn receipts_bloom(raw: &[u8]) -> Option<Vec<u8>> {
+    if raw.is_empty() {
+        return Some(vec![]);
+    }
+    let receipts = crate::rpc_view::decode_receipts(raw).ok()?;
+    let mut has_logs = false;
+    let mut bloom = [0u8; 256];
+    for r in &receipts {
+        for log in &r.logs {
+            has_logs = true;
+            for value in std::iter::once(log.address.as_slice())
+                .chain(log.topics.iter().map(|t| t.as_slice()))
+            {
+                let hash = quai_primitives::transaction::keccak(value);
+                for pair in hash[..6].chunks_exact(2) {
+                    let bit = usize::from(u16::from_be_bytes([pair[0], pair[1]]) & 0x7ff);
+                    bloom[255 - (bit >> 3)] |= 1 << (bit & 7);
+                }
+            }
+        }
+    }
+    if has_logs {
+        Some(bloom.to_vec())
+    } else {
+        Some(vec![])
+    }
+}
 
 /// The writer. One per store; readers take [`StoreReader`] snapshots.
 pub struct BlockStore {
@@ -330,15 +497,38 @@ impl BlockStore {
     /// Open or create the store. `utxos`: keep the UTXO tables (state mode);
     /// a store keeps the mode it was created with.
     pub fn open(path: &Path, utxos: bool) -> io::Result<Self> {
-        let db = Database::create(path).map_err(store_err)?;
+        let db = Database::builder()
+            .set_cache_size(64 << 20)
+            .create(path)
+            .map_err(store_err)?;
         let mut w = db.begin_write().map_err(store_err)?;
         w.set_durability(Durability::Immediate).map_err(store_err)?;
         let (head, base, kept) = {
             let mut meta = w.open_table(META).map_err(store_err)?;
-            for t in [CANON, CREATED, SPENT] {
+            for t in [
+                CANON,
+                CREATED,
+                SPENT,
+                BLOOMS,
+                WORKSHARES_AT,
+                DONORS_AT,
+                LOCKED_DELTAS,
+                STATE_VERSIONS,
+            ] {
                 w.open_table(t).map_err(store_err)?;
             }
-            for t in [BLOCKS, ENTROPY, TXS, OUTS, DOM_BLOCKS, DOM_CANON] {
+            for t in [
+                BLOCKS,
+                ENTROPY,
+                TXS,
+                OUTS,
+                DOM_BLOCKS,
+                DOM_CANON,
+                WORKSHARE_INDEX,
+                DONOR_INDEX,
+                SUPPLY,
+                LOCKED_QUAI,
+            ] {
                 w.open_table(t).map_err(store_err)?;
             }
             w.open_table(DOM_AT).map_err(store_err)?;
@@ -459,6 +649,14 @@ impl BlockStore {
             .map_err(store_err)?
             .insert(a.number, a.hash.as_slice())
             .map_err(store_err)?;
+        if let Some(raw_receipts) = &a.receipts {
+            if let Some(bloom) = receipts_bloom(raw_receipts) {
+                w.open_table(BLOOMS)
+                    .map_err(store_err)?
+                    .insert(a.number, bloom.as_slice())
+                    .map_err(store_err)?;
+            }
+        }
         if !a.dominant.is_empty() {
             let mut blocks = w.open_table(DOM_BLOCKS).map_err(store_err)?;
             let mut canon = w.open_table(DOM_CANON).map_err(store_err)?;
@@ -529,6 +727,62 @@ impl BlockStore {
                 .insert(a.number, encode_spent(&spent).as_slice())
                 .map_err(store_err)?;
         }
+        if !a.workshare_hashes.is_empty() {
+            let mut ws = w.open_table(WORKSHARE_INDEX).map_err(store_err)?;
+            let mut at = Vec::with_capacity(a.workshare_hashes.len() * 32);
+            for h in &a.workshare_hashes {
+                ws.insert(h.as_slice(), a.hash.as_slice())
+                    .map_err(store_err)?;
+                at.extend_from_slice(h);
+            }
+            w.open_table(WORKSHARES_AT)
+                .map_err(store_err)?
+                .insert(a.number, at.as_slice())
+                .map_err(store_err)?;
+        }
+        if !a.donor_hashes.is_empty() {
+            let mut dn = w.open_table(DONOR_INDEX).map_err(store_err)?;
+            let mut at = Vec::with_capacity(a.donor_hashes.len() * 32);
+            for h in &a.donor_hashes {
+                dn.insert(h.as_slice(), a.hash.as_slice())
+                    .map_err(store_err)?;
+                at.extend_from_slice(h);
+            }
+            w.open_table(DONORS_AT)
+                .map_err(store_err)?
+                .insert(a.number, at.as_slice())
+                .map_err(store_err)?;
+        }
+        if let Some(s) = &a.supply {
+            let enc = encode_supply(s);
+            w.open_table(SUPPLY)
+                .map_err(store_err)?
+                .insert(a.hash.as_slice(), enc.as_slice())
+                .map_err(store_err)?;
+        }
+        if !a.locked_deltas.is_empty() {
+            let mut locked = w.open_table(LOCKED_QUAI).map_err(store_err)?;
+            for (addr, is_add, amt) in &a.locked_deltas {
+                let cur = locked
+                    .get(addr.as_slice())
+                    .map_err(store_err)?
+                    .map(|v| hash_of(v.value()))
+                    .transpose()?
+                    .unwrap_or([0u8; 32]);
+                let next = apply_locked_delta(cur, *is_add, *amt);
+                if next == [0u8; 32] {
+                    let _ = locked.remove(addr.as_slice()).map_err(store_err)?;
+                } else {
+                    locked
+                        .insert(addr.as_slice(), next.as_slice())
+                        .map_err(store_err)?;
+                }
+            }
+            w.open_table(LOCKED_DELTAS)
+                .map_err(store_err)?
+                .insert(a.number, encode_locked_deltas(&a.locked_deltas).as_slice())
+                .map_err(store_err)?;
+        }
         Ok(())
     }
     /// Remove the canonical blocks above `height` and undo their index
@@ -554,8 +808,18 @@ impl BlockStore {
             let mut outs = w.open_table(OUTS).map_err(store_err)?;
             let mut dom_canon = w.open_table(DOM_CANON).map_err(store_err)?;
             let mut dom_at = w.open_table(DOM_AT).map_err(store_err)?;
+            let mut blooms = w.open_table(BLOOMS).map_err(store_err)?;
+            let mut ws_idx = w.open_table(WORKSHARE_INDEX).map_err(store_err)?;
+            let mut ws_at = w.open_table(WORKSHARES_AT).map_err(store_err)?;
+            let mut dn_idx = w.open_table(DONOR_INDEX).map_err(store_err)?;
+            let mut dn_at = w.open_table(DONORS_AT).map_err(store_err)?;
+            let mut locked = w.open_table(LOCKED_QUAI).map_err(store_err)?;
+            let mut locked_deltas = w.open_table(LOCKED_DELTAS).map_err(store_err)?;
+            let mut state_versions = w.open_table(STATE_VERSIONS).map_err(store_err)?;
             let mut n = top;
             while n > height {
+                let _ = blooms.remove(n).map_err(store_err)?;
+                let _ = state_versions.remove(n).map_err(store_err)?;
                 let Some(hash) = canon
                     .remove(n)
                     .map_err(store_err)?
@@ -565,6 +829,58 @@ impl BlockStore {
                     continue;
                 };
                 let hash = hash_of(&hash)?;
+                if let Some(raw) = ws_at
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for h in raw.chunks_exact(32) {
+                        let held = ws_idx
+                            .get(h)
+                            .map_err(store_err)?
+                            .is_some_and(|v| v.value() == hash.as_slice());
+                        if held {
+                            let _ = ws_idx.remove(h).map_err(store_err)?;
+                        }
+                    }
+                }
+                if let Some(raw) = dn_at
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for h in raw.chunks_exact(32) {
+                        let held = dn_idx
+                            .get(h)
+                            .map_err(store_err)?
+                            .is_some_and(|v| v.value() == hash.as_slice());
+                        if held {
+                            let _ = dn_idx.remove(h).map_err(store_err)?;
+                        }
+                    }
+                }
+                if let Some(raw) = locked_deltas
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for (addr, is_add, amt) in decode_locked_deltas(&raw)?.into_iter().rev() {
+                        let cur = locked
+                            .get(addr.as_slice())
+                            .map_err(store_err)?
+                            .map(|v| hash_of(v.value()))
+                            .transpose()?
+                            .unwrap_or([0u8; 32]);
+                        let prev = apply_locked_delta(cur, !is_add, amt);
+                        if prev == [0u8; 32] {
+                            let _ = locked.remove(addr.as_slice()).map_err(store_err)?;
+                        } else {
+                            locked
+                                .insert(addr.as_slice(), prev.as_slice())
+                                .map_err(store_err)?;
+                        }
+                    }
+                }
                 // The prime and region numbers this block held leave the
                 // canonical chains with it.
                 if let Some(raw) = dom_at
@@ -644,6 +960,135 @@ impl BlockStore {
         w.commit().map_err(store_err)?;
         Ok(removed)
     }
+    /// Prune canonical blocks and per-height indexes strictly below `keep_from`
+    /// while preserving the live unspent UTXO address index (`ADDR`, `OUTS`)
+    /// and advancing `meta.base` to `keep_from`. Returns the number of pruned
+    /// heights.
+    pub fn prune_below(&mut self, keep_from: u64) -> io::Result<u64> {
+        self.flush(false)?;
+        let Some(base) = self.base else {
+            return Ok(0);
+        };
+        let Some((head_num, _)) = self.head else {
+            return Ok(0);
+        };
+        let target = keep_from.min(head_num);
+        if target <= base {
+            return Ok(0);
+        }
+        let mut w = self.db.begin_write().map_err(store_err)?;
+        w.set_durability(Durability::Immediate).map_err(store_err)?;
+        let mut pruned = 0u64;
+        {
+            let mut canon = w.open_table(CANON).map_err(store_err)?;
+            let mut blocks = w.open_table(BLOCKS).map_err(store_err)?;
+            let mut entropy = w.open_table(ENTROPY).map_err(store_err)?;
+            let mut txs = w.open_table(TXS).map_err(store_err)?;
+            let mut created = w.open_table(CREATED).map_err(store_err)?;
+            let mut spent = w.open_table(SPENT).map_err(store_err)?;
+            let mut dom_canon = w.open_table(DOM_CANON).map_err(store_err)?;
+            let mut dom_blocks = w.open_table(DOM_BLOCKS).map_err(store_err)?;
+            let mut dom_at = w.open_table(DOM_AT).map_err(store_err)?;
+            let mut blooms = w.open_table(BLOOMS).map_err(store_err)?;
+            let mut ws_idx = w.open_table(WORKSHARE_INDEX).map_err(store_err)?;
+            let mut ws_at = w.open_table(WORKSHARES_AT).map_err(store_err)?;
+            let mut dn_idx = w.open_table(DONOR_INDEX).map_err(store_err)?;
+            let mut dn_at = w.open_table(DONORS_AT).map_err(store_err)?;
+            let mut supply = w.open_table(SUPPLY).map_err(store_err)?;
+            let mut locked_deltas = w.open_table(LOCKED_DELTAS).map_err(store_err)?;
+            let mut state_versions = w.open_table(STATE_VERSIONS).map_err(store_err)?;
+            for n in base..target {
+                let _ = blooms.remove(n).map_err(store_err)?;
+                let _ = created.remove(n).map_err(store_err)?;
+                let _ = spent.remove(n).map_err(store_err)?;
+                let _ = locked_deltas.remove(n).map_err(store_err)?;
+                let _ = state_versions.remove(n).map_err(store_err)?;
+                let Some(hash_raw) = canon
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                else {
+                    continue;
+                };
+                let hash = hash_of(&hash_raw)?;
+                if let Some(raw) = ws_at
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for h in raw.chunks_exact(32) {
+                        let held = ws_idx
+                            .get(h)
+                            .map_err(store_err)?
+                            .is_some_and(|v| v.value() == hash.as_slice());
+                        if held {
+                            let _ = ws_idx.remove(h).map_err(store_err)?;
+                        }
+                    }
+                }
+                if let Some(raw) = dn_at
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for h in raw.chunks_exact(32) {
+                        let held = dn_idx
+                            .get(h)
+                            .map_err(store_err)?
+                            .is_some_and(|v| v.value() == hash.as_slice());
+                        if held {
+                            let _ = dn_idx.remove(h).map_err(store_err)?;
+                        }
+                    }
+                }
+                let _ = supply.remove(hash.as_slice()).map_err(store_err)?;
+                if let Some(raw) = dom_at
+                    .remove(n)
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    for key in raw.chunks_exact(9) {
+                        let ctx = key[0];
+                        let held = dom_canon
+                            .get(key)
+                            .map_err(store_err)?
+                            .is_some_and(|v| v.value() == hash.as_slice());
+                        if held {
+                            dom_canon.remove(key).map_err(store_err)?;
+                        }
+                        let _ = dom_blocks
+                            .remove(dom_key(ctx, &hash).as_slice())
+                            .map_err(store_err)?;
+                    }
+                }
+                if let Some(raw) = blocks
+                    .remove(hash.as_slice())
+                    .map_err(store_err)?
+                    .map(|v| v.value().to_vec())
+                {
+                    if let Ok(entry) = decode_entry(hash, &raw) {
+                        for id in entry.tx_hashes {
+                            let points_here = txs
+                                .get(id.as_slice())
+                                .map_err(store_err)?
+                                .is_some_and(|v| v.value().get(..8) == Some(&n.to_be_bytes()[..]));
+                            if points_here {
+                                txs.remove(id.as_slice()).map_err(store_err)?;
+                            }
+                        }
+                    }
+                }
+                let _ = entropy.remove(hash.as_slice()).map_err(store_err)?;
+                pruned += 1;
+            }
+            let mut meta = w.open_table(META).map_err(store_err)?;
+            meta.insert("base", target.to_be_bytes().as_slice())
+                .map_err(store_err)?;
+            self.base = Some(target);
+        }
+        w.commit().map_err(store_err)?;
+        Ok(pruned)
+    }
     /// Index unspent outputs that exist before the store's first block (a
     /// store that starts at a checkpoint), durably.
     pub fn seed_utxos(&mut self, list: &[Created]) -> io::Result<()> {
@@ -664,6 +1109,29 @@ impl BlockStore {
                 )
                 .map_err(store_err)?;
             }
+        }
+        w.commit().map_err(store_err)
+    }
+    /// Persist an archived state version pointer for `height` (`--archive`).
+    pub fn record_state_version(
+        &mut self,
+        height: u64,
+        entry: &StateVersionEntry,
+        durable: bool,
+    ) -> io::Result<()> {
+        let mut w = self.db.begin_write().map_err(store_err)?;
+        w.set_durability(if durable {
+            Durability::Immediate
+        } else {
+            Durability::None
+        })
+        .map_err(store_err)?;
+        {
+            let encoded = encode_state_version(entry);
+            w.open_table(STATE_VERSIONS)
+                .map_err(store_err)?
+                .insert(height, encoded.as_slice())
+                .map_err(store_err)?;
         }
         w.commit().map_err(store_err)
     }
@@ -732,6 +1200,18 @@ impl StoreReader {
             .map_err(store_err)?
             .map(|v| hash_of(v.value()))
             .transpose()
+    }
+    /// The compact 256-byte log bloom at canonical height `number` (or empty
+    /// Vec when confirmed to have zero logs). `None` when not indexed.
+    pub fn bloom_at(&self, number: u64) -> io::Result<Option<Vec<u8>>> {
+        let t = match self.txn.open_table(BLOOMS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        Ok(t.get(number)
+            .map_err(store_err)?
+            .map(|v| v.value().to_vec()))
     }
     /// The canonical hash at `number` of the prime (0) or region (1) chain.
     pub fn dominant_hash_at(&self, ctx: u8, number: u64) -> io::Result<Option<Hash>> {
@@ -829,6 +1309,67 @@ impl StoreReader {
         }
         Ok(out)
     }
+    /// Zone block hash containing or matching a workshare hash.
+    pub fn block_for_workshare(&self, ws_hash: &Hash) -> io::Result<Option<Hash>> {
+        let t = match self.txn.open_table(WORKSHARE_INDEX) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        t.get(ws_hash.as_slice())
+            .map_err(store_err)?
+            .map(|v| hash_of(v.value()))
+            .transpose()
+    }
+    /// Zone block hash linked to an AuxPoW donor PoW hash.
+    pub fn block_for_donor(&self, donor_hash: &Hash) -> io::Result<Option<Hash>> {
+        let t = match self.txn.open_table(DONOR_INDEX) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        t.get(donor_hash.as_slice())
+            .map_err(store_err)?
+            .map(|v| hash_of(v.value()))
+            .transpose()
+    }
+    /// Persisted supply analytics for a zone block hash, if indexed.
+    pub fn supply(&self, block_hash: &Hash) -> io::Result<Option<quai_rpc::view::SupplyAnalytics>> {
+        let t = match self.txn.open_table(SUPPLY) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        t.get(block_hash.as_slice())
+            .map_err(store_err)?
+            .map(|v| decode_supply(v.value()))
+            .transpose()
+    }
+    /// Indexed locked Quai balance of `address` (zero when unindexed or empty).
+    pub fn locked_quai(&self, address: &Address) -> io::Result<[u8; 32]> {
+        let t = match self.txn.open_table(LOCKED_QUAI) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok([0u8; 32]),
+            Err(e) => return Err(store_err(e)),
+        };
+        Ok(t.get(address.as_slice())
+            .map_err(store_err)?
+            .map(|v| hash_of(v.value()))
+            .transpose()?
+            .unwrap_or([0u8; 32]))
+    }
+    /// Archived state version entry recorded at `height`, if any (`--archive`).
+    pub fn state_version_at(&self, height: u64) -> io::Result<Option<StateVersionEntry>> {
+        let t = match self.txn.open_table(STATE_VERSIONS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(store_err(e)),
+        };
+        t.get(height)
+            .map_err(store_err)?
+            .map(|v| decode_state_version(v.value()))
+            .transpose()
+    }
 }
 
 #[cfg(test)]
@@ -846,6 +1387,10 @@ mod tests {
     fn block(n: u64, parent: Hash, txs: Vec<Hash>, utxos: Option<UtxoChanges>) -> Accepted {
         Accepted {
             dominant: vec![],
+            workshare_hashes: vec![],
+            donor_hashes: vec![],
+            supply: None,
+            locked_deltas: vec![],
             number: n,
             hash: [n as u8 + 1; 32],
             parent,
@@ -1064,6 +1609,107 @@ mod tests {
             assert_eq!(r.dominant_hash_at(ctx, n).unwrap(), None, "{ctx} {n}");
         }
         assert_eq!(r.dominant(0, &b1.hash).unwrap(), Some(vec![0xa1; 3]));
+        drop(r);
+        drop(s);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn optional_indexes_archive_versions_and_prune_below() {
+        let path = tmp("optional-idx");
+        let mut s = BlockStore::open(&path, true).unwrap();
+        let b0 = block(0, [0; 32], vec![], None);
+        s.stage(b0.clone()).unwrap();
+
+        let mut b1 = block(
+            1,
+            b0.hash,
+            vec![[0x11; 32]],
+            Some(UtxoChanges {
+                created: vec![created(1, 0xaa)],
+                removed: vec![],
+            }),
+        );
+        b1.workshare_hashes = vec![[0xa1; 32]];
+        b1.donor_hashes = vec![[0xd1; 32]];
+        let mut q_added = [0u8; 32];
+        q_added[31] = 100;
+        b1.supply = Some(quai_rpc::view::SupplyAnalytics {
+            quai_added: q_added,
+            quai_removed: [0u8; 32],
+            quai_total: q_added,
+            qi_added: [0u8; 32],
+            qi_removed: [0u8; 32],
+            qi_total: [0u8; 32],
+        });
+        let mut lock_amt = [0u8; 32];
+        lock_amt[31] = 50;
+        b1.locked_deltas = vec![([0xaa; 20], true, lock_amt)];
+        s.stage(b1.clone()).unwrap();
+
+        let mut b2 = block(2, b1.hash, vec![[0x22; 32]], Some(UtxoChanges::default()));
+        b2.workshare_hashes = vec![[0xa2; 32]];
+        b2.donor_hashes = vec![[0xd2; 32]];
+        let mut unlock_amt = [0u8; 32];
+        unlock_amt[31] = 20;
+        b2.locked_deltas = vec![([0xaa; 20], false, unlock_amt)];
+        s.stage(b2.clone()).unwrap();
+        s.flush(true).unwrap();
+
+        let sv1 = StateVersionEntry {
+            file_height: 0,
+            version: [0x51; 32],
+            commitment: quai_execution::state_store::Commitment {
+                roots: quai_execution::state_image::Roots {
+                    evm: [0xe1; 32],
+                    etx: [0xe2; 32],
+                    utxo: [0xe3; 32],
+                    accounts: 12,
+                    utxo_count: 3,
+                },
+                digest: [0xd9; 32],
+            },
+        };
+        let mut sv2 = sv1.clone();
+        sv2.version = [0x52; 32];
+        s.record_state_version(1, &sv1, true).unwrap();
+        s.record_state_version(2, &sv2, true).unwrap();
+
+        let r = s.reader().unwrap();
+        assert_eq!(r.block_for_workshare(&[0xa1; 32]).unwrap(), Some(b1.hash));
+        assert_eq!(r.block_for_workshare(&[0xa2; 32]).unwrap(), Some(b2.hash));
+        assert_eq!(r.block_for_donor(&[0xd1; 32]).unwrap(), Some(b1.hash));
+        assert_eq!(r.block_for_donor(&[0xd2; 32]).unwrap(), Some(b2.hash));
+        assert_eq!(r.supply(&b1.hash).unwrap().unwrap().quai_total[31], 100);
+        assert_eq!(r.locked_quai(&[0xaa; 20]).unwrap()[31], 30);
+        assert_eq!(r.state_version_at(1).unwrap(), Some(sv1.clone()));
+        assert_eq!(r.state_version_at(2).unwrap(), Some(sv2.clone()));
+        drop(r);
+
+        // Rollback block 2: undo workshare, donor, locked delta, and state version at 2.
+        s.rollback_to(1).unwrap();
+        let r = s.reader().unwrap();
+        assert_eq!(r.block_for_workshare(&[0xa2; 32]).unwrap(), None);
+        assert_eq!(r.block_for_donor(&[0xd2; 32]).unwrap(), None);
+        assert_eq!(r.locked_quai(&[0xaa; 20]).unwrap()[31], 50);
+        assert_eq!(r.state_version_at(2).unwrap(), None);
+        assert_eq!(r.state_version_at(1).unwrap(), Some(sv1.clone()));
+        drop(r);
+
+        // Re-add block 2 and prune below height 2: live UTXOs and locked Quai remain intact.
+        s.stage(b2.clone()).unwrap();
+        s.flush(true).unwrap();
+        let pruned = s.prune_below(2).unwrap();
+        assert_eq!(pruned, 2);
+        let r = s.reader().unwrap();
+        assert_eq!(r.base(), Some(2));
+        assert_eq!(r.hash_at(0).unwrap(), None);
+        assert_eq!(r.hash_at(1).unwrap(), None);
+        assert_eq!(r.hash_at(2).unwrap(), Some(b2.hash));
+        assert_eq!(r.block_for_workshare(&[0xa1; 32]).unwrap(), None);
+        assert_eq!(r.block_for_workshare(&[0xa2; 32]).unwrap(), Some(b2.hash));
+        assert_eq!(r.outpoints(&[0xaa; 20]).unwrap(), vec![point(1)]);
+        assert_eq!(r.locked_quai(&[0xaa; 20]).unwrap()[31], 30);
         drop(r);
         drop(s);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();

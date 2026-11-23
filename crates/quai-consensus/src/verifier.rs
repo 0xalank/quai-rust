@@ -8,7 +8,7 @@ use quai_primitives::{
     work::{Context, WorkObject},
     Hash, Header, Schedule,
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 const WORK_MEMO_ENTRIES: usize = 512;
@@ -21,6 +21,72 @@ struct WorkEntry {
 struct ProofEntry {
     key: Vec<u8>,
     value: VerifiedPow,
+}
+/// O(1) hash-indexed bounded FIFO/LRU memo keyed by exact normalized bytes.
+struct MemoCache<V> {
+    entries: HashMap<Vec<u8>, V>,
+    order: VecDeque<Vec<u8>>,
+    bytes: usize,
+    entry_overhead: usize,
+}
+impl<V> Default for MemoCache<V> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            bytes: 0,
+            entry_overhead: std::mem::size_of::<(Vec<u8>, V)>(),
+        }
+    }
+}
+impl<V: Clone> MemoCache<V> {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    #[cfg(test)]
+    fn front_key(&self) -> Option<&[u8]> {
+        self.order.front().map(Vec::as_slice)
+    }
+    fn contains_key(&self, key: &[u8]) -> bool {
+        self.entries.contains_key(key)
+    }
+    fn get(&self, key: &[u8]) -> Option<V> {
+        self.entries.get(key).cloned()
+    }
+    fn insert(&mut self, key: Vec<u8>, value: V) {
+        if self.entries.contains_key(&key) {
+            return;
+        }
+        let cost = key.len() + self.entry_overhead;
+        if cost > WORK_MEMO_BYTES {
+            return;
+        }
+        while self.entries.len() >= WORK_MEMO_ENTRIES || self.bytes + cost > WORK_MEMO_BYTES {
+            let Some(old) = self.order.pop_front() else {
+                break;
+            };
+            if self.entries.remove(&old).is_some() {
+                self.bytes = self.bytes.saturating_sub(old.len() + self.entry_overhead);
+            }
+        }
+        self.bytes += cost;
+        self.order.push_back(key.clone());
+        self.entries.insert(key, value);
+    }
+    fn take_entries<E>(&mut self, mut map: impl FnMut(Vec<u8>, V) -> E) -> VecDeque<E> {
+        let mut out = VecDeque::with_capacity(self.entries.len());
+        let mut entries = std::mem::take(&mut self.entries);
+        for key in std::mem::take(&mut self.order) {
+            if let Some(value) = entries.remove(&key) {
+                out.push_back(map(key, value));
+            }
+        }
+        self.bytes = 0;
+        out
+    }
 }
 /// Bounded, process-local successful header proofs. Only a native verifier can
 /// populate this value. It cannot be decoded from a peer or authorize a block,
@@ -81,13 +147,11 @@ pub struct Verifier {
     key: Option<(Algorithm, u64)>,
     shared: Option<Arc<crate::pow::SharedCaches>>,
     quorum: Option<crate::auxiliary::Quorum>,
-    work: VecDeque<WorkEntry>,
-    work_bytes: usize,
+    work: MemoCache<VerifiedWork>,
     work_hits: u64,
     work_misses: u64,
     full_proof_inclusion_reuses: u64,
-    proofs: VecDeque<ProofEntry>,
-    proof_bytes: usize,
+    proofs: MemoCache<VerifiedPow>,
     proof_hits: u64,
     proof_misses: u64,
 }
@@ -125,7 +189,7 @@ impl Verifier {
             hits: self.work_hits,
             misses: self.work_misses,
             entries: self.work.len(),
-            logical_bytes: self.work_bytes,
+            logical_bytes: self.work.bytes,
             entry_limit: WORK_MEMO_ENTRIES,
             logical_byte_limit: WORK_MEMO_BYTES,
         }
@@ -137,7 +201,7 @@ impl Verifier {
             hits: self.proof_hits,
             misses: self.proof_misses,
             entries: self.proofs.len(),
-            logical_bytes: self.proof_bytes,
+            logical_bytes: self.proofs.bytes,
             entry_limit: WORK_MEMO_ENTRIES,
             logical_byte_limit: WORK_MEMO_BYTES,
         }
@@ -157,10 +221,11 @@ impl Verifier {
                     .keys(),
             )
         };
-        self.proof_bytes = 0;
         HeaderProofMemo {
             quorum_keys,
-            entries: std::mem::take(&mut self.proofs),
+            entries: self
+                .proofs
+                .take_entries(|key, value| ProofEntry { key, value }),
             cache: if quorum_keys.is_some() {
                 self.cache.clone()
             } else {
@@ -188,7 +253,7 @@ impl Verifier {
         }
         let mut reused = 0;
         for entry in memo.entries {
-            if self.proofs.iter().any(|old| old.key == entry.key) {
+            if self.proofs.contains_key(&entry.key) {
                 continue;
             }
             self.remember_header_proof(entry.key, entry.value);
@@ -197,32 +262,10 @@ impl Verifier {
         reused
     }
     fn remember_header_proof(&mut self, key: Vec<u8>, value: VerifiedPow) {
-        let cost = key.len() + std::mem::size_of::<ProofEntry>();
-        if cost > WORK_MEMO_BYTES {
-            return;
-        }
-        while self.proofs.len() >= WORK_MEMO_ENTRIES || self.proof_bytes + cost > WORK_MEMO_BYTES {
-            let Some(old) = self.proofs.pop_front() else {
-                break;
-            };
-            self.proof_bytes -= old.key.len() + std::mem::size_of::<ProofEntry>();
-        }
-        self.proof_bytes += cost;
-        self.proofs.push_back(ProofEntry { key, value });
+        self.proofs.insert(key, value);
     }
     fn remember_work(&mut self, key: Vec<u8>, value: VerifiedWork) {
-        let cost = key.len() + std::mem::size_of::<WorkEntry>();
-        if cost > WORK_MEMO_BYTES {
-            return;
-        }
-        while self.work.len() >= WORK_MEMO_ENTRIES || self.work_bytes + cost > WORK_MEMO_BYTES {
-            let Some(old) = self.work.pop_front() else {
-                break;
-            };
-            self.work_bytes -= old.key.len() + std::mem::size_of::<WorkEntry>();
-        }
-        self.work_bytes += cost;
-        self.work.push_back(WorkEntry { key, value });
+        self.work.insert(key, value);
     }
     fn cache(&mut self, algorithm: Algorithm, height: u64) -> Result<&LightCache, Error> {
         algorithm.sizes(height)?;
@@ -263,10 +306,11 @@ impl Verifier {
                     .keys(),
             )
         };
-        self.work_bytes = 0;
         InclusionWorkMemo {
             quorum_keys,
-            entries: std::mem::take(&mut self.work),
+            entries: self
+                .work
+                .take_entries(|key, value| WorkEntry { key, value }),
         }
     }
     /// Reuse inclusion work made by a local verifier under identical trusted
@@ -285,7 +329,7 @@ impl Verifier {
         }
         let mut reused = 0;
         for entry in memo.entries {
-            if self.work.iter().any(|old| old.key == entry.key) {
+            if self.work.contains_key(&entry.key) {
                 continue;
             }
             self.remember_work(entry.key, entry.value);
@@ -300,14 +344,7 @@ impl Verifier {
         // where historical block IDs/seals omit some fields. The quorum is
         // immutable for this verifier. Errors and inclusion-only work never enter.
         let key = header.encode();
-        let hit = self
-            .proofs
-            .iter()
-            .position(|v| v.key == key)
-            .and_then(|index| self.proofs.remove(index));
-        if let Some(entry) = hit {
-            let proof = entry.value.clone();
-            self.proofs.push_back(entry);
+        if let Some(proof) = self.proofs.get(&key) {
             self.proof_hits = self.proof_hits.saturating_add(1);
             return Ok(proof);
         }
@@ -390,33 +427,19 @@ impl Verifier {
         memo_key.extend_from_slice(node_location);
         let header_bytes = header.encode();
         memo_key.extend_from_slice(&header_bytes);
-        let hit = self
-            .work
-            .iter()
-            .position(|entry| entry.key == memo_key)
-            .and_then(|index| self.work.remove(index));
-        if let Some(entry) = hit {
-            let value = entry.value.clone();
-            self.work.push_back(entry);
+        if let Some(value) = self.work.get(&memo_key) {
             self.work_hits = self.work_hits.saturating_add(1);
             return Ok(value);
         }
         self.work_misses = self.work_misses.saturating_add(1);
-        let reused = self
-            .proofs
-            .iter()
-            .position(|entry| entry.key == header_bytes)
-            .and_then(|index| self.proofs.remove(index));
-        let hash = if let Some(entry) = reused {
+        let hash = if let Some(proof) = self.proofs.get(&header_bytes) {
             // A successful block proof has already checked this exact header's
             // mix, target, auxiliary bindings and mandatory quorum signature.
             // Inclusion permits a weaker target and, only for foreign donor
             // work, a signature exception; it adds no stronger proof condition.
             // The converse is forbidden: inclusion work never fills `proofs`.
-            let hash = entry.value.hash();
-            self.proofs.push_back(entry);
             self.full_proof_inclusion_reuses = self.full_proof_inclusion_reuses.saturating_add(1);
-            hash
+            proof.hash()
         } else {
             let w = header.wire();
             let height = crate::share_rules::number(fields::bytes(
@@ -802,9 +825,9 @@ mod work_memo_tests {
             verifier.remember_work(n.to_be_bytes().to_vec(), value.clone());
         }
         assert_eq!(verifier.work_memo_stats().entries, WORK_MEMO_ENTRIES);
-        assert_eq!(verifier.work.front().unwrap().key, 32usize.to_be_bytes());
-        for _ in 0..10 {
-            verifier.remember_work(vec![0; WORK_MEMO_BYTES / 3], value.clone());
+        assert_eq!(verifier.work.front_key().unwrap(), 32usize.to_be_bytes());
+        for i in 0..10u8 {
+            verifier.remember_work(vec![i; WORK_MEMO_BYTES / 3], value.clone());
         }
         assert!(verifier.work_memo_stats().entries <= 2);
         assert!(verifier.work_memo_stats().logical_bytes <= WORK_MEMO_BYTES);
@@ -925,9 +948,9 @@ mod work_memo_tests {
             v.remember_header_proof(i.to_be_bytes().to_vec(), proof.clone());
         }
         assert_eq!(v.header_proof_memo_stats().entries, WORK_MEMO_ENTRIES);
-        assert_eq!(v.proofs.front().unwrap().key, 32usize.to_be_bytes());
-        for _ in 0..10 {
-            v.remember_header_proof(vec![0; WORK_MEMO_BYTES / 3], proof.clone());
+        assert_eq!(v.proofs.front_key().unwrap(), 32usize.to_be_bytes());
+        for i in 0..10u8 {
+            v.remember_header_proof(vec![i; WORK_MEMO_BYTES / 3], proof.clone());
         }
         let stats = v.header_proof_memo_stats();
         assert!(stats.entries <= 2 && stats.logical_bytes <= WORK_MEMO_BYTES);

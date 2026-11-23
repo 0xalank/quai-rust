@@ -410,6 +410,7 @@ fn config(c: &Value, endpoints: Vec<String>) -> Config {
         qi_tx_lifetime: c["qi_tx_lifetime_s"].as_u64().unwrap() * 1_000_000_000,
         lifetime: c["lifetime_s"].as_u64().unwrap() * 1_000_000_000,
         sharing_clients: endpoints,
+        v0570_compat: true,
         ..Config::default()
     }
 }
@@ -663,6 +664,7 @@ fn pool_limiter_follows_go() {
     let config = Config {
         global_queue: 2,
         account_queue: 3,
+        v0570_compat: true,
         ..Config::default()
     };
     let now = 1_000_000 * 1_000_000_000u64;

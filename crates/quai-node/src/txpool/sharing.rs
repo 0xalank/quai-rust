@@ -1,25 +1,30 @@
 //! Forwarding to `--txpool.sharing-clients` as go-quai v0.57.0 does
 //! (`TxPool.SendTxToSharingClients`, `quaiclient.SendTransactionToPoolSharingClient`):
 //! a JSON-RPC call `quai_receiveTxFromPoolSharingClient` with the
-//! transaction's protobuf in hex, over HTTP, with a 2-second timeout. Each
-//! client numbers its requests from 1, as go-quai's `rpc.Client` does.
-//!
-//! The request is go-quai's byte for byte in its body, method, path,
-//! `Content-Type`, `Accept` and `User-Agent`. Error texts follow Go for the
-//! answers a go-quai node gives (a JSON-RPC error, an HTTP status, no
-//! result), a refused connection and the timeout; for a body that is not
-//! JSON, only Go's first-character messages are reproduced. go-quai also
-//! dials `ws://` endpoints; this client takes `http://` only.
+//! transaction's protobuf in hex, over HTTP (`http://`) or WebSocket (`ws://`),
+//! with a 2-second timeout. Each client numbers its requests from 1, as
+//! go-quai's `rpc.Client` does.
+use futures_util::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 /// `txSharingPoolTimeout`.
 pub const TIMEOUT: Duration = Duration::from_secs(2);
+/// Maximum HTTP/WS response size accepted from a sharing client (1 MiB).
+const MAX_RESPONSE_BYTES: u64 = 1 << 20;
 const METHOD: &str = "quai_receiveTxFromPoolSharingClient";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Transport {
+    Http,
+    Ws,
+}
 
 pub struct Client {
     pub url: String,
+    transport: Transport,
     authority: String,
     path: String,
     next_id: AtomicU32,
@@ -27,9 +32,15 @@ pub struct Client {
 
 impl Client {
     pub fn new(url: &str) -> Result<Self, String> {
-        let rest = url
-            .strip_prefix("http://")
-            .ok_or_else(|| format!("sharing client {url}: only http:// endpoints are supported"))?;
+        let (transport, rest) = if let Some(rest) = url.strip_prefix("http://") {
+            (Transport::Http, rest)
+        } else if let Some(rest) = url.strip_prefix("ws://") {
+            (Transport::Ws, rest)
+        } else {
+            return Err(format!(
+                "sharing client {url}: only http:// and ws:// endpoints are supported"
+            ));
+        };
         let (authority, path) = match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
@@ -44,6 +55,7 @@ impl Client {
         };
         Ok(Self {
             url: url.to_string(),
+            transport,
             authority,
             path: path.to_string(),
             next_id: AtomicU32::new(0),
@@ -63,10 +75,53 @@ impl Client {
     /// answer, at most `TIMEOUT`.
     pub async fn send(&self, proto: &[u8]) -> Result<(), String> {
         let body = self.body(proto);
-        match tokio::time::timeout(TIMEOUT, self.post(&body)).await {
-            Ok(r) => r,
-            Err(_) => Err(format!("Post \"{}\": context deadline exceeded", self.url)),
+        match self.transport {
+            Transport::Http => match tokio::time::timeout(TIMEOUT, self.post(&body)).await {
+                Ok(r) => r,
+                Err(_) => Err(format!("Post \"{}\": context deadline exceeded", self.url)),
+            },
+            Transport::Ws => match tokio::time::timeout(TIMEOUT, self.send_ws(&body)).await {
+                Ok(r) => r,
+                Err(_) => Err(format!("ws \"{}\": context deadline exceeded", self.url)),
+            },
         }
+    }
+
+    async fn send_ws(&self, body: &str) -> Result<(), String> {
+        let (mut ws, _) = tokio_tungstenite::connect_async(&self.url)
+            .await
+            .map_err(|e| format!("ws \"{}\": {e}", self.url))?;
+        ws.send(WsMessage::Text(body.to_string().into()))
+            .await
+            .map_err(|e| format!("ws \"{}\": {e}", self.url))?;
+        while let Some(msg) = ws.next().await {
+            let msg = msg.map_err(|e| format!("ws \"{}\": {e}", self.url))?;
+            match msg {
+                WsMessage::Text(text) => {
+                    let bytes = text.as_bytes();
+                    if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+                        return Err(format!("ws \"{}\": response too large", self.url));
+                    }
+                    let _ = ws.close(None).await;
+                    return answer(bytes);
+                }
+                WsMessage::Binary(bytes) => {
+                    if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+                        return Err(format!("ws \"{}\": response too large", self.url));
+                    }
+                    let _ = ws.close(None).await;
+                    return answer(&bytes);
+                }
+                WsMessage::Ping(p) => {
+                    let _ = ws.send(WsMessage::Pong(p)).await;
+                }
+                WsMessage::Close(_) => {
+                    return Err(format!("ws \"{}\": closed without response", self.url));
+                }
+                _ => {}
+            }
+        }
+        Err(format!("ws \"{}\": EOF", self.url))
     }
 
     async fn post(&self, body: &str) -> Result<(), String> {
@@ -85,9 +140,13 @@ impl Client {
             .map_err(|e| format!("Post \"{}\": {e}", self.url))?;
         let mut raw = vec![];
         stream
+            .take(MAX_RESPONSE_BYTES + 1)
             .read_to_end(&mut raw)
             .await
             .map_err(|e| format!("Post \"{}\": {e}", self.url))?;
+        if raw.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(format!("Post \"{}\": response too large", self.url));
+        }
         let (status, body) =
             parse_response(&raw).map_err(|e| format!("Post \"{}\": {e}", self.url))?;
         let code: u16 = status
@@ -257,6 +316,7 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1,"method":"quai_receiveTxFromPoolSharingClient","params":["0x0102"]}"#
         );
         assert!(c.body(&[]).contains(r#""id":2"#));
-        assert!(Client::new("ws://127.0.0.1:9").is_err());
+        assert!(Client::new("ws://127.0.0.1:9").is_ok());
+        assert!(Client::new("ftp://127.0.0.1:9").is_err());
     }
 }

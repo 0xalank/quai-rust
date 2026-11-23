@@ -48,10 +48,10 @@ go-quai v0.57.0 registers 175 names for a zone node (153 methods and 22 subscrip
 | Class | Registered | Default HTTP and WS: Rust serves | missing | Default WS only: Rust serves | missing | Not default: Rust serves | missing |
 |---|---|---|---|---|---|---|---|
 | (a) | 123 | 66 | 0 | 57 | 0 | 0 | 0 |
-| (b) | 37 | 0 | 18 | 0 | 12 | 0 | 7 |
-| (c) | 15 | 0 | 1 | 0 | 6 | 0 | 8 |
+| (b) | 37 | 18 | 0 | 12 | 0 | 7 | 0 |
+| (c) | 15 | 1 | 0 | 6 | 0 | 8 | 0 |
 | (d) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| all | 175 | 66 | 19 | 57 | 18 | 0 | 15 |
+| all | 175 | 85 | 0 | 75 | 0 | 15 | 0 |
 
 Class (a) names that a default node serves and Rust does not: 0.
 
@@ -63,25 +63,25 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 
 | Name | Go source | HTTP | WS | Rust | Class | Note |
 |---|---|---|---|---|---|---|
-| `admin_exportChain` | quai/api.go:155 | no (`--rpc.http-api admin`) | no (`--rpc.ws-api admin`) | missing | (c) |  |
-| `admin_importChain` | quai/api.go:202 | no (`--rpc.http-api admin`) | no (`--rpc.ws-api admin`) | missing | (c) |  |
+| `admin_exportChain` | quai/api.go:155 | no (`--rpc.http-api admin`) | no (`--rpc.ws-api admin`) | served | (c) |  |
+| `admin_importChain` | quai/api.go:202 | no (`--rpc.http-api admin`) | no (`--rpc.ws-api admin`) | served | (c) |  |
 
 ### debug
 
 | Name | Go source | HTTP | WS | Rust | Class | Note |
 |---|---|---|---|---|---|---|
-| `debug_accountRange` | quai/api.go:311 | no (`--rpc.http-api debug`) | yes | missing | (c) |  |
-| `debug_chaindbCompact` | internal/quaiapi/api.go:1708 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | missing | (c) |  |
-| `debug_chaindbProperty` | internal/quaiapi/api.go:1697 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | missing | (c) |  |
-| `debug_dumpBlock` | quai/api.go:263 | no (`--rpc.http-api debug`) | yes | missing | (c) |  |
-| `debug_getBlockRlp` | internal/quaiapi/api.go:1644 | no (`--rpc.http-api debug`) | yes | missing | (c) |  |
-| `debug_getModifiedAccountsByHash` | quai/api.go:451 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | missing | (c) |  |
-| `debug_getModifiedAccountsByNumber` | quai/api.go:422 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | missing | (c) |  |
-| `debug_getWorkshareLRUDump` | internal/quaiapi/api.go:1676 | no (`--rpc.http-api debug`) | yes | missing | (c) |  |
-| `debug_preimage` | quai/api.go:300 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | missing | (c) |  |
-| `debug_printBlock` | internal/quaiapi/api.go:1657 | no (`--rpc.http-api debug`) | yes | missing | (c) |  |
-| `debug_seedHash` | internal/quaiapi/api.go:1666 | no (`--rpc.http-api debug`) | yes | missing | (c) |  |
-| `debug_storageRangeAt` | quai/api.go:373 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | missing | (c) |  |
+| `debug_accountRange` | quai/api.go:311 | no (`--rpc.http-api debug`) | yes | served | (c) |  |
+| `debug_chaindbCompact` | internal/quaiapi/api.go:1708 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | served | (c) |  |
+| `debug_chaindbProperty` | internal/quaiapi/api.go:1697 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | served | (c) |  |
+| `debug_dumpBlock` | quai/api.go:263 | no (`--rpc.http-api debug`) | yes | served | (c) |  |
+| `debug_getBlockRlp` | internal/quaiapi/api.go:1644 | no (`--rpc.http-api debug`) | yes | served | (c) |  |
+| `debug_getModifiedAccountsByHash` | quai/api.go:451 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | served | (c) |  |
+| `debug_getModifiedAccountsByNumber` | quai/api.go:422 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | served | (c) |  |
+| `debug_getWorkshareLRUDump` | internal/quaiapi/api.go:1676 | no (`--rpc.http-api debug`) | yes | served | (c) |  |
+| `debug_preimage` | quai/api.go:300 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | served | (c) |  |
+| `debug_printBlock` | internal/quaiapi/api.go:1657 | no (`--rpc.http-api debug`) | yes | served | (c) |  |
+| `debug_seedHash` | internal/quaiapi/api.go:1666 | no (`--rpc.http-api debug`) | yes | served | (c) |  |
+| `debug_storageRangeAt` | quai/api.go:373 | no (`--rpc.http-api debug`) | no (`--rpc.ws-api debug`) | served | (c) |  |
 
 ### eth
 
@@ -119,37 +119,37 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 | `eth_getUncleByBlockNumberAndIndex` | internal/quaiapi/api.go:402 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
 | `eth_getUncleCountByBlockHash` | internal/quaiapi/api.go:448 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
 | `eth_getUncleCountByBlockNumber` | internal/quaiapi/api.go:439 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
-| `eth_mining` | quai/api.go:71 | no (`--rpc.http-api eth`) | yes | missing | (b) | true: the worker always runs |
+| `eth_mining` | quai/api.go:71 | no (`--rpc.http-api eth`) | yes | served | (b) | true: the worker always runs |
 | `eth_newBlockFilter` | quai/filters/api.go:226 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
 | `eth_newFilter` | quai/filters/api.go:769 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
 | `eth_newPendingTransactionFilter` | quai/filters/api.go:135 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
-| `eth_primaryCoinbase` | quai/api.go:55 | no (`--rpc.http-api eth`) | yes | missing | (b) | the coinbase of the last pending header (one of the two default coinbases) |
+| `eth_primaryCoinbase` | quai/api.go:55 | no (`--rpc.http-api eth`) | yes | served | (b) | the coinbase of the last pending header (one of the two default coinbases) |
 | `eth_receiveTxFromPoolSharingClient` | internal/quaiapi/api.go:1610 | no (`--rpc.http-api eth`) | yes | served | (a) | pool submission (not read-only) |
 | `eth_sendRawTransaction` | internal/quaiapi/api.go:1596 | no (`--rpc.http-api eth`) | yes | served | (a) | pool submission (not read-only) |
 | `eth_uninstallFilter` | quai/filters/api.go:854 | no (`--rpc.http-api eth`) | yes | served | (a) |  |
 | `eth_subscribe` "accesses" | quai/filters/api.go:610 | no (WebSocket only) | yes | served | (a) |  |
-| `eth_subscribe` "blockTemplateUpdates" | quai/filters/api.go:1182 | no (WebSocket only) | yes | missing | (b) | as quai_subscribe "blockTemplateUpdates" |
+| `eth_subscribe` "blockTemplateUpdates" | quai/filters/api.go:1182 | no (WebSocket only) | yes | served | (b) | as quai_subscribe "blockTemplateUpdates" |
 | `eth_subscribe` "logs" | quai/filters/api.go:703 | no (WebSocket only) | yes | served | (a) |  |
 | `eth_subscribe` "newChainBlocks" | quai/filters/api.go:432 | no (WebSocket only) | yes | served | (a) |  |
 | `eth_subscribe` "newChainBlocksV2" | quai/filters/api.go:476 | no (WebSocket only) | yes | served | (a) |  |
 | `eth_subscribe` "newHeads" | quai/filters/api.go:565 | no (WebSocket only) | yes | served | (a) |  |
 | `eth_subscribe` "newHeadsV2" | quai/filters/api.go:520 | no (WebSocket only) | yes | served | (a) |  |
 | `eth_subscribe` "newPendingTransactions" | quai/filters/api.go:176 | no (WebSocket only) | yes | served | (a) |  |
-| `eth_subscribe` "newWorkshares" | quai/filters/api.go:266 | no (WebSocket only) | yes | missing | (b) | as quai_subscribe "newWorkshares" |
-| `eth_subscribe` "newWorksharesV2" | quai/filters/api.go:349 | no (WebSocket only) | yes | missing | (b) | as quai_subscribe "newWorksharesV2" |
-| `eth_subscribe` "pendingHeader" | quai/filters/api.go:1089 | no (WebSocket only) | yes | missing | (b) | as quai_subscribe "pendingHeader" |
+| `eth_subscribe` "newWorkshares" | quai/filters/api.go:266 | no (WebSocket only) | yes | served | (b) | as quai_subscribe "newWorkshares" |
+| `eth_subscribe` "newWorksharesV2" | quai/filters/api.go:349 | no (WebSocket only) | yes | served | (b) | as quai_subscribe "newWorksharesV2" |
+| `eth_subscribe` "pendingHeader" | quai/filters/api.go:1089 | no (WebSocket only) | yes | served | (b) | as quai_subscribe "pendingHeader" |
 
 ### miner
 
 | Name | Go source | HTTP | WS | Rust | Class | Note |
 |---|---|---|---|---|---|---|
-| `miner_setExtra` | quai/api.go:87 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
-| `miner_setGasLimit` | quai/api.go:105 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
-| `miner_setGasPrice` | quai/api.go:95 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
-| `miner_setLockupByte` | quai/api.go:116 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
-| `miner_setMinerPreference` | quai/api.go:124 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
-| `miner_setPrimaryCoinbase` | quai/api.go:111 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
-| `miner_setRecommitInterval` | quai/api.go:137 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | missing | (b) |  |
+| `miner_setExtra` | quai/api.go:87 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
+| `miner_setGasLimit` | quai/api.go:105 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
+| `miner_setGasPrice` | quai/api.go:95 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
+| `miner_setLockupByte` | quai/api.go:116 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
+| `miner_setMinerPreference` | quai/api.go:124 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
+| `miner_setPrimaryCoinbase` | quai/api.go:111 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
+| `miner_setRecommitInterval` | quai/api.go:137 | no (`--rpc.http-api miner`) | no (`--rpc.ws-api miner`) | served | (b) |  |
 
 ### net
 
@@ -166,7 +166,7 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 |---|---|---|---|---|---|---|
 | `quai_baseFee` | internal/quaiapi/quai_api.go:991 | yes | yes | served | (a) |  |
 | `quai_blockNumber` | internal/quaiapi/quai_api.go:113 | yes | yes | served | (a) |  |
-| `quai_calcOrder` | internal/quaiapi/quai_api.go:1628 | yes | yes | missing | (b) | the order (0x0, 0x1, 0x2) of a submitted work object after its seal check; no wallet use |
+| `quai_calcOrder` | internal/quaiapi/quai_api.go:1628 | yes | yes | served | (b) | the order (0x0, 0x1, 0x2) of a submitted work object after its seal check; no wallet use |
 | `quai_calculateConversionAmount` | internal/quaiapi/quai_api.go:1693 | yes | yes | served | (a) |  |
 | `quai_call` | internal/quaiapi/quai_api.go:887 | yes | yes | served | (a) |  |
 | `quai_chainId` | internal/quaiapi/quai_api.go:103 | yes | yes | served | (a) |  |
@@ -179,13 +179,13 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 | `quai_getBlockByHash` | internal/quaiapi/quai_api.go:744 | yes | yes | served | (a) |  |
 | `quai_getBlockByNumber` | internal/quaiapi/quai_api.go:727 | yes | yes | served | (a) |  |
 | `quai_getBlockOrCandidateByHash` | internal/quaiapi/quai_api.go:755 | yes | yes | served | (a) |  |
-| `quai_getBlockTemplate` | internal/quaiapi/quai_api.go:1198 | yes | yes | missing | (b) | no miner needed: a getblocktemplate map from the pending header and the newest aux template (hardcoded defaults before any arrive); each call adds entries to two 1,000-entry caches; no wallet use |
+| `quai_getBlockTemplate` | internal/quaiapi/quai_api.go:1198 | yes | yes | served | (b) | no miner needed: a getblocktemplate map from the pending header and the newest aux template (hardcoded defaults before any arrive); each call adds entries to two 1,000-entry caches; no wallet use |
 | `quai_getBlockTransactionCountByHash` | internal/quaiapi/api.go:1432 | yes | yes | served | (a) |  |
 | `quai_getBlockTransactionCountByNumber` | internal/quaiapi/api.go:1423 | yes | yes | served | (a) |  |
 | `quai_getCode` | internal/quaiapi/quai_api.go:832 | yes | yes | served | (a) |  |
-| `quai_getCoinbaseTxForWorkShareHash` | internal/quaiapi/quai_api.go:2160 | yes | yes | missing | (b) | needs `--node.index-address-utxos` (default off): a default node answers "no block found for workshare hash" |
+| `quai_getCoinbaseTxForWorkShareHash` | internal/quaiapi/quai_api.go:2160 | yes | yes | served | (b) | needs `--node.index-address-utxos` (default off): a default node answers "no block found for workshare hash" |
 | `quai_getContractSize` | internal/quaiapi/quai_api.go:971 | yes | yes | served | (a) |  |
-| `quai_getDonorChainInfoForWorkshare` | internal/quaiapi/quai_api.go:2182 | yes | yes | missing | (b) | needs `--node.index-address-utxos` (default off): a default node answers "block not found for work share hash" |
+| `quai_getDonorChainInfoForWorkshare` | internal/quaiapi/quai_api.go:2182 | yes | yes | served | (b) | needs `--node.index-address-utxos` (default off): a default node answers "block not found for work share hash" |
 | `quai_getFilterChanges` | quai/filters/api.go:921 | yes | yes | served | (a) |  |
 | `quai_getFilterLogs` | quai/filters/api.go:872 | yes | yes | served | (a) |  |
 | `quai_getHeaderByHash` | internal/quaiapi/quai_api.go:714 | yes | yes | served | (a) |  |
@@ -195,20 +195,20 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 | `quai_getLockedBalance` | internal/quaiapi/quai_api.go:177 | yes | yes | served | (a) | Quai address: `rawdb.ReadLockedBalance`, written only with `--node.index-address-utxos` (default off); a default node answers 0x0 and so does Rust |
 | `quai_getLockupsForContractAndMiner` | internal/quaiapi/quai_api.go:251 | yes | yes | served | (a) |  |
 | `quai_getLogs` | quai/filters/api.go:812 | yes | yes | served | (a) |  |
-| `quai_getMiningInfo` | internal/quaiapi/quai_api.go:2335 | yes | yes | missing | (b) | head and last-15-minute figures; its quaiSupplyTotal is the negated burn balance without the supply index; no wallet use |
+| `quai_getMiningInfo` | internal/quaiapi/quai_api.go:2335 | yes | yes | served | (b) | head and last-15-minute figures; its quaiSupplyTotal is the negated burn balance without the supply index; no wallet use |
 | `quai_getOutPointsByAddressAndRange` | internal/quaiapi/quai_api.go:303 | yes | yes | served | (a) |  |
 | `quai_getOutpointDeltasForAddressesInRange` | internal/quaiapi/quai_api.go:343 | yes | yes | served | (a) |  |
 | `quai_getOutpointsByAddress` | internal/quaiapi/quai_api.go:200 | yes | yes | served | (a) | `rawdb.ReadAddressUTXOs`, written only with `--node.index-address-utxos` (default off): a default node answers []; Rust answers from its UTXO set, as an indexing node |
-| `quai_getPendingHeader` | internal/quaiapi/quai_api.go:1536 | yes | yes | missing | (b) | no miner needed: "0x" protobuf of the best pending header (header only, AuxPow nil), rebuilt on each head and each second; "method handler crashed" before the first (CopyWorkObject(nil)); a Progpow job, invalid after the KawPow transition. Quais.js exposes `getPendingHeader()` and calls it nowhere; Pelagus does not use it |
-| `quai_getPendingWorkShares` | internal/quaiapi/quai_api.go:1529 | yes | yes | missing | (b) | gossip workshares by PoW name ({} without any); no wallet use |
+| `quai_getPendingHeader` | internal/quaiapi/quai_api.go:1536 | yes | yes | served | (b) | no miner needed: "0x" protobuf of the best pending header (header only, AuxPow nil), rebuilt on each head and each second; "method handler crashed" before the first (CopyWorkObject(nil)); a Progpow job, invalid after the KawPow transition. Quais.js exposes `getPendingHeader()` and calls it nowhere; Pelagus does not use it |
+| `quai_getPendingWorkShares` | internal/quaiapi/quai_api.go:1529 | yes | yes | served | (b) | gossip workshares by PoW name ({} without any); no wallet use |
 | `quai_getProof` | internal/quaiapi/quai_api.go:635 | yes | yes | served | (a) |  |
 | `quai_getProtocolExpansionNumber` | internal/quaiapi/quai_api.go:1566 | yes | yes | served | (a) |  |
-| `quai_getQuaiHeaderForDonorHash` | internal/quaiapi/quai_api.go:2152 | yes | yes | missing | (b) | needs `--node.index-address-utxos` (default off): a default node answers "no quai header found for donor hash" |
+| `quai_getQuaiHeaderForDonorHash` | internal/quaiapi/quai_api.go:2152 | yes | yes | served | (b) | needs `--node.index-address-utxos` (default off): a default node answers "no quai header found for donor hash" |
 | `quai_getRawTransactionByBlockHashAndIndex` | internal/quaiapi/api.go:1465 | yes | yes | served | (a) |  |
 | `quai_getRawTransactionByBlockNumberAndIndex` | internal/quaiapi/api.go:1457 | yes | yes | served | (a) |  |
 | `quai_getRawTransactionByHash` | internal/quaiapi/api.go:1520 | yes | yes | served | (a) |  |
 | `quai_getStorageAt` | internal/quaiapi/quai_api.go:858 | yes | yes | served | (a) |  |
-| `quai_getSubsidyChainHeight` | internal/quaiapi/quai_api.go:2298 | yes | yes | missing | (b) | heights of the newest aux templates (defaults before any arrive); no wallet use |
+| `quai_getSubsidyChainHeight` | internal/quaiapi/quai_api.go:2298 | yes | yes | served | (b) | heights of the newest aux templates (defaults before any arrive); no wallet use |
 | `quai_getSupplyAnalyticsForBlock` | internal/quaiapi/quai_api.go:280 | yes | yes | served | (a) | `rawdb.ReadSupplyAnalyticsForBlock` is written only with `--node.index-address-utxos` (default off); a default node reads zeros and subtracts the burn address balance |
 | `quai_getTransactionByBlockHashAndIndex` | internal/quaiapi/api.go:1449 | yes | yes | served | (a) | its third parameter, a `common.Location`, is required |
 | `quai_getTransactionByBlockNumberAndIndex` | internal/quaiapi/api.go:1441 | yes | yes | served | (a) |  |
@@ -220,7 +220,7 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 | `quai_getUncleByBlockNumberAndIndex` | internal/quaiapi/quai_api.go:764 | yes | yes | served | (a) |  |
 | `quai_getUncleCountByBlockHash` | internal/quaiapi/quai_api.go:823 | yes | yes | served | (a) |  |
 | `quai_getUncleCountByBlockNumber` | internal/quaiapi/quai_api.go:814 | yes | yes | served | (a) |  |
-| `quai_getWorkShareP2PThreshold` | internal/quaiapi/quai_api.go:1656 | yes | yes | missing | (b) | "0x7"; no wallet use |
+| `quai_getWorkShareP2PThreshold` | internal/quaiapi/quai_api.go:1656 | yes | yes | served | (b) | "0x7"; no wallet use |
 | `quai_getWrappedQiDeposit` | internal/quaiapi/quai_api.go:263 | yes | yes | served | (a) |  |
 | `quai_hashesPerQits` | internal/quaiapi/quai_api.go:2126 | yes | yes | served | (a) |  |
 | `quai_listRunningChains` | internal/quaiapi/quai_api.go:1562 | yes | yes | served | (a) |  |
@@ -230,31 +230,31 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 | `quai_nodeLocation` | internal/quaiapi/quai_api.go:108 | yes | yes | served | (a) |  |
 | `quai_qiToQuai` | internal/quaiapi/quai_api.go:1571 | yes | yes | served | (a) |  |
 | `quai_quaiToQi` | internal/quaiapi/quai_api.go:1600 | yes | yes | served | (a) |  |
-| `quai_receiveMinedHeader` | internal/quaiapi/quai_api.go:1482 | yes | yes | missing | (b) | miner submission; no wallet use |
-| `quai_receiveRawWorkShare` | internal/quaiapi/quai_api.go:1499 | yes | yes | missing | (b) | miner submission; no wallet use |
+| `quai_receiveMinedHeader` | internal/quaiapi/quai_api.go:1482 | yes | yes | served | (b) | miner submission; no wallet use |
+| `quai_receiveRawWorkShare` | internal/quaiapi/quai_api.go:1499 | yes | yes | served | (b) | miner submission; no wallet use |
 | `quai_receiveTxFromPoolSharingClient` | internal/quaiapi/api.go:1610 | yes | yes | served | (a) | pool submission (not read-only) |
-| `quai_receiveWorkShare` | internal/quaiapi/quai_api.go:1524 | yes | yes | missing | (b) | miner submission; no wallet use |
+| `quai_receiveWorkShare` | internal/quaiapi/quai_api.go:1524 | yes | yes | served | (b) | miner submission; no wallet use |
 | `quai_rewardAnalytics` | internal/quaiapi/quai_api.go:2584 | yes | yes | served | (a) | total supply from the supply index (`--node.index-address-utxos` (default off)); a default node answers "0" after its walk of the genesis unlocks |
 | `quai_sendRawTransaction` | internal/quaiapi/api.go:1596 | yes | yes | served | (a) | pool submission (not read-only) |
-| `quai_setWorkShareP2PThreshold` | internal/quaiapi/quai_api.go:1660 | yes | yes | missing | (c) | a setter on the public API |
-| `quai_signAuxTemplate` | internal/quaiapi/quai_api.go:1910 | yes | yes | missing | (b) | "MuSig2 keys not configured - set MUSIG2_PRIVKEY environment variable"; no wallet use |
-| `quai_submitAuxTemplate` | internal/quaiapi/quai_api.go:2049 | yes | yes | missing | (b) | null for a template with a valid 2-of-3 MuSig2 signature, then gossip; no wallet use |
-| `quai_submitKawpowBlock` | internal/quaiapi/quai_api.go:1441 | yes | yes | missing | (b) | as quai_submitScryptBlock |
-| `quai_submitScryptBlock` | internal/quaiapi/quai_api.go:1422 | yes | yes | missing | (b) | "could not get the pending block body for cache key 0x..." unless this node issued the template; no wallet use |
-| `quai_submitShaBlock` | internal/quaiapi/quai_api.go:1461 | yes | yes | missing | (b) | as quai_submitScryptBlock |
+| `quai_setWorkShareP2PThreshold` | internal/quaiapi/quai_api.go:1660 | yes | yes | served | (c) | a setter on the public API |
+| `quai_signAuxTemplate` | internal/quaiapi/quai_api.go:1910 | yes | yes | served | (b) | "MuSig2 keys not configured - set MUSIG2_PRIVKEY environment variable"; no wallet use |
+| `quai_submitAuxTemplate` | internal/quaiapi/quai_api.go:2049 | yes | yes | served | (b) | null for a template with a valid 2-of-3 MuSig2 signature, then gossip; no wallet use |
+| `quai_submitKawpowBlock` | internal/quaiapi/quai_api.go:1441 | yes | yes | served | (b) | as quai_submitScryptBlock |
+| `quai_submitScryptBlock` | internal/quaiapi/quai_api.go:1422 | yes | yes | served | (b) | "could not get the pending block body for cache key 0x..." unless this node issued the template; no wallet use |
+| `quai_submitShaBlock` | internal/quaiapi/quai_api.go:1461 | yes | yes | served | (b) | as quai_submitScryptBlock |
 | `quai_suggestFinalityDepth` | internal/quaiapi/quai_api.go:1647 | yes | yes | served | (a) |  |
 | `quai_uninstallFilter` | quai/filters/api.go:854 | yes | yes | served | (a) |  |
 | `quai_subscribe` "accesses" | quai/filters/api.go:610 | no (WebSocket only) | yes | served | (a) |  |
-| `quai_subscribe` "blockTemplateUpdates" | quai/filters/api.go:1182 | no (WebSocket only) | yes | missing | (b) | the template, then on changes and every 5 s |
+| `quai_subscribe` "blockTemplateUpdates" | quai/filters/api.go:1182 | no (WebSocket only) | yes | served | (b) | the template, then on changes and every 5 s |
 | `quai_subscribe` "logs" | quai/filters/api.go:703 | no (WebSocket only) | yes | served | (a) |  |
 | `quai_subscribe` "newChainBlocks" | quai/filters/api.go:432 | no (WebSocket only) | yes | served | (a) |  |
 | `quai_subscribe` "newChainBlocksV2" | quai/filters/api.go:476 | no (WebSocket only) | yes | served | (a) |  |
 | `quai_subscribe` "newHeads" | quai/filters/api.go:565 | no (WebSocket only) | yes | served | (a) |  |
 | `quai_subscribe` "newHeadsV2" | quai/filters/api.go:520 | no (WebSocket only) | yes | served | (a) |  |
 | `quai_subscribe` "newPendingTransactions" | quai/filters/api.go:176 | no (WebSocket only) | yes | served | (a) |  |
-| `quai_subscribe` "newWorkshares" | quai/filters/api.go:266 | no (WebSocket only) | yes | missing | (b) | gossip workshares (fires with no local miner) |
-| `quai_subscribe` "newWorksharesV2" | quai/filters/api.go:349 | no (WebSocket only) | yes | missing | (b) | gossip workshares, RPC version v2 |
-| `quai_subscribe` "pendingHeader" | quai/filters/api.go:1089 | no (WebSocket only) | yes | missing | (b) | fires on every new pending header (each head and each second); a base64 protobuf payload |
+| `quai_subscribe` "newWorkshares" | quai/filters/api.go:266 | no (WebSocket only) | yes | served | (b) | gossip workshares (fires with no local miner) |
+| `quai_subscribe` "newWorksharesV2" | quai/filters/api.go:349 | no (WebSocket only) | yes | served | (b) | gossip workshares, RPC version v2 |
+| `quai_subscribe` "pendingHeader" | quai/filters/api.go:1089 | no (WebSocket only) | yes | served | (b) | fires on every new pending header (each head and each second); a base64 protobuf payload |
 
 ### rpc
 
@@ -276,8 +276,8 @@ Subscriptions are listed as `<namespace>_subscribe` with their name.
 
 | Name | Go source | HTTP | WS | Rust | Class | Note |
 |---|---|---|---|---|---|---|
-| `workshare_getWorkShareThreshold` | internal/quaiapi/api.go:1826 | no (`--rpc.http-api workshare`) | yes | missing | (b) | 13, a JSON number |
-| `workshare_receiveSubWorkshare` | internal/quaiapi/api.go:1830 | no (`--rpc.http-api workshare`) | yes | missing | (b) | sub-workshare intake |
+| `workshare_getWorkShareThreshold` | internal/quaiapi/api.go:1826 | no (`--rpc.http-api workshare`) | yes | served | (b) | 13, a JSON number |
+| `workshare_receiveSubWorkshare` | internal/quaiapi/api.go:1830 | no (`--rpc.http-api workshare`) | yes | served | (b) | sub-workshare intake |
 
 ## Where the Rust node answers differently
 
@@ -320,8 +320,8 @@ answers them itself); the node never holds keys.
 
 | Name | Class | Rust |
 |---|---|---|
-| `web3_clientVersion` | (a) | not served |
-| `web3_sha3` | (a) | not served |
+| `web3_clientVersion` | (a) | served |
+| `web3_sha3` | (a) | served |
 | `eth_sendTransaction` | (d) | not served |
 | `eth_accounts` | (d) | not served |
 | `eth_requestAccounts` | (d) | not served |
@@ -332,30 +332,30 @@ answers them itself); the node never holds keys.
 | `personal_listAccounts` | (d) | not served |
 | `personal_unlockAccount` | (d) | not served |
 | `personal_sendTransaction` | (d) | not served |
-| `eth_syncing` | (a) | not served |
-| `quai_syncing` | (a) | not served |
-| `eth_feeHistory` | (a) | not served |
-| `quai_feeHistory` | (a) | not served |
-| `eth_maxPriorityFeePerGas` | (a) | not served |
-| `quai_maxPriorityFeePerGas` | (a) | not served |
-| `eth_getBlockReceipts` | (a) | not served |
-| `quai_getBlockReceipts` | (a) | not served |
-| `eth_protocolVersion` | (a) | not served |
-| `quai_protocolVersion` | (a) | not served |
+| `eth_syncing` | (a) | served |
+| `quai_syncing` | (a) | served |
+| `eth_feeHistory` | (a) | served |
+| `quai_feeHistory` | (a) | served |
+| `eth_maxPriorityFeePerGas` | (a) | served |
+| `quai_maxPriorityFeePerGas` | (a) | served |
+| `eth_getBlockReceipts` | (a) | served |
+| `quai_getBlockReceipts` | (a) | served |
+| `eth_protocolVersion` | (a) | served |
+| `quai_protocolVersion` | (a) | served |
 | `quai_accounts` | (d) | not served |
 | `quai_requestAccounts` | (d) | not served |
 | `quai_sendTransaction` | (d) | not served |
 | `quai_sign` | (d) | not served |
 | `quai_signTransaction` | (d) | not served |
-| `quai_mining` | (b) | not served |
-| `quai_hashrate` | (b) | not served |
-| `eth_hashrate` | (b) | not served |
-| `eth_coinbase` | (b) | not served |
-| `admin_nodeInfo` | (c) | not served |
-| `admin_peers` | (c) | not served |
-| `miner_start` | (b) | not served |
-| `txpool_getRollingFeeInfoV2` | (a) | not served |
-| `quai_getRollingFeeInfo` | (a) | not served |
+| `quai_mining` | (b) | served |
+| `quai_hashrate` | (b) | served |
+| `eth_hashrate` | (b) | served |
+| `eth_coinbase` | (b) | served |
+| `admin_nodeInfo` | (c) | served |
+| `admin_peers` | (c) | served |
+| `miner_start` | (b) | served |
+| `txpool_getRollingFeeInfoV2` | (a) | served |
+| `quai_getRollingFeeInfo` | (a) | served |
 
 ## Mining phase (class b)
 

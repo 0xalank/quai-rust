@@ -338,10 +338,8 @@ impl WorkObject {
     pub fn uncle_root(&self) -> Hash {
         // `decode` always sets the uncle list.
         match self.wire.wo_body.as_ref().and_then(|b| b.uncles.as_ref()) {
-            Some(uncles) if !uncles.wo_headers.is_empty() => {
-                *blake3::hash(&uncles.encode_to_vec()).as_bytes()
-            }
-            _ => crate::transaction::keccak(&trie::list([])),
+            Some(uncles) => uncles_root(uncles),
+            None => crate::transaction::keccak(&trie::list([])),
         }
     }
     pub fn manifest_root(&self) -> Result<Hash, String> {
@@ -405,5 +403,13 @@ impl WorkObject {
             }
         }
         Ok(())
+    }
+}
+
+pub fn uncles_root(uncles: &crate::schema::block::ProtoWorkObjectHeaders) -> Hash {
+    if uncles.wo_headers.is_empty() {
+        crate::transaction::keccak(&trie::list([]))
+    } else {
+        *blake3::hash(&uncles.encode_to_vec()).as_bytes()
     }
 }

@@ -52,9 +52,8 @@ pub const MAX_ALLOWABLE_ENTROPY_DIST: u64 = 40;
 pub const SHARE_DIFF_RELATIVE_THRESHOLD: u64 = 90;
 /// params `AuxTemplateLivenessTime`, seconds.
 pub const AUX_TEMPLATE_LIVENESS: u64 = 15;
-/// params `AuxTemplateStaleTime` is `uint64(10 * time.Minute)`, a count of
-/// nanoseconds. The validator compares it with seconds, so it never triggers.
-pub const AUX_TEMPLATE_STALE: u64 = 600_000_000_000;
+/// params `AuxTemplateStaleTime`, seconds (10 minutes).
+pub const AUX_TEMPLATE_STALE: u64 = 600;
 /// The slice of this node.
 pub const SLICE: [u8; 2] = [0, 0];
 const ZONE: usize = 2;
@@ -106,23 +105,82 @@ pub struct Head {
     pub scrypt_difficulty: U256,
 }
 /// The current header of each context, as far as this node knows it.
+///
+/// Once the node's own canonical chain populates a context via
+/// [`Heads::set_canonical`], untrusted gossip can no longer overwrite it.
 #[derive(Clone, Debug, Default)]
-pub struct Heads([Option<Head>; 3]);
+pub struct Heads {
+    slots: [Option<Head>; 3],
+    canonical: [bool; 3],
+}
 impl Heads {
     pub fn get(&self, ctx: usize) -> Option<&Head> {
-        self.0.get(ctx).and_then(Option::as_ref)
+        self.slots.get(ctx).and_then(Option::as_ref)
     }
-    /// Keep the higher block of a context.
+    /// Anchor a context to the node's validated canonical head; untrusted
+    /// gossip cannot overwrite or poison an anchored context.
+    pub fn set_canonical(&mut self, ctx: usize, head: Head) {
+        if let Some(slot) = self.slots.get_mut(ctx) {
+            *slot = Some(head);
+            self.canonical[ctx] = true;
+        }
+    }
+    /// Keep the higher block of an unanchored context, refusing wrap-around
+    /// heights and low-difficulty poisoning attempts.
     pub fn offer(&mut self, ctx: usize, head: Head) -> bool {
-        let Some(slot) = self.0.get_mut(ctx) else {
+        let Some(slot) = self.slots.get_mut(ctx) else {
             return false;
         };
-        if slot.as_ref().is_some_and(|h| h.number >= head.number) {
+        if self.canonical[ctx] {
             return false;
+        }
+        if head.number >= u64::MAX - MAX_WORKSHARE_DISTANCE {
+            return false;
+        }
+        if let Some(old) = slot.as_ref() {
+            if old.number >= head.number {
+                return false;
+            }
+            if head.intrinsic < old.intrinsic.wrapping_div(&U256::from_u8(2)) {
+                return false;
+            }
         }
         *slot = Some(head);
         true
     }
+}
+
+/// Build a gossip validator [`Head`] from a validated canonical chain record
+/// and its verified proof-of-work hash.
+pub fn head_from_record(
+    ctx: usize,
+    record: &quai_consensus::history::Record,
+    pow: Hash,
+) -> Result<Head, String> {
+    let header = record.header();
+    let body = record.object().header().wire();
+    let intrinsic = rules::intrinsic(pow).map_err(|e| e.to_string())?;
+    let parent_entropy = uint_of(
+        body.parent_entropy
+            .get(ctx)
+            .map(Vec::as_slice)
+            .unwrap_or_default(),
+    )?;
+    let number = record.number(ctx).map_err(|e| e.to_string())?;
+    let prime = number_of(header.wire().prime_terminus_number.as_deref())?;
+    Ok(Head {
+        hash: record.id(),
+        number,
+        intrinsic,
+        parent_entropy,
+        kawpow: prime >= FORKS.kawpow,
+        sha_difficulty: share_rules::Triple::from_header(header, true)
+            .map_err(|e| e.to_string())?
+            .difficulty,
+        scrypt_difficulty: share_rules::Triple::from_header(header, false)
+            .map_err(|e| e.to_string())?
+            .difficulty,
+    })
 }
 
 /// The verdict and what the validator learned.
@@ -146,6 +204,8 @@ pub struct Validator {
     caches: Arc<SharedCaches>,
     quorum: Quorum,
     heads: Arc<RwLock<Heads>>,
+    /// Slice `[region, zone]` handled by this node.
+    slice: [u8; 2],
     /// `--workshare.p2pthreshold`, go-quai default 7.
     p2p_threshold: u16,
 }
@@ -178,13 +238,24 @@ fn aux_id(header: &Header) -> Result<Option<Auxiliary>, Verdict> {
 
 impl Validator {
     pub fn new(caches: Arc<SharedCaches>, heads: Arc<RwLock<Heads>>) -> Self {
+        Self::with_slice(caches, heads, SLICE)
+    }
+    pub fn with_slice(
+        caches: Arc<SharedCaches>,
+        heads: Arc<RwLock<Heads>>,
+        slice: [u8; 2],
+    ) -> Self {
         Self {
             verifier: Verifier::with_shared_caches(caches.clone()),
             caches,
             quorum: Quorum::pinned(),
             heads,
+            slice,
             p2p_threshold: spec::WORKSHARE_P2P_THRESHOLD_DIFF,
         }
+    }
+    pub fn slice(&self) -> [u8; 2] {
+        self.slice
     }
     pub fn heads(&self) -> Heads {
         self.heads.read().map(|h| h.clone()).unwrap_or_default()
@@ -210,7 +281,7 @@ impl Validator {
         c.context = t.context();
         // Go deref's the backend of the topic location; another location panics
         // and the recovered validator rejects.
-        if !SLICE.starts_with(&t.location) {
+        if !self.slice.starts_with(&t.location) {
             c.verdict = reject("no backend for this location");
             return c;
         }
@@ -411,7 +482,7 @@ impl Validator {
         };
         let head = self.heads().get(ctx).cloned();
         if let Some(head) = head {
-            if ctx == ZONE && intrinsic < head.intrinsic.wrapping_div(&U256::from_u8(2)) {
+            if intrinsic < head.intrinsic.wrapping_div(&U256::from_u8(2)) {
                 return Ok(Verdict::Ignore(
                     "block intrinsic below half of the head".into(),
                 ));
@@ -519,10 +590,10 @@ impl Validator {
         // Distance from the current zone header.
         let head = self.heads().get(ZONE).cloned();
         let head_number = head.as_ref().map_or(0, |h| h.number);
-        if number + MAX_WORKSHARE_DISTANCE < head_number {
+        if number.saturating_add(MAX_WORKSHARE_DISTANCE) < head_number {
             return Ok(Verdict::Ignore("workshare too far behind the head".into()));
         }
-        if number > head_number + MAX_WORKSHARE_DISTANCE {
+        if number > head_number.saturating_add(MAX_WORKSHARE_DISTANCE) {
             return Ok(Verdict::Ignore(
                 "workshare too far ahead of the head".into(),
             ));
@@ -538,7 +609,7 @@ impl Validator {
         // Scrypt shares paid outside the chain) and the share work.
         let pow = self
             .verifier
-            .precompute_inclusion_work(&header, &SLICE)
+            .precompute_inclusion_work(&header, &self.slice)
             .map_err(|e| reject(format!("workshare: {e}")))?;
         let id = aux.as_ref().map(Auxiliary::id);
         if prime >= FORKS.kawpow && matches!(id, Some(2..=4)) {
@@ -606,13 +677,13 @@ fn aux_template(quorum: &Quorum, data: &[u8], now: u64) -> Result<Verdict, Verdi
         return Err(reject("aux template signature verification failed"));
     }
     let signed = u64::from(t.signature_time.unwrap_or_default());
-    if now + AUX_TEMPLATE_LIVENESS < signed {
+    if now.saturating_add(AUX_TEMPLATE_LIVENESS) < signed {
         return Err(reject("aux template signature time is in the future"));
     }
-    if now > signed + AUX_TEMPLATE_STALE {
+    if now > signed.saturating_add(AUX_TEMPLATE_STALE) {
         return Err(reject("aux template is stale"));
     }
-    if now > signed + AUX_TEMPLATE_LIVENESS {
+    if now > signed.saturating_add(AUX_TEMPLATE_LIVENESS) {
         return Ok(Verdict::Ignore(
             "aux template is older than the liveness time".into(),
         ));

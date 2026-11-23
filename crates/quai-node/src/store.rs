@@ -147,7 +147,10 @@ pub struct PastDb {
 }
 impl PastDb {
     pub fn open(path: &Path) -> io::Result<Self> {
-        let db = Database::create(path).map_err(bad)?;
+        let db = Database::builder()
+            .set_cache_size(32 << 20)
+            .create(path)
+            .map_err(bad)?;
         let mut write = db.begin_write().map_err(bad)?;
         write.set_durability(Durability::Immediate).map_err(bad)?;
         write.open_table(INCOMING).map_err(bad)?;
@@ -338,9 +341,18 @@ impl StateStore {
     }
     /// Restore the lazy state of the last committed version.
     pub fn restore(&self) -> io::Result<quai_consensus::zone_execution::State> {
-        let snapshot = self.db.snapshot(Some(self.version))?;
+        self.restore_version(self.version, &self.commitment)
+    }
+    /// Restore the lazy state of an earlier committed version without changing
+    /// the store's active head version (used for isolated tip-fork validation).
+    pub fn restore_version(
+        &self,
+        version: Hash,
+        commitment: &Commitment,
+    ) -> io::Result<quai_consensus::zone_execution::State> {
+        let snapshot = self.db.snapshot(Some(version))?;
         let (world, utxos) =
-            state_store::restore_sparse(Arc::new(Mutex::new(snapshot)), &self.commitment)?;
+            state_store::restore_sparse(Arc::new(Mutex::new(snapshot)), commitment)?;
         Ok(quai_consensus::zone_execution::State { world, utxos })
     }
     /// Persist the changes from `base` to `current` as the version of `block`.

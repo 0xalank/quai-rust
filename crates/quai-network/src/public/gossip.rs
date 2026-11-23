@@ -85,6 +85,43 @@ pub fn config(validate: bool) -> Result<gossipsub::Config, String> {
     b.build().map_err(|e| e.to_string())
 }
 
+/// Conservative GossipSub v1.1 peer scoring parameters tuned to penalize
+/// peers sending invalid messages without disconnecting honest Go peers.
+pub fn peer_score_params() -> (gossipsub::PeerScoreParams, gossipsub::PeerScoreThresholds) {
+    let params = gossipsub::PeerScoreParams {
+        behaviour_penalty_weight: -10.0,
+        behaviour_penalty_decay: 0.9,
+        decay_interval: Duration::from_secs(12),
+        decay_to_zero: 0.01,
+        retain_score: Duration::from_secs(3600),
+        ..Default::default()
+    };
+    let thresholds = gossipsub::PeerScoreThresholds {
+        gossip_threshold: -100.0,
+        publish_threshold: -200.0,
+        graylist_threshold: -400.0,
+        accept_px_threshold: 0.0,
+        opportunistic_graft_threshold: 0.0,
+    };
+    (params, thresholds)
+}
+
+/// Per-topic GossipSub scoring parameters penalizing invalid messages on a topic.
+pub fn topic_score_params() -> gossipsub::TopicScoreParams {
+    gossipsub::TopicScoreParams {
+        topic_weight: 1.0,
+        invalid_message_deliveries_weight: -10.0,
+        invalid_message_deliveries_decay: 0.5,
+        // Disable delivery/time-in-mesh penalties that could penalize quiet
+        // topics or peers with different heartbeat timings.
+        time_in_mesh_weight: 0.0,
+        first_message_deliveries_weight: 0.0,
+        mesh_message_deliveries_weight: 0.0,
+        mesh_failure_penalty_weight: 0.0,
+        ..Default::default()
+    }
+}
+
 /// go-libp2p-pubsub `DefaultMsgIdFn`: raw `from` bytes then raw `seqno` bytes.
 /// Matching it lets IHAVE/IWANT identifiers agree with Go peers.
 pub fn go_message_id(message: &gossipsub::Message) -> gossipsub::MessageId {

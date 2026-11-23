@@ -127,6 +127,9 @@ pub struct Ban {
     pub until: Option<Instant>,
 }
 
+/// Maximum tracked peers per table in [`Book`] to bound long-uptime memory.
+const MAX_BOOK_ENTRIES: usize = 8192;
+
 /// Scores, bans and rates of the peers this node has seen.
 #[derive(Debug, Default)]
 pub struct Book {
@@ -140,6 +143,11 @@ impl Book {
         self.quality.get(peer).copied().unwrap_or(MIN_SCORE)
     }
     pub fn adjust(&mut self, peer: PeerId, adjustment: Adjustment) -> i32 {
+        if !self.quality.contains_key(&peer) && self.quality.len() >= MAX_BOOK_ENTRIES {
+            if let Some(evict) = self.quality.keys().next().copied() {
+                self.quality.remove(&evict);
+            }
+        }
         let q = adjust(self.quality(&peer), adjustment);
         self.quality.insert(peer, q);
         q
@@ -157,7 +165,22 @@ impl Book {
         v.into_iter().map(|(_, _, p)| p).collect()
     }
     pub fn ban(&mut self, peer: PeerId, reason: impl Into<String>, duration: Option<Duration>) {
-        let until = duration.map(|d| Instant::now() + d);
+        let now = Instant::now();
+        if !self.bans.contains_key(&peer) && self.bans.len() >= MAX_BOOK_ENTRIES {
+            self.bans.retain(|_, b| b.until.is_none_or(|t| t > now));
+            if self.bans.len() >= MAX_BOOK_ENTRIES {
+                if let Some(evict) = self
+                    .bans
+                    .iter()
+                    .find(|(_, b)| b.until.is_some())
+                    .or_else(|| self.bans.iter().next())
+                    .map(|(p, _)| *p)
+                {
+                    self.bans.remove(&evict);
+                }
+            }
+        }
+        let until = duration.map(|d| now + d);
         self.bans.insert(
             peer,
             Ban {
@@ -176,6 +199,16 @@ impl Book {
     }
     /// Count one inbound request; false when the peer is over the limit.
     pub fn inbound_request(&mut self, peer: PeerId, now: Instant) -> bool {
+        if !self.inbound.contains_key(&peer) && self.inbound.len() >= MAX_BOOK_ENTRIES {
+            let idle = Duration::from_secs(60);
+            self.inbound
+                .retain(|_, r| now.saturating_duration_since(r.at) < idle);
+            if self.inbound.len() >= MAX_BOOK_ENTRIES {
+                if let Some(evict) = self.inbound.keys().next().copied() {
+                    self.inbound.remove(&evict);
+                }
+            }
+        }
         self.inbound
             .entry(peer)
             .or_insert_with(|| Rate::new(now))
@@ -183,6 +216,16 @@ impl Book {
     }
     /// Our own requests to a peer stay under the same rate.
     pub fn outbound_request(&mut self, peer: PeerId, now: Instant) -> bool {
+        if !self.outbound.contains_key(&peer) && self.outbound.len() >= MAX_BOOK_ENTRIES {
+            let idle = Duration::from_secs(60);
+            self.outbound
+                .retain(|_, r| now.saturating_duration_since(r.at) < idle);
+            if self.outbound.len() >= MAX_BOOK_ENTRIES {
+                if let Some(evict) = self.outbound.keys().next().copied() {
+                    self.outbound.remove(&evict);
+                }
+            }
+        }
         self.outbound
             .entry(peer)
             .or_insert_with(|| Rate::new(now))
@@ -190,9 +233,9 @@ impl Book {
     }
 }
 
-/// Connection gate: refuses banned peers and caps connections per IP
-/// address. A relayed connection has no remote IP address; the gate counts
-/// only the direct connection to the relay.
+/// Connection gate: refuses banned peers, caps connections per IP address, and
+/// caps relayed circuits per relay peer so relayed connections cannot bypass
+/// per-IP eclipse limits.
 #[derive(Clone)]
 pub struct Gate {
     state: Arc<Mutex<GateState>>,
@@ -201,16 +244,21 @@ pub struct Gate {
 struct GateState {
     book: Arc<Mutex<Book>>,
     max_per_ip: usize,
+    max_per_relay: usize,
     per_ip: HashMap<IpAddr, usize>,
     by_connection: HashMap<ConnectionId, IpAddr>,
+    per_relay: HashMap<PeerId, usize>,
+    by_relay_connection: HashMap<ConnectionId, PeerId>,
     refused: BTreeMap<&'static str, u64>,
 }
 impl Gate {
     pub fn new(book: Arc<Mutex<Book>>, max_per_ip: usize) -> Self {
+        let max_per_ip = max_per_ip.max(1);
         Self {
             state: Arc::new(Mutex::new(GateState {
                 book,
-                max_per_ip: max_per_ip.max(1),
+                max_per_ip,
+                max_per_relay: max_per_ip.saturating_mul(2).max(4),
                 ..Default::default()
             })),
         }
@@ -249,24 +297,64 @@ impl Gate {
         }
         Ok(())
     }
-    fn check_ip(&self, addr: &Multiaddr) -> Result<(), ConnectionDenied> {
-        let Some(ip) = super::address::ip_of(addr) else {
+    fn reserve_ip(&self, id: ConnectionId, addr: &Multiaddr) -> Result<(), ConnectionDenied> {
+        if let Some(ip) = super::address::ip_of(addr) {
+            let mut s = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if s.by_connection.contains_key(&id) {
+                return Ok(());
+            }
+            if s.per_ip.get(&ip).copied().unwrap_or(0) >= s.max_per_ip {
+                *s.refused
+                    .entry("connection limit per IP address")
+                    .or_default() += 1;
+                return Err(ConnectionDenied::new(GateError(
+                    "connection limit per IP address",
+                )));
+            }
+            *s.per_ip.entry(ip).or_default() += 1;
+            s.by_connection.insert(id, ip);
             return Ok(());
-        };
-        let full = self
-            .state
-            .lock()
-            .map(|s| s.per_ip.get(&ip).copied().unwrap_or(0) >= s.max_per_ip)
-            .unwrap_or(true);
-        if full {
-            return Err(self.deny("connection limit per IP address"));
+        }
+        if let Some(relay) = super::address::relay_peer(addr) {
+            let mut s = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if s.by_relay_connection.contains_key(&id) {
+                return Ok(());
+            }
+            if s.per_relay.get(&relay).copied().unwrap_or(0) >= s.max_per_relay {
+                *s.refused.entry("connection limit per relay").or_default() += 1;
+                return Err(ConnectionDenied::new(GateError(
+                    "connection limit per relay",
+                )));
+            }
+            *s.per_relay.entry(relay).or_default() += 1;
+            s.by_relay_connection.insert(id, relay);
         }
         Ok(())
     }
-    fn record(&self, id: ConnectionId, addr: &Multiaddr) {
-        if let (Some(ip), Ok(mut s)) = (super::address::ip_of(addr), self.state.lock()) {
-            *s.per_ip.entry(ip).or_default() += 1;
-            s.by_connection.insert(id, ip);
+    fn release(&self, id: ConnectionId) {
+        if let Ok(mut s) = self.state.lock() {
+            if let Some(ip) = s.by_connection.remove(&id) {
+                if let Some(n) = s.per_ip.get_mut(&ip) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        s.per_ip.remove(&ip);
+                    }
+                }
+            }
+            if let Some(relay) = s.by_relay_connection.remove(&id) {
+                if let Some(n) = s.per_relay.get_mut(&relay) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        s.per_relay.remove(&relay);
+                    }
+                }
+            }
         }
     }
 }
@@ -285,11 +373,13 @@ impl NetworkBehaviour for Gate {
 
     fn handle_pending_inbound_connection(
         &mut self,
-        _: ConnectionId,
+        id: ConnectionId,
         _: &Multiaddr,
         remote: &Multiaddr,
     ) -> Result<(), ConnectionDenied> {
-        self.check_ip(remote)
+        // Reserve the IP slot immediately before Noise handshake so concurrent
+        // dials from one IP cannot bypass max_per_ip.
+        self.reserve_ip(id, remote)
     }
     fn handle_established_inbound_connection(
         &mut self,
@@ -298,9 +388,14 @@ impl NetworkBehaviour for Gate {
         _: &Multiaddr,
         remote: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
-        self.check_peer(&peer)?;
-        self.check_ip(remote)?;
-        self.record(id, remote);
+        if let Err(denied) = self.check_peer(&peer) {
+            self.release(id);
+            return Err(denied);
+        }
+        if let Err(denied) = self.reserve_ip(id, remote) {
+            self.release(id);
+            return Err(denied);
+        }
         Ok(dummy::ConnectionHandler)
     }
     fn handle_pending_outbound_connection(
@@ -324,22 +419,14 @@ impl NetworkBehaviour for Gate {
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
         self.check_peer(&peer)?;
-        self.check_ip(addr)?;
-        self.record(id, addr);
+        self.reserve_ip(id, addr)?;
         Ok(dummy::ConnectionHandler)
     }
     fn on_swarm_event(&mut self, event: FromSwarm) {
-        if let FromSwarm::ConnectionClosed(c) = event {
-            if let Ok(mut s) = self.state.lock() {
-                if let Some(ip) = s.by_connection.remove(&c.connection_id) {
-                    if let Some(n) = s.per_ip.get_mut(&ip) {
-                        *n = n.saturating_sub(1);
-                        if *n == 0 {
-                            s.per_ip.remove(&ip);
-                        }
-                    }
-                }
-            }
+        match event {
+            FromSwarm::ConnectionClosed(c) => self.release(c.connection_id),
+            FromSwarm::ListenFailure(f) => self.release(f.connection_id),
+            _ => {}
         }
     }
     fn on_connection_handler_event(

@@ -479,15 +479,64 @@ pub struct WorkshareReport {
     /// The parent was in the history, so the parent rules ran too.
     pub parent_checked: bool,
 }
+/// Bind an uncle/workshare's KAWPOW share targets and difficulty to its parent
+/// (go-quai v0.57.1 `9b0119508`, `VerifyUncles` lines 329-360).
+fn check_uncle_kawpow_targets(
+    parent: &Record,
+    header: &Header,
+    uncle_prime: u64,
+) -> Result<(), Error> {
+    let w = header.wire();
+    let pw = parent.header.wire();
+    let expected_target = share_rules::share_target(
+        parent.difficulty()?,
+        share_rules::uint(pw.kawpow_difficulty.as_deref().unwrap_or_default())?,
+        share_rules::uint(pw.sha_share_target.as_deref().unwrap_or_default())?,
+        uncle_prime,
+    )?;
+    if share_rules::uint(fields::bytes(
+        &w.sha_share_target,
+        "missing sha share target",
+    )?)? != expected_target
+    {
+        return Err(Error::Invalid("uncle sha share target"));
+    }
+    if share_rules::uint(fields::bytes(
+        &w.scrypt_share_target,
+        "missing scrypt share target",
+    )?)? != expected_target
+    {
+        return Err(Error::Invalid("uncle scrypt share target"));
+    }
+    let aux = pw
+        .aux_pow
+        .as_ref()
+        .map(|b| crate::auxiliary::Auxiliary::decode(b))
+        .transpose()?;
+    let expected_kawpow = share_rules::next_kawpow_difficulty(
+        share_rules::uint(pw.kawpow_difficulty.as_deref().unwrap_or_default())?,
+        uncle_prime,
+        aux.as_ref(),
+    )?;
+    if share_rules::uint(fields::bytes(
+        &w.kawpow_difficulty,
+        "missing kawpow difficulty",
+    )?)? != expected_kawpow
+    {
+        return Err(Error::Invalid("uncle kawpow difficulty"));
+    }
+    Ok(())
+}
+
 /// A gossiped workshare (go-quai `worker.AddWorkShare`): `validateUncleData`,
 /// then `UncleWorkShareClassification` must be `Valid` (a share that meets the
 /// block target is a block, not a workshare). When the share's parent is in
 /// `history`, also the uncle rules of any block that would include it and that
 /// do not depend on that block (`check_inclusions_projection`): the proof ID,
-/// the difficulty after the parent, the prime terminus, the SHA and scrypt
-/// controllers and the number. go-quai drops shares more than
-/// 2 * NewWorkSharesInclusionDepth below its head before these rules; the
-/// caller applies that distance.
+/// the difficulty after the parent, the prime terminus, the KAWPOW share
+/// targets and difficulty, the SHA and scrypt controllers and the number.
+/// go-quai drops shares more than 2 * NewWorkSharesInclusionDepth below its
+/// head before these rules; the caller applies that distance.
 pub fn verify_workshare(
     verifier: &mut Verifier,
     history: &History,
@@ -500,6 +549,26 @@ pub fn verify_workshare(
     // validateUncleData has no Qi coinbase and no early lock rule.
     data_policy(h, u64::MAX, false)?;
     let work = verifier.work_for_inclusion(h, &profile.location)?;
+    let parent_id = parent(h)?;
+    let known_parent = match history.get(&parent_id) {
+        Ok(p) => Some(p),
+        Err(Error::Unavailable(_)) => None,
+        Err(e) => return Err(e),
+    };
+    if let Some(parent) = &known_parent {
+        if prime(h)? >= FORKS.kawpow {
+            let order = native_parent_metrics(verifier, history, parent, profile)?.order;
+            let expected = if order == 0 || profile.genesis.contains(&parent.id) {
+                parent.numbers[0]
+            } else {
+                parent.prime
+            };
+            if prime(h)? != expected {
+                return Err(Error::Invalid("uncle prime terminus"));
+            }
+            check_uncle_kawpow_targets(parent, h, prime(h)?)?;
+        }
+    }
     match share_rules::classify(h, work.hash(), profile.p2p_threshold)? {
         Classification::Valid => {}
         Classification::Block => return Err(Error::Invalid("workshare meets the block target")),
@@ -518,28 +587,17 @@ pub fn verify_workshare(
     let mut report = WorkshareReport {
         hash,
         pow: work.hash(),
-        parent: parent(h)?,
+        parent: parent_id,
         number: num(h)?,
         parent_checked: false,
     };
-    let parent = match history.get(&report.parent) {
-        Ok(p) => p,
-        Err(Error::Unavailable(_)) => return Ok(report),
-        Err(e) => return Err(e),
+    let Some(parent) = known_parent else {
+        return Ok(report);
     };
     if diff(h)? != expected_difficulty(history, &parent, profile)? {
         return Err(Error::Invalid("uncle difficulty"));
     }
     if prime(h)? >= FORKS.kawpow {
-        let order = native_parent_metrics(verifier, history, &parent, profile)?.order;
-        let expected = if order == 0 || profile.genesis.contains(&parent.id) {
-            parent.numbers[0]
-        } else {
-            parent.prime
-        };
-        if prime(h)? != expected {
-            return Err(Error::Invalid("uncle prime terminus"));
-        }
         let (sha, scrypt) = expected_share_triples(&parent, prime(h)?, &profile.location)?;
         let actual = Triple::from_header(h, true)?;
         if actual.difficulty != sha.difficulty || actual.count != sha.count {
@@ -643,6 +701,30 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
         if ancestors.contains(&id) {
             return Err(Error::Invalid("uncle is ancestor"));
         }
+        // go-quai v0.57.1 (`9b0119508`): bind prime terminus, share targets,
+        // and KAWPOW difficulty to the uncle's parent before classifying.
+        let uncle_parent_id = parent(h)?;
+        let checked_parent = if block.prime >= FORKS.kawpow {
+            if !ancestors.contains(&uncle_parent_id) {
+                return Err(Error::Invalid("dangling uncle"));
+            }
+            let uncle_parent = history.get(&uncle_parent_id)?;
+            let order = parent_order(&uncle_parent)?;
+            let expected = if order == 0 || profile.genesis.contains(&uncle_parent.id) {
+                uncle_parent.numbers[0]
+            } else {
+                uncle_parent.prime
+            };
+            if prime(h)? != expected {
+                return Err(Error::Invalid("uncle prime terminus"));
+            }
+            if prime(h)? >= FORKS.kawpow {
+                check_uncle_kawpow_targets(&uncle_parent, h, prime(h)?)?;
+            }
+            Some(uncle_parent)
+        } else {
+            None
+        };
         let classification = share_rules::classify(h, *pow, profile.p2p_threshold)?;
         let workshare = if block.prime < FORKS.kawpow {
             !quai_primitives::meets_blake3_target(pow, &diff(h)?.to_be_bytes())
@@ -678,8 +760,9 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
                 }
             }
         }
-        let uncle_parent = parent(h)?;
-        if !ancestors.contains(&uncle_parent) || (!workshare && uncle_parent == block.parents[2]) {
+        if !ancestors.contains(&uncle_parent_id)
+            || (!workshare && uncle_parent_id == block.parents[2])
+        {
             return Err(Error::Invalid("dangling uncle"));
         }
         distances.push(history.workshare_distance(block, h)?);
@@ -695,30 +778,22 @@ pub fn check_inclusions_projection<F: FnMut(&Record) -> Result<u8, Error>>(
                 exceptions += 1;
             }
         }
-        let parent = history.get(&parent(h)?)?;
+        let parent = match checked_parent {
+            Some(p) => p,
+            None => history.get(&uncle_parent_id)?,
+        };
         if diff(h)? != expected_difficulty(history, &parent, profile)? {
             return Err(Error::Invalid("uncle difficulty"));
         }
-        if block.prime >= FORKS.kawpow {
-            let order = parent_order(&parent)?;
-            let expected = if order == 0 || profile.genesis.contains(&parent.id) {
-                parent.numbers[0]
-            } else {
-                parent.prime
-            };
-            if prime(h)? != expected {
-                return Err(Error::Invalid("uncle prime terminus"));
+        if block.prime >= FORKS.kawpow && prime(h)? >= FORKS.kawpow {
+            let (sha, scrypt) = expected_share_triples(&parent, prime(h)?, &profile.location)?;
+            let actual = Triple::from_header(h, true)?;
+            if actual.difficulty != sha.difficulty || actual.count != sha.count {
+                return Err(Error::Invalid("uncle SHA controller"));
             }
-            if prime(h)? >= FORKS.kawpow {
-                let (sha, scrypt) = expected_share_triples(&parent, prime(h)?, &profile.location)?;
-                let actual = Triple::from_header(h, true)?;
-                if actual.difficulty != sha.difficulty || actual.count != sha.count {
-                    return Err(Error::Invalid("uncle SHA controller"));
-                }
-                let actual = Triple::from_header(h, false)?;
-                if actual.difficulty != scrypt.difficulty || actual.count != scrypt.count {
-                    return Err(Error::Invalid("uncle scrypt controller"));
-                }
+            let actual = Triple::from_header(h, false)?;
+            if actual.difficulty != scrypt.difficulty || actual.count != scrypt.count {
+                return Err(Error::Invalid("uncle scrypt controller"));
             }
         }
         let pn = if profile.genesis.contains(&parent.id) {

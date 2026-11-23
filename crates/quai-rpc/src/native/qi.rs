@@ -26,7 +26,14 @@ use quai_primitives::{
 use serde_json::{Map, Value};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
+
+/// Maximum number of addresses accepted in one
+/// `quai_getOutpointDeltasForAddressesInRange` call.
+const MAX_OUTPOINT_DELTA_ADDRESSES: usize = 256;
+/// Maximum parent steps walked by `common_ancestor`.
+const MAX_COMMON_ANCESTOR_STEPS: usize = 2048;
 
 type R<T> = Result<T, RpcError>;
 type Address = [u8; 20];
@@ -51,12 +58,20 @@ fn crashed() -> RpcError {
 }
 
 pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<Value>> {
+    dispatch_cancellable(view, method, params, None)
+}
+pub fn dispatch_cancellable(
+    view: &dyn ChainView,
+    method: &str,
+    params: &Value,
+    cancel: Option<&AtomicBool>,
+) -> Option<R<Value>> {
     Some(match method {
         "quai_qiToQuai" => quote_rpc(view, params, true),
         "quai_quaiToQi" => quote_rpc(view, params, false),
         "quai_calculateConversionAmount" => conversion_amount(view, params),
         "quai_estimateFeeForQi" => estimate_fee_for_qi(view, params),
-        "quai_getOutpointDeltasForAddressesInRange" => outpoint_deltas(view, params),
+        "quai_getOutpointDeltasForAddressesInRange" => outpoint_deltas(view, params, cancel),
         "quai_getLockedBalance" => locked_balance(view, params),
         "quai_getWrappedQiDeposit" => wrapped_qi_deposit(view, params),
         "quai_baseFee" => base_fee(view, params),
@@ -511,6 +526,12 @@ fn qi_tx_gas(a: &QiArgs, scaling: f64, location: [u8; 2]) -> R<u64> {
             a.inputs.len()
         )));
     }
+    if a.outputs.len() > u16::MAX as usize {
+        return Err(RpcError::go(format!(
+            "Qi transaction has too many outputs: {}",
+            a.outputs.len()
+        )));
+    }
     if let Some(i) = a.inputs.iter().find(|i| **i > u16::MAX as u64) {
         return Err(RpcError::go(format!(
             "Qi transaction has an input with an index too large: {i}"
@@ -927,31 +948,54 @@ fn is_canonical(view: &dyn ChainView, block: &BlockData) -> R<bool> {
         .block_by_number(block.number)?
         .is_some_and(|b| b.hash == block.hash))
 }
+fn check_cancel(cancel: Option<&AtomicBool>) -> R<()> {
+    if cancel.is_some_and(|c| c.load(AtomicOrdering::Relaxed)) {
+        return Err(RpcError {
+            code: -32002,
+            message: "request timed out".into(),
+            data: None,
+        });
+    }
+    Ok(())
+}
 /// `rawdb.FindCommonAncestor`; a missing header panics in Go.
 fn common_ancestor(
     view: &dyn ChainView,
     mut a: Arc<BlockData>,
     mut b: Arc<BlockData>,
+    cancel: Option<&AtomicBool>,
 ) -> R<Arc<BlockData>> {
     let genesis = view.block_by_number(0)?.map(|g| g.hash);
     let is_genesis = |h: &Hash| Some(*h) == genesis;
+    let mut steps = 0usize;
+    let mut step = || -> R<()> {
+        check_cancel(cancel)?;
+        steps += 1;
+        if steps > MAX_COMMON_ANCESTOR_STEPS {
+            return Err(RpcError::go("common ancestor search exceeded limit"));
+        }
+        Ok(())
+    };
     let parent = |x: &BlockData| -> R<Arc<BlockData>> {
         view.block_or_candidate(&parent_hash(x))?
             .ok_or_else(crashed)
     };
     while a.number > b.number {
+        step()?;
         a = parent(&a)?;
         if is_genesis(&a.hash) {
             return Ok(a);
         }
     }
     while a.number < b.number {
+        step()?;
         b = parent(&b)?;
         if is_genesis(&b.hash) {
             return Ok(b);
         }
     }
     while a.hash != b.hash {
+        step()?;
         a = parent(&a)?;
         b = parent(&b)?;
         if is_genesis(&parent_hash(&a)) && is_genesis(&parent_hash(&b)) {
@@ -963,13 +1007,16 @@ fn common_ancestor(
 /// `GetOutpointDeltasForAddressesInRange`: the outputs that blocks
 /// `from..=to` created for and removed from the addresses, by address,
 /// "created"/"deleted" and transaction hash.
-fn outpoint_deltas(view: &dyn ChainView, params: &Value) -> R<Value> {
+fn outpoint_deltas(view: &dyn ChainView, params: &Value, cancel: Option<&AtomicBool>) -> R<Value> {
     let a = Args::new(params, 3)?;
     let addresses = a.get(0, address_list)?;
     let from = a.get(1, args::hash)?;
     let to = a.get(2, args::hash)?;
     if addresses.is_empty() {
         return Err(RpcError::go("addresses cannot be empty"));
+    }
+    if addresses.len() > MAX_OUTPOINT_DELTA_ADDRESSES {
+        return Err(RpcError::go("too many addresses"));
     }
     let not_found = |h: &Hash| {
         RpcError::go(format!(
@@ -997,12 +1044,13 @@ fn outpoint_deltas(view: &dyn ChainView, params: &Value) -> R<Value> {
         out.insert(json::checksum(addr), Default::default());
     }
     let common = if !is_canonical(view, &block_from)? || !is_canonical(view, &block_to)? {
-        common_ancestor(view, block_from.clone(), block_to.clone())?
+        common_ancestor(view, block_from.clone(), block_to.clone(), cancel)?
     } else {
         block_from.clone()
     };
     let mut current = block_to;
     while current.hash != common.hash {
+        check_cancel(cancel)?;
         deltas(view, &current, &wanted, &mut out)?;
         let p = parent_hash(&current);
         current = view.block_or_candidate(&p)?.ok_or_else(|| not_found(&p))?;
@@ -1010,11 +1058,13 @@ fn outpoint_deltas(view: &dyn ChainView, params: &Value) -> R<Value> {
     if common.hash != block_from.hash {
         let mut current = block_from;
         while current.hash != common.hash {
+            check_cancel(cancel)?;
             deltas(view, &current, &wanted, &mut out)?;
             let p = parent_hash(&current);
             current = view.block_or_candidate(&p)?.ok_or_else(|| not_found(&p))?;
         }
     }
+    check_cancel(cancel)?;
     deltas(view, &common, &wanted, &mut out)?;
     let mut result = Map::new();
     for (address, [created, deleted]) in out {

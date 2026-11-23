@@ -311,7 +311,7 @@ pub fn classify(header: &Header, pow: Hash, p2p_threshold: u16) -> Result<Classi
             uint(wh.kawpow_difficulty.as_deref().unwrap_or_default())?,
         )?;
         if diff == Uint::ZERO {
-            return Err(Error::Unsupported("zero computed KAWPOW share difficulty"));
+            return Ok(Classification::Invalid);
         }
         let target = U1024::ONE.shl_vartime(256).wrapping_div(&w(diff));
         if w(Uint::from_be_bytes(pow)) <= target {
@@ -333,6 +333,18 @@ pub fn next_kawpow_difficulty(
     prime: u64,
     parent: Option<&crate::auxiliary::Auxiliary>,
 ) -> Result<Uint, Error> {
+    next_kawpow_difficulty_at(previous, prime, parent, 0, &FORKS)
+}
+/// Fork-aware KAWPOW difficulty EMA (`go-quai a60f36fb1`): when
+/// `forks.state_repair_active(prime)` is true, template staleness also checks
+/// `parent_quai_time` so a frozen donor timestamp cannot bypass the 18s cutoff.
+pub fn next_kawpow_difficulty_at(
+    previous: Uint,
+    prime: u64,
+    parent: Option<&crate::auxiliary::Auxiliary>,
+    parent_quai_time: u64,
+    forks: &spec::ForkSchedule,
+) -> Result<Uint, Error> {
     if prime < FORKS.kawpow {
         return Err(Error::Unsupported("pre-fork KAWPOW controller"));
     }
@@ -350,7 +362,12 @@ pub fn next_kawpow_difficulty(
         .signature_time
         .ok_or(Error::Invalid("template signature time"))?;
     let timestamp = u32::from_le_bytes(crate::slice::array(&parent.header()[68..72])?);
-    if signature.wrapping_add(18) < timestamp {
+    let stale = if forks.state_repair_active(prime) {
+        crate::payouts::auxpow_template_age(parent_quai_time, timestamp, signature) > 18
+    } else {
+        signature.wrapping_add(18) < timestamp
+    };
+    if stale {
         return Ok(previous);
     }
     let bits = u32::from_le_bytes(crate::slice::array(&parent.header()[72..76])?);

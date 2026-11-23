@@ -293,6 +293,30 @@ struct Commitment {
     trie: quai_primitives::mpt::Trie,
     totals: Totals,
 }
+#[derive(Debug)]
+struct AccountOverlay {
+    entry: Option<Arc<Account>>,
+    was_deleted: bool,
+    size_baseline: Option<(Word, u64)>,
+    dirty_entry: Option<Option<Footprint>>,
+}
+#[derive(Debug)]
+struct WorldTxRollback {
+    commitment_base: Arc<Commitment>,
+    root_cache: Arc<OnceLock<Commitment>>,
+    lockups: Arc<crate::lockup_state::LockupState>,
+    etxs: Arc<crate::etx::EtxState>,
+    account_count: u64,
+    saved_dirty_all: Option<Arc<BTreeMap<Address, Option<Footprint>>>>,
+    accounts: BTreeMap<Address, AccountOverlay>,
+}
+#[derive(Debug, Default)]
+struct RollbackSlot(Option<Box<WorldTxRollback>>);
+impl Clone for RollbackSlot {
+    fn clone(&self) -> Self {
+        Self(None)
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct World {
     accounts: Arc<BTreeMap<Address, Arc<Account>>>,
@@ -307,6 +331,7 @@ pub struct World {
     etxs: Arc<crate::etx::EtxState>,
     in_block: bool,
     size_baselines: Arc<BTreeMap<Address, (Word, u64)>>,
+    tx_rollback: RollbackSlot,
 }
 impl PartialEq for World {
     fn eq(&self, other: &Self) -> bool {
@@ -322,7 +347,114 @@ impl PartialEq for World {
 }
 impl Eq for World {}
 impl World {
+    /// Start an O(touched-accounts) atomic transaction rollback log on this
+    /// `World` without cloning the underlying `accounts` overlay map. Returns
+    /// `true` if this caller owns the rollback scope (`false` when nested inside
+    /// an outer transaction scope).
+    pub(crate) fn begin_tx(&mut self) -> bool {
+        if self.tx_rollback.0.is_some() {
+            return false;
+        }
+        let saved_dirty_all = self.root_cache.get().map(|_| self.dirty_accounts.clone());
+        self.tx_rollback.0 = Some(Box::new(WorldTxRollback {
+            commitment_base: self.commitment_base.clone(),
+            root_cache: self.root_cache.clone(),
+            lockups: self.lockups.clone(),
+            etxs: self.etxs.clone(),
+            account_count: self.account_count,
+            saved_dirty_all,
+            accounts: BTreeMap::new(),
+        }));
+        true
+    }
+    pub(crate) fn has_tx_rollback(&self) -> bool {
+        self.tx_rollback.0.is_some()
+    }
+    pub(crate) fn commit_tx(&mut self, owned: bool) {
+        if owned {
+            self.tx_rollback.0 = None;
+        }
+    }
+    pub(crate) fn rollback_tx(&mut self, owned: bool) {
+        if !owned {
+            return;
+        }
+        let Some(rb) = self.tx_rollback.0.take() else {
+            return;
+        };
+        self.commitment_base = rb.commitment_base;
+        self.root_cache = rb.root_cache;
+        self.lockups = rb.lockups;
+        self.etxs = rb.etxs;
+        self.account_count = rb.account_count;
+        let restore_dirty = if let Some(all) = rb.saved_dirty_all {
+            self.dirty_accounts = all;
+            false
+        } else {
+            true
+        };
+        for (address, overlay) in rb.accounts {
+            let accounts = Arc::make_mut(&mut self.accounts);
+            match overlay.entry {
+                Some(acc) => {
+                    accounts.insert(address, acc);
+                }
+                None => {
+                    accounts.remove(&address);
+                }
+            }
+            let deleted = Arc::make_mut(&mut self.deleted);
+            if overlay.was_deleted {
+                deleted.insert(address);
+            } else {
+                deleted.remove(&address);
+            }
+            let baselines = Arc::make_mut(&mut self.size_baselines);
+            match overlay.size_baseline {
+                Some(b) => {
+                    baselines.insert(address, b);
+                }
+                None => {
+                    baselines.remove(&address);
+                }
+            }
+            if restore_dirty {
+                let dirty = Arc::make_mut(&mut self.dirty_accounts);
+                match overlay.dirty_entry {
+                    Some(fp) => {
+                        dirty.insert(address, fp);
+                    }
+                    None => {
+                        dirty.remove(&address);
+                    }
+                }
+            }
+        }
+    }
+    fn record_tx_account(&mut self, address: Address) {
+        let Some(rb) = self.tx_rollback.0.as_mut() else {
+            return;
+        };
+        if rb.accounts.contains_key(&address) {
+            return;
+        }
+        let dirty_entry = if rb.saved_dirty_all.is_none() {
+            self.dirty_accounts.get(&address).copied()
+        } else {
+            None
+        };
+        rb.accounts.insert(
+            address,
+            AccountOverlay {
+                entry: self.accounts.get(&address).cloned(),
+                was_deleted: self.deleted.contains(&address),
+                size_baseline: self.size_baselines.get(&address).copied(),
+                dirty_entry,
+            },
+        );
+    }
     fn invalidate_account(&mut self, address: Address) -> Result<(), ReadError> {
+        self.record_tx_account(address);
         let previous = std::mem::take(&mut self.root_cache);
         if let Some(committed) = previous.get() {
             self.commitment_base = Arc::new(committed.clone());
@@ -355,6 +487,7 @@ impl World {
         if !self.in_block {
             return;
         }
+        self.record_tx_account(a);
         let map = Arc::make_mut(&mut self.size_baselines);
         if let Some(v) = v {
             map.insert(a, v);
@@ -369,6 +502,21 @@ impl World {
                 .map(|v| (v.storage_size, v.storage_len()))
                 .unwrap_or((Word::ZERO, 0));
             self.set_size_baseline(a, Some(old));
+        }
+        Ok(())
+    }
+    /// go-quai v0.57.0/v0.57.1 `StateDB.Suicide` zeroes `stateObject.data.Size`
+    /// without journaling it, so a reverted `SELFDESTRUCT` leaves the account's
+    /// size base at zero while keeping its existing slot count.
+    pub(crate) fn zero_suicide_size(&mut self, a: Address) -> Result<(), ReadError> {
+        self.mark_size(a)?;
+        if let Some(v) = self.account_mut(&a)? {
+            v.storage_size = Word::ZERO;
+        }
+        if self.in_block {
+            if let Some((_, count)) = self.size_baselines.get(&a).copied() {
+                self.set_size_baseline(a, Some((Word::ZERO, count)));
+            }
         }
         Ok(())
     }
@@ -442,9 +590,6 @@ impl World {
         value: Option<crate::lockup::Lockup>,
     ) -> Result<(), ReadError> {
         Arc::make_mut(&mut self.lockups).set(key, value)
-    }
-    pub(crate) fn replace_lockups(&mut self, other: &World) {
-        self.lockups = other.lockups.clone();
     }
 
     fn checked_totals(&self) -> Result<Totals, ReadError> {

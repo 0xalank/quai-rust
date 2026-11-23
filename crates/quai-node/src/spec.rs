@@ -23,6 +23,24 @@ mod tests {
             quai_primitives::encode_hex(&local.genesis_hash()),
             "0x53fc82ff80d79fb2f225ecc80fe9b5130dd9f1d248a6140f41096ce822fb10cd"
         );
-        assert!(Chain::for_environment("garden").is_err());
+        let garden = Chain::for_environment("garden").unwrap();
+        assert_eq!(garden.spec().chain_id, 12_000);
+        assert_eq!(
+            quai_primitives::encode_hex(&garden.genesis_hash()),
+            quai_primitives::spec::GARDEN_GENESIS_HASH
+        );
+        let orchard = Chain::for_environment("orchard").unwrap();
+        assert_eq!(orchard.spec().chain_id, 15_000);
+        assert_eq!(
+            quai_primitives::encode_hex(&orchard.genesis_hash()),
+            quai_primitives::spec::ORCHARD_GENESIS_HASH
+        );
+        let lighthouse = Chain::for_environment("lighthouse").unwrap();
+        assert_eq!(lighthouse.spec().chain_id, 17_000);
+        assert_eq!(
+            quai_primitives::encode_hex(&lighthouse.genesis_hash()),
+            quai_primitives::spec::LIGHTHOUSE_GENESIS_HASH
+        );
+        assert!(Chain::for_environment("unknown-net").is_err());
     }
 }

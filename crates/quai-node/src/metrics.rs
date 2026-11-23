@@ -256,12 +256,16 @@ pub async fn sample(m: Arc<Metrics>, stop: Arc<AtomicBool>) {
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
 }
+/// Maximum concurrent HTTP connections to the metrics endpoint.
+const MAX_METRICS_CONNECTIONS: usize = 32;
+
 /// A minimal HTTP/1.1 server: `GET /metrics` gets the text, anything else 404.
 pub async fn serve(
     listener: tokio::net::TcpListener,
     m: Arc<Metrics>,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) {
+    let permits = Arc::new(tokio::sync::Semaphore::new(MAX_METRICS_CONNECTIONS));
     tokio::pin!(shutdown);
     loop {
         let accepted = tokio::select! {
@@ -271,8 +275,13 @@ pub async fn serve(
         let Ok((mut stream, _)) = accepted else {
             continue;
         };
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            drop(stream);
+            continue;
+        };
         let m = m.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             let mut buf = vec![0u8; 4096];
             let n = match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await
             {
@@ -290,8 +299,11 @@ pub async fn serve(
                 "HTTP/1.1 {status}\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
-            let _ = stream.write_all(response.as_bytes()).await;
-            let _ = stream.shutdown().await;
+            let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            })
+            .await;
         });
     }
 }

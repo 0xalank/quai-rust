@@ -124,10 +124,25 @@ pub async fn serve_stream(
             served.rate_limited.fetch_add(1, Ordering::Relaxed);
             break;
         }
-        let Some(reply) = answer(store.as_ref(), &frame) else {
+        // Run store lookups/redb I/O on Tokio's blocking pool so inbound
+        // requests never stall the async P2P/RPC reactor threads.
+        let store_for_task = store.clone();
+        let reply = match tokio::task::spawn_blocking(move || {
+            answer(store_for_task.as_ref(), &frame)
+        })
+        .await
+        {
+            Ok(Some(reply)) => reply,
+            Ok(None) => continue,
+            Err(_) => break,
+        };
+        if reply.len() > MAX_FRAME_BYTES {
+            continue;
+        }
+        let Ok(len) = u32::try_from(reply.len()) else {
             continue;
         };
-        let mut out = (reply.len() as u32).to_be_bytes().to_vec();
+        let mut out = len.to_be_bytes().to_vec();
         out.extend_from_slice(&reply);
         let wrote = tokio::time::timeout(FRAME, async {
             stream.write_all(&out).await?;

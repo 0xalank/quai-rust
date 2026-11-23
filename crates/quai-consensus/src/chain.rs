@@ -69,6 +69,33 @@ impl Chain {
         // A value another thread set first is the same.
         Ok(CHAIN.get_or_init(|| c).clone())
     }
+    /// Quai Garden testnet, slice [0, 0].
+    pub fn garden() -> Result<Arc<Self>, Error> {
+        static CHAIN: OnceLock<Arc<Chain>> = OnceLock::new();
+        if let Some(c) = CHAIN.get() {
+            return Ok(c.clone());
+        }
+        let c = Arc::new(Self::new(ChainSpec::garden())?);
+        Ok(CHAIN.get_or_init(|| c).clone())
+    }
+    /// Quai Orchard testnet, slice [0, 0].
+    pub fn orchard() -> Result<Arc<Self>, Error> {
+        static CHAIN: OnceLock<Arc<Chain>> = OnceLock::new();
+        if let Some(c) = CHAIN.get() {
+            return Ok(c.clone());
+        }
+        let c = Arc::new(Self::new(ChainSpec::orchard())?);
+        Ok(CHAIN.get_or_init(|| c).clone())
+    }
+    /// Quai Lighthouse testnet, slice [0, 0].
+    pub fn lighthouse() -> Result<Arc<Self>, Error> {
+        static CHAIN: OnceLock<Arc<Chain>> = OnceLock::new();
+        if let Some(c) = CHAIN.get() {
+            return Ok(c.clone());
+        }
+        let c = Arc::new(Self::new(ChainSpec::lighthouse())?);
+        Ok(CHAIN.get_or_init(|| c).clone())
+    }
     /// A reviewed private profile as a chain. Its fingerprint stays the
     /// profile fingerprint, which binds permits and stored branches.
     pub fn from_private(p: Arc<PrivateChain>) -> Self {
@@ -89,13 +116,53 @@ impl Chain {
         // A value another thread set first is the same.
         Ok(CHAIN.get_or_init(|| c).clone())
     }
-    /// The chain for an export environment name.
+    /// The chain for an export environment name (slice [0, 0]).
     pub fn for_environment(environment: &str) -> Result<Arc<Self>, Error> {
-        match environment {
-            "colosseum" => Self::colosseum(),
-            "local" => Self::private_hierarchy(),
-            _ => Err(Error::Unsupported("unknown chain environment")),
+        Self::for_environment_and_location(environment, [0, 0])
+    }
+    /// The chain for an environment name and slice `[region, zone]`.
+    pub fn for_environment_and_location(
+        environment: &str,
+        location: [u8; 2],
+    ) -> Result<Arc<Self>, Error> {
+        if location == [0, 0] {
+            return match environment {
+                "colosseum" => Self::colosseum(),
+                "garden" => Self::garden(),
+                "orchard" => Self::orchard(),
+                "lighthouse" => Self::lighthouse(),
+                "local" => Self::private_hierarchy(),
+                _ => Err(Error::Unsupported("unknown chain environment")),
+            };
         }
+        let base_spec = match environment {
+            "colosseum" => ChainSpec::colosseum(),
+            "garden" => ChainSpec::garden(),
+            "orchard" => ChainSpec::orchard(),
+            "lighthouse" => ChainSpec::lighthouse(),
+            "local" => Self::private_hierarchy()?.spec().clone(),
+            _ => return Err(Error::Unsupported("unknown chain environment")),
+        };
+        let spec = base_spec
+            .with_location(location)
+            .map_err(|_| Error::Invalid("slice location"))?;
+        Ok(Arc::new(Self::new(spec)?))
+    }
+    /// The P2P gossip topic genesis prefix (`utils.MakeGenesis().ToBlock(0).Hash()`):
+    /// built from the same genesis fields with an empty `AllocHash`.
+    pub fn topic_genesis(&self) -> Result<Hash, Error> {
+        let g = &self.spec.genesis;
+        let record = build_genesis(&GenesisSpec {
+            context: 2,
+            nonce: g.nonce,
+            timestamp: g.timestamp,
+            extra: g.extra.clone(),
+            allocation_hash: [0u8; 32],
+            gas_limit: g.gas_limit,
+            difficulty: Uint::from_u128(g.difficulty),
+            starting_expansion: g.starting_expansion as u64,
+        })?;
+        Ok(record.id())
     }
     pub fn spec(&self) -> &ChainSpec {
         &self.spec
@@ -192,5 +259,33 @@ mod tests {
             assert_eq!(c.placement_profile(1).location, vec![0]);
             assert_eq!(c.zone_profile().gas_ceiling, p.gas_limit);
         }
+    }
+    #[test]
+    fn testnets_topic_genesis_and_non_zero_slices_build_cleanly() {
+        let col = Chain::colosseum().unwrap();
+        let topic = col.topic_genesis().unwrap();
+        assert_ne!(topic, [0u8; 32]);
+        assert_ne!(topic, col.genesis_hash());
+
+        let garden = Chain::garden().unwrap();
+        assert_eq!(
+            quai_primitives::encode_hex(&garden.genesis_hash()),
+            quai_primitives::spec::GARDEN_GENESIS_HASH
+        );
+        let orchard = Chain::orchard().unwrap();
+        assert_eq!(
+            quai_primitives::encode_hex(&orchard.genesis_hash()),
+            quai_primitives::spec::ORCHARD_GENESIS_HASH
+        );
+        let lighthouse = Chain::lighthouse().unwrap();
+        assert_eq!(
+            quai_primitives::encode_hex(&lighthouse.genesis_hash()),
+            quai_primitives::spec::LIGHTHOUSE_GENESIS_HASH
+        );
+
+        let slice01 = Chain::for_environment_and_location("colosseum", [0, 1]).unwrap();
+        assert_eq!(slice01.location(), [0, 1]);
+        assert_eq!(slice01.genesis_hash(), col.genesis_hash());
+        assert_eq!(slice01.zone_profile().location, vec![0, 1]);
     }
 }

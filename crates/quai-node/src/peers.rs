@@ -30,7 +30,10 @@ use prost::Message;
 use quai_consensus::verifier::PINNED_SCHEDULE as SCHEDULE;
 use quai_network::{
     decode_envelope,
-    public::{PublicNode, COLOSSEUM_BOOTNODES},
+    public::{
+        bootnodes_for, PublicNode, COLOSSEUM_BOOTNODES, GARDEN_BOOTNODES, LIGHTHOUSE_BOOTNODES,
+        ORCHARD_BOOTNODES,
+    },
     response,
     transport::WireStream,
     RequestBook,
@@ -1462,6 +1465,17 @@ impl BlockSource for PeerSource {
     }
 }
 
+fn bootnodes_for_genesis(genesis: &Hash) -> &'static [&'static str] {
+    let hex_hash = quai_primitives::encode_hex(genesis);
+    match hex_hash.as_str() {
+        quai_primitives::spec::COLOSSEUM_GENESIS_HASH => &COLOSSEUM_BOOTNODES,
+        quai_primitives::spec::GARDEN_GENESIS_HASH => &GARDEN_BOOTNODES,
+        quai_primitives::spec::ORCHARD_GENESIS_HASH => &ORCHARD_BOOTNODES,
+        quai_primitives::spec::LIGHTHOUSE_GENESIS_HASH => &LIGHTHOUSE_BOOTNODES,
+        _ => bootnodes_for("local"),
+    }
+}
+
 /// Dial the configured and the public peers; every connected peer that
 /// answers the genesis check becomes a source.
 async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: crate::log::Log) {
@@ -1497,7 +1511,11 @@ async fn connect(node: Arc<PublicNode>, shared: Arc<Shared>, o: Options, log: cr
         match public_allowed() {
             Ok(gateway) => {
                 log.info(&format!("public peers allowed (gateway {gateway})"));
-                targets.extend(COLOSSEUM_BOOTNODES.iter().filter_map(|a| a.parse().ok()));
+                targets.extend(
+                    bootnodes_for_genesis(&o.genesis)
+                        .iter()
+                        .filter_map(|a| a.parse().ok()),
+                );
             }
             Err(e) => log.warn(&format!("public peers not used: {e}")),
         }
@@ -1671,11 +1689,12 @@ async fn assemble(shared: Arc<Shared>, o: Options, tx: SyncSender<Item>, log: cr
 // ---------------------------------------------------------------------------
 // Single requests and ranges for the shadow bootstrap (`bootstrap.rs`).
 
-/// Dial the configured peers and, when allowed, the colosseum boot peers,
+/// Dial the configured peers and, when allowed, the boot peers for `genesis`,
 /// and start a Kademlia walk for more.
-pub async fn dial_targets(
+pub async fn dial_targets_for(
     node: Arc<PublicNode>,
     peers: Vec<Multiaddr>,
+    genesis: Hash,
     public: bool,
     log: crate::log::Log,
 ) {
@@ -1684,7 +1703,11 @@ pub async fn dial_targets(
         match public_allowed() {
             Ok(gateway) => {
                 log.info(&format!("public peers allowed (gateway {gateway})"));
-                targets.extend(COLOSSEUM_BOOTNODES.iter().filter_map(|a| a.parse().ok()));
+                targets.extend(
+                    bootnodes_for_genesis(&genesis)
+                        .iter()
+                        .filter_map(|a| a.parse().ok()),
+                );
             }
             Err(e) => log.warn(&format!("public peers not used: {e}")),
         }
@@ -1714,6 +1737,22 @@ pub async fn dial_targets(
     if public {
         let _ = node.closest_peers(node.id.to_bytes()).await;
     }
+}
+
+/// Dial the configured peers and, when allowed, the colosseum boot peers,
+/// and start a Kademlia walk for more.
+pub async fn dial_targets(
+    node: Arc<PublicNode>,
+    peers: Vec<Multiaddr>,
+    public: bool,
+    log: crate::log::Log,
+) {
+    let colosseum: Hash =
+        quai_primitives::decode_hex(quai_primitives::spec::COLOSSEUM_GENESIS_HASH)
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .unwrap_or([0u8; 32]);
+    dial_targets_for(node, peers, colosseum, public, log).await;
 }
 /// The canonical hash at `number` in context `ctx` of one peer (None: the
 /// peer has no block there).

@@ -94,11 +94,30 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<
             Ok(json::u64_hex(view.utxo_set_size(&head)?))
         })(),
         "quai_getSupplyAnalyticsForBlock" => supply_analytics(view, params),
-        "quai_rewardAnalytics" => Args::new(params, 0).map(|_| {
-            // Without the supply index the total supply reads zero, so the
-            // mined supply (total less the genesis unlocks, at least zero)
-            // is "0" on every node that has its canonical headers.
-            json!({"cumulativeQuaiMined": "0"})
+        "quai_rewardAnalytics" => Args::new(params, 0).and_then(|_| {
+            let head = head_block(view)?;
+            if let Some(s) = view.supply_analytics(&head.hash)? {
+                use crypto_bigint::Encoding as _;
+                let total = crypto_bigint::U256::from_be_bytes(s.quai_total);
+                let mut dec = String::new();
+                if total == crypto_bigint::U256::ZERO {
+                    dec.push('0');
+                } else {
+                    let mut n = total;
+                    let ten = crypto_bigint::U256::from_u64(10);
+                    let mut digits = Vec::new();
+                    while n != crypto_bigint::U256::ZERO {
+                        let q = n.wrapping_div(&ten);
+                        let r = n.wrapping_sub(&q.wrapping_mul(&ten));
+                        digits.push((b'0' + crypto_bigint::Encoding::to_be_bytes(&r)[31]) as char);
+                        n = q;
+                    }
+                    digits.reverse();
+                    dec.extend(digits);
+                }
+                return Ok(json!({"cumulativeQuaiMined": dec}));
+            }
+            Ok(json!({"cumulativeQuaiMined": "0"}))
         }),
         "quai_getKQuaiAndUpdateBit" => (|| {
             let a = Args::new(params, 1)?;
@@ -216,9 +235,9 @@ fn header_ref(view: &dyn ChainView, at: BlockRef) -> R<Option<Arc<BlockData>>> {
 fn supply_analytics(view: &dyn ChainView, params: &Value) -> R<Value> {
     let a = Args::new(params, 1)?;
     let at = a.get(0, args::block_ref)?;
-    if header_ref(view, at)?.is_none() {
+    let Some(block) = header_ref(view, at)? else {
         return Ok(Value::Null);
-    }
+    };
     // An error of GetBalance leaves the total at zero; one this view cannot
     // answer is not Go's.
     let burned = match state_ref(view, at).and_then(|s| {
@@ -229,6 +248,28 @@ fn supply_analytics(view: &dyn ChainView, params: &Value) -> R<Value> {
         Err(e) if e.code == super::UNAVAILABLE => return Err(e),
         Err(_) => [0; 32],
     };
+    if let Some(indexed) = view.supply_analytics(&block.hash)? {
+        use crypto_bigint::{Encoding as _, U256};
+        let total_u = U256::from_be_bytes(indexed.quai_total);
+        let burned_u = U256::from_be_bytes(burned);
+        let total = if total_u >= burned_u {
+            json::big_hex(&total_u.wrapping_sub(&burned_u).to_be_bytes())
+        } else {
+            let neg = burned_u.wrapping_sub(&total_u).to_be_bytes();
+            match json::big_hex(&neg) {
+                Value::String(s) if s != "0x0" => Value::String(format!("-{s}")),
+                v => v,
+            }
+        };
+        return Ok(json!({
+            "quaiSupplyAdded": json::big_hex(&indexed.quai_added),
+            "quaiSupplyRemoved": json::big_hex(&indexed.quai_removed),
+            "quaiSupplyTotal": total,
+            "qiSupplyAdded": json::big_hex(&indexed.qi_added),
+            "qiSupplyRemoved": json::big_hex(&indexed.qi_removed),
+            "qiSupplyTotal": json::big_hex(&indexed.qi_total),
+        }));
+    }
     let total = match json::big_hex(&burned) {
         Value::String(s) if s != "0x0" => Value::String(format!("-{s}")),
         v => v,

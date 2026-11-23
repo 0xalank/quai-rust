@@ -102,6 +102,8 @@ pub struct ForkSchedule {
     /// the full gas and state ceilings (core/block_validator.go CalcGasLimit,
     /// consensus/misc/statefee.go CalcStateLimit).
     pub lockup_start: u64,
+    /// params.StateRepairForkBlock (prime terminus; u64::MAX leaves it disabled).
+    pub state_repair: u64,
 }
 
 /// The fork schedule of go-quai v0.57.0 (params/protocol_params.go).
@@ -139,7 +141,12 @@ impl ForkSchedule {
         max_grind_increase: 1_865_000,
         max_code_size: 3_490_000,
         lockup_start: 2 * BLOCKS_PER_MONTH,
+        state_repair: u64::MAX,
     };
+    /// params.StateRepairActive(primeHeight): disabled while `state_repair == u64::MAX`.
+    pub const fn state_repair_active(&self, prime: u64) -> bool {
+        self.state_repair != u64::MAX && prime >= self.state_repair
+    }
     /// Last prime terminus of the ProgPoW grace period (inclusive):
     /// KawPowForkBlock + KawPowTransitionPeriod.
     pub const fn progpow_grace_end(&self) -> u64 {
@@ -376,41 +383,55 @@ fn quorum_keys() -> [[u8; 33]; 3] {
 /// params/config.go ProgpowColosseumGenesisHash.
 pub const COLOSSEUM_GENESIS_HASH: &str =
     "0xac81c28f1a72591b87b5f16c9793cdc0e87c45c6d426d1a364c3b8f6386b5b8b";
+/// params/config.go ProgpowGardenGenesisHash.
+pub const GARDEN_GENESIS_HASH: &str =
+    "0x8a611a707f8da1129432cf5b97e6f1eccf902797124f26ea7b6a929b63fd8fde";
+/// params/config.go ProgpowOrchardGenesisHash.
+pub const ORCHARD_GENESIS_HASH: &str =
+    "0x3c9e1b5879118260b45ec05aebdd127808e830ecf5fc5ef9cb46405d339f8dff";
+/// params/config.go ProgpowLighthouseGenesisHash.
+pub const LIGHTHOUSE_GENESIS_HASH: &str =
+    "0x83f1a345d1406d8d8b8e83b1d8e8369a3aa3070448d52cdffd30769a512b07c7";
+/// params/config.go ProgpowLocalGenesisHash.
+pub const LOCAL_GENESIS_HASH: &str =
+    "0x718f13b40bb30d77a53dbd2688a6beb253c169fc2bf9114bb7b16e126c21a170";
 /// params/config.go AllocHash.
 pub const COLOSSEUM_ALLOC_HASH: &str =
     "0xa1f3f565b62c83fcc0e61dfd219409fb06526570934a5d94b5db5afdad13f1da";
+/// params/config.go LighthouseAllocHash.
+pub const LIGHTHOUSE_ALLOC_HASH: &str =
+    "0x7af9921c72ee23443ec6bd016f92f1a6da0534aa931030c0a24f54107d35e010";
 /// cmd/utils/flags.go GenesisNonce default; GetGenesisNonce reads the first
 /// 8 bytes of `common.FromHex(flag)` as the nonce and the rest as extra data.
 pub const COLOSSEUM_GENESIS_NONCE_FLAG: &str = "23621466532946281564673705261963422";
 
 impl ChainSpec {
-    /// Quai mainnet, slice [0, 0] (params.ColosseumName with the progpow
-    /// engine, cmd/utils/flags.go defaults).
-    pub fn colosseum() -> Self {
+    fn official_network(
+        environment: &str,
+        chain_id: u64,
+        genesis_hash: &str,
+        difficulty: u128,
+        alloc_hash: &str,
+        allocations: Allocations,
+    ) -> Self {
         let flag = go_from_hex(COLOSSEUM_GENESIS_NONCE_FLAG).expect("pinned genesis nonce flag");
-        // core/genesis.go DefaultColosseumGenesisBlock (progpow engine).
-        let difficulty: u128 = 1_500_000_000_000;
         Self {
-            environment: "colosseum".into(),
-            // params/config.go ProgpowColosseumChainConfig.ChainID.
-            chain_id: 9,
+            environment: environment.into(),
+            chain_id,
             location: [0, 0],
             genesis: Genesis {
-                hash: hash(COLOSSEUM_GENESIS_HASH),
+                hash: hash(genesis_hash),
                 nonce: u64::from_be_bytes(flag[..8].try_into().expect("8-byte nonce")),
                 extra: flag[8..].to_vec(),
                 timestamp: 0,
                 gas_limit: 12_000_000,
                 difficulty,
-                allocation_hash: hash(COLOSSEUM_ALLOC_HASH),
+                allocation_hash: hash(alloc_hash),
                 starting_expansion: 0,
             },
             header: HeaderPolicy {
-                // cmd/utils/flags.go: MinDifficulty = genesis difficulty / 2.
                 minimum_difficulty: difficulty / 2,
-                // params.DurationLimit.
                 duration: 5,
-                // params.ColosseumGasCeil.
                 gas_ceiling: 50_000_000,
                 state_ceiling: STATE_CEIL,
                 min_gas_limit: MIN_GAS_LIMIT,
@@ -421,16 +442,88 @@ impl ChainSpec {
                 max_extra_data: MAXIMUM_EXTRA_DATA_SIZE,
                 difficulty_adjustment_period: DIFFICULTY_ADJUSTMENT_PERIOD,
                 difficulty_adjustment_factor: DIFFICULTY_ADJUSTMENT_FACTOR,
-                // cmd/utils/flags.go: DefaultGenesisHash = ProgpowColosseumGenesisHash.
-                default_genesis: Some(hash(COLOSSEUM_GENESIS_HASH)),
+                default_genesis: Some(hash(genesis_hash)),
             },
             quorum_keys: quorum_keys(),
             economics: ECONOMICS,
-            allocations: Allocations::Official,
+            allocations,
             lock_periods: LOCK_PERIODS,
             trim_depths: TRIM_DEPTHS,
             forks: FORKS,
         }
+    }
+    /// Quai mainnet, slice [0, 0] (params.ColosseumName with the progpow
+    /// engine, cmd/utils/flags.go defaults).
+    pub fn colosseum() -> Self {
+        Self::official_network(
+            "colosseum",
+            9,
+            COLOSSEUM_GENESIS_HASH,
+            1_500_000_000_000,
+            COLOSSEUM_ALLOC_HASH,
+            Allocations::Official,
+        )
+    }
+    /// Quai Garden testnet, slice [0, 0] (params.GardenName).
+    pub fn garden() -> Self {
+        Self::official_network(
+            "garden",
+            12_000,
+            GARDEN_GENESIS_HASH,
+            300_000_001,
+            COLOSSEUM_ALLOC_HASH,
+            Allocations::Official,
+        )
+    }
+    /// Quai Orchard testnet, slice [0, 0] (params.OrchardName).
+    pub fn orchard() -> Self {
+        Self::official_network(
+            "orchard",
+            15_000,
+            ORCHARD_GENESIS_HASH,
+            50_000_000_001,
+            COLOSSEUM_ALLOC_HASH,
+            Allocations::Official,
+        )
+    }
+    /// Quai Lighthouse testnet, slice [0, 0] (params.LighthouseName).
+    pub fn lighthouse() -> Self {
+        Self::official_network(
+            "lighthouse",
+            17_000,
+            LIGHTHOUSE_GENESIS_HASH,
+            750_000_000,
+            LIGHTHOUSE_ALLOC_HASH,
+            Allocations::None,
+        )
+    }
+    /// Default go-quai local chain (params.LocalName, ProgpowLocalGenesisHash).
+    pub fn local_default() -> Self {
+        let mut spec = Self::official_network(
+            "local",
+            1337,
+            LOCAL_GENESIS_HASH,
+            2_000,
+            COLOSSEUM_ALLOC_HASH,
+            Allocations::Official,
+        );
+        spec.genesis.nonce = 0;
+        spec.genesis.extra = vec![];
+        spec
+    }
+    /// Override the slice `[region, zone]` on this spec.
+    pub fn with_location(mut self, location: [u8; 2]) -> Result<Self, String> {
+        if location[0] > 15 || location[1] > 15 {
+            return Err(format!(
+                "invalid slice location [{}, {}]: region and zone must be 0..=15",
+                location[0], location[1]
+            ));
+        }
+        self.location = location;
+        if location != [0, 0] {
+            self.allocations = Allocations::None;
+        }
+        Ok(self)
     }
     /// A private test chain: params.LocalName with chain ID 1337
     /// (ProgpowLocalChainConfig), the header policy of the Go oracle harnesses

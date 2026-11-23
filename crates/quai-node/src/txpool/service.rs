@@ -32,6 +32,7 @@ pub struct Service {
     clock: Clock,
     clients: Vec<Arc<sharing::Client>>,
     sync_tx_with_return: bool,
+    v0570_compat: bool,
     fee_cap: f64,
     chain_id: u64,
     remote: Mutex<Lru<Hash, Tx>>,
@@ -113,6 +114,7 @@ impl Service {
         }
         Ok(Self {
             sync_tx_with_return: config.sync_tx_with_return,
+            v0570_compat: config.v0570_compat,
             fee_cap: config.rpc_tx_fee_cap,
             chain_id: chain.chain_id(),
             pool: Mutex::new(pool),
@@ -181,6 +183,9 @@ impl Service {
             }
             self.forward(&self.clients, &tx);
             return Ok(());
+        }
+        if !self.v0570_compat {
+            self.pool().validate_for_forwarding(&tx)?;
         }
         let first = self.clients[0].clone();
         let proto = tx.proto.clone();

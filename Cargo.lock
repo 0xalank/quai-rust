@@ -2591,6 +2591,7 @@ dependencies = [
 name = "quai-node"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "crypto-bigint",
  "futures-util",
  "k256",
@@ -2602,7 +2603,9 @@ dependencies = [
  "quai-primitives",
  "quai-rpc",
  "quai-store",
+ "rand 0.8.8",
  "redb",
+ "secp256k1",
  "serde",
  "serde_json",
  "sha2",

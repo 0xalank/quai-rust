@@ -568,6 +568,9 @@ fn a_source_that_waits_gives_the_export_result() {
         commit_every: 1_000,
         store: false,
         shadow: false,
+        archive: false,
+        index_address_utxos: false,
+        prune_blocks: None,
     };
     let chain = quai_node::spec::Chain::for_environment("local").unwrap();
     let mut p =

@@ -20,6 +20,8 @@ use quai_rpc::view::{
     BlockData, CallError, CallRequest, CallResult, ChainView, TracedAccessList, ViewError,
 };
 use std::collections::BTreeSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 fn view_error(e: impl std::fmt::Display) -> CallError {
     CallError::View(ViewError::Unavailable(format!("execution: {e}")))
@@ -33,9 +35,20 @@ pub fn call(
     block: &BlockData,
     request: &CallRequest,
 ) -> Result<CallResult, CallError> {
+    call_cancellable(view, world, block, request, None)
+}
+
+/// Same as [`call`], cooperatively stopping EVM execution when `cancel` is set.
+pub fn call_cancellable(
+    view: &ExportView,
+    world: World,
+    block: &BlockData,
+    request: &CallRequest,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<CallResult, CallError> {
     let context = context(view, block)?;
     let environment = environment(view, block)?;
-    run(&world, &context, &environment, request, view.head())
+    run_cancellable(&world, &context, &environment, request, view.head(), cancel)
 }
 
 /// Run `request` on `world` in the block whose fields `block` holds.
@@ -47,6 +60,17 @@ pub fn run(
     environment: &Environment,
     request: &CallRequest,
     head: u64,
+) -> Result<CallResult, CallError> {
+    run_cancellable(world, block, environment, request, head, None)
+}
+
+pub fn run_cancellable(
+    world: &World,
+    block: &evm::Context,
+    environment: &Environment,
+    request: &CallRequest,
+    head: u64,
+    cancel: Option<Arc<AtomicBool>>,
 ) -> Result<CallResult, CallError> {
     let message = Message {
         from: request.from,
@@ -71,7 +95,12 @@ pub fn run(
         None
     };
     let before = tracer.as_ref().map(AccessListTracer::access_list);
-    match message::apply(world, block, environment, &message, tracer).map_err(view_error)? {
+    let applied = match cancel {
+        Some(c) => message::apply_cancellable(world, block, environment, &message, tracer, Some(c))
+            .map_err(view_error)?,
+        None => message::apply(world, block, environment, &message, tracer).map_err(view_error)?,
+    };
+    match applied {
         Applied::Rejected { error, intrinsic } => Err(CallError::Message {
             text: error,
             intrinsic_gas: intrinsic,

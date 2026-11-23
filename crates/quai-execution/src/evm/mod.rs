@@ -48,7 +48,8 @@ use quai_primitives::{
     Hash,
 };
 use state::World;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use word::{address, boolean, bytes, from_bytes, uint, Word};
 /// Diagnostic trace budget. Only `Context::trace` frames use it; consensus
 /// execution never sets that flag.
@@ -299,12 +300,80 @@ impl From<state::ReadError> for Stop {
     }
 }
 
+/// Compact JUMPDEST bitset: zero heap allocations for small code (`<= 64` bytes)
+/// and cached `Arc<Vec<u64>>` keyed by `keccak(code)` for larger contracts.
+#[derive(Clone)]
+enum JumpTable {
+    Inline(u64),
+    Shared(Arc<Vec<u64>>),
+}
+impl JumpTable {
+    fn contains(&self, pc: usize) -> bool {
+        match self {
+            Self::Inline(word) => pc < 64 && ((word >> pc) & 1) != 0,
+            Self::Shared(words) => words
+                .get(pc >> 6)
+                .is_some_and(|w| ((w >> (pc & 63)) & 1) != 0),
+        }
+    }
+    fn analyze(code: &[u8]) -> Self {
+        if code.len() <= 64 {
+            let mut bits = 0u64;
+            let mut pc = 0;
+            while let Some(&op) = code.get(pc) {
+                if op == 0x5b {
+                    bits |= 1u64 << pc;
+                }
+                pc += 1;
+                if (0x60..=0x7f).contains(&op) {
+                    pc += (op - 0x5f) as usize;
+                }
+            }
+            return Self::Inline(bits);
+        }
+        let hash = keccak(code);
+        static CACHE: OnceLock<Mutex<(HashMap<Hash, Arc<Vec<u64>>>, VecDeque<Hash>)>> =
+            OnceLock::new();
+        let cache = CACHE.get_or_init(|| Mutex::new((HashMap::new(), VecDeque::new())));
+        if let Ok(guard) = cache.lock() {
+            if let Some(hit) = guard.0.get(&hash) {
+                return Self::Shared(hit.clone());
+            }
+        }
+        let mut words = vec![0u64; code.len().div_ceil(64)];
+        let mut pc = 0;
+        while let Some(&op) = code.get(pc) {
+            if op == 0x5b {
+                words[pc >> 6] |= 1u64 << (pc & 63);
+            }
+            pc += 1;
+            if (0x60..=0x7f).contains(&op) {
+                pc += (op - 0x5f) as usize;
+            }
+        }
+        let table = Arc::new(words);
+        if let Ok(mut guard) = cache.lock() {
+            const MAX_CACHED_TABLES: usize = 256;
+            if !guard.0.contains_key(&hash) {
+                if guard.0.len() >= MAX_CACHED_TABLES {
+                    if let Some(old) = guard.1.pop_front() {
+                        guard.0.remove(&old);
+                    }
+                }
+                guard.0.insert(hash, table.clone());
+                guard.1.push_back(hash);
+            }
+        }
+        Self::Shared(table)
+    }
+}
+
 struct Machine<'a> {
     ctx: &'a Context,
     state: &'a mut Journal,
     depth: usize,
     gas_levels: u128,
-    code: Vec<u8>,
+    code: &'a [u8],
     input: &'a [u8],
     stack: Vec<Word>,
     memory: Vec<u8>,
@@ -315,7 +384,7 @@ struct Machine<'a> {
     gas: u64,
     state_gas: u64,
 
-    jumps: BTreeSet<usize>,
+    jumps: JumpTable,
 }
 /// `n` bytes of memory at `o`. `step` expands memory over every range that an
 /// operation uses before the operation runs, so a missing range is an
@@ -948,7 +1017,7 @@ impl Machine<'_> {
                 if jump {
                     let pc = uint(dest)
                         .and_then(|n| usize::try_from(n).ok())
-                        .filter(|n| self.jumps.contains(n))
+                        .filter(|&n| self.jumps.contains(n))
                         .ok_or(Fault::InvalidJump)?;
                     self.pc = pc;
                     return Ok(());
@@ -1215,99 +1284,167 @@ pub fn execute_frame(
     world
         .validate()
         .map_err(|error| CapabilityError::state(error, CapabilityError::Limit("world snapshot")))?;
-    let code = world
+    let target_account = world
         .account(&context.address)?
-        .ok_or(CapabilityError::Context("existing account required"))?
-        .code
-        .clone();
-    let mut state = Journal::new(world.clone())?;
+        .ok_or(CapabilityError::Context("existing account required"))?;
+    let tx_guard = world.begin_tx();
+    let mut state = match Journal::new_validated(std::mem::take(world)) {
+        Ok(s) => s,
+        Err(e) => return Err(e),
+    };
     if context.address_listed {
         state.addresses.insert(context.address);
     }
     state
         .slots
         .extend(context.warm_slots.iter().map(|k| (context.address, *k)));
-    let checkpoint = state.snapshot()?;
-    let outcome = run_code(&mut state, context, input, gas, code, 0)?;
+    let checkpoint = match state.snapshot() {
+        Ok(cp) => cp,
+        Err(e) => {
+            *world = state.into_world().unwrap_or_default();
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+    };
+    let outcome = match run_code(&mut state, context, input, gas, &target_account.code, 0) {
+        Ok(o) => o,
+        Err(e) => {
+            *world = state.abort_to(checkpoint);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+    };
     if outcome.error.is_none() && !outcome.reverted {
-        state.finalize_sizes()?;
-        state.commit(checkpoint)?;
-        *world = state.into_world()?;
+        if let Err(e) = state.finalize_sizes() {
+            *world = state.abort_to(checkpoint);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+        if let Err(e) = state.commit(checkpoint) {
+            *world = state.abort_to(checkpoint);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+        match state.finish_world() {
+            Ok(w) => {
+                *world = w;
+                world.commit_tx(tx_guard);
+            }
+            Err((w, e)) => {
+                *world = w;
+                world.rollback_tx(tx_guard);
+                return Err(e);
+            }
+        }
     } else {
-        state.revert(checkpoint)?;
+        *world = state.abort_to(checkpoint);
+        world.rollback_tx(tx_guard);
     }
     Ok(outcome)
 }
-/// Call frames that a transaction runs on its caller's thread. go-quai allows
-/// 1,025 nested frames (`params.CallCreateDepth`) and grows goroutine stacks
-/// on demand. A Rust thread has a fixed stack (2 MiB for a spawned thread,
-/// 8 MiB for a main thread). One frame takes about 6 KiB in release builds and
-/// up to 52 KiB in debug builds, and 50,000,000 gas reaches about 700 frames.
+/// Call frames that a transaction runs on its caller's thread before switching
+/// in-place to a bounded deep-stack worker thread.
 const CALLER_STACK_FRAMES: usize = if cfg!(debug_assertions) { 16 } else { 64 };
-/// Stack of the thread that runs a deeper transaction: 1,025 debug frames fit.
-const DEEP_STACK_BYTES: usize = 128 << 20;
-const DEEP_CALLS: &str = "call chain deeper than the caller stack";
+/// Stack of the scoped thread that finishes a deep call chain (1,025 frames
+/// with heap-boxed `Machine` fit comfortably inside 16 MiB in release / 48 MiB
+/// in debug, avoiding the old 128 MiB per-thread spike).
+const DEEP_STACK_BYTES: usize = if cfg!(debug_assertions) {
+    48 << 20
+} else {
+    16 << 20
+};
+/// Bound concurrent deep-stack OS threads so RPC traffic cannot exhaust virtual
+/// memory or thread limits.
+const MAX_DEEP_STACK_THREADS: usize = 4;
+struct DeepStackGate {
+    active: Mutex<usize>,
+    available: Condvar,
+}
+struct DeepStackPermit(&'static DeepStackGate);
+impl Drop for DeepStackPermit {
+    fn drop(&mut self) {
+        let mut active = self
+            .0
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *active = active.saturating_sub(1);
+        self.0.available.notify_one();
+    }
+}
+fn acquire_deep_stack_slot() -> DeepStackPermit {
+    static GATE: OnceLock<DeepStackGate> = OnceLock::new();
+    let gate = GATE.get_or_init(|| DeepStackGate {
+        active: Mutex::new(0),
+        available: Condvar::new(),
+    });
+    let mut active = gate
+        .active
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while *active >= MAX_DEEP_STACK_THREADS {
+        active = gate
+            .available
+            .wait(active)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    *active += 1;
+    DeepStackPermit(gate)
+}
 thread_local! {
     static ON_DEEP_STACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
-/// Run one transaction against `world`. A call chain that grows past
-/// `CALLER_STACK_FRAMES` stops in `run_code` before any change reaches
-/// `world`: transactions work on a journal over a clone and write `world` only
-/// at their end. The transaction then runs again from the start on a thread
-/// whose stack holds every frame. Execution is deterministic, so the result
-/// equals one run on a large enough stack.
+/// Run one transaction against `world`. Deep call chains switch in-place inside
+/// [`run_code`] without discarding or replaying earlier work.
 pub(crate) fn with_call_stack<T: Send>(
     world: &mut World,
     run: impl Fn(&mut World) -> Result<T, CapabilityError> + Sync,
 ) -> Result<T, CapabilityError> {
-    match run(world) {
-        Err(CapabilityError::StateUnavailable(message)) if message == DEEP_CALLS => {
-            std::thread::scope(|scope| {
-                let deep = std::thread::Builder::new()
-                    .name("quai-evm-deep".into())
-                    .stack_size(DEEP_STACK_BYTES)
-                    .spawn_scoped(scope, || {
-                        ON_DEEP_STACK.with(|on| on.set(true));
-                        run(world)
-                    })
-                    .map_err(|error| {
-                        CapabilityError::StateUnavailable(format!("EVM stack thread: {error}"))
-                    })?;
-                deep.join()
-                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-            })
-        }
-        other => other,
-    }
+    run(world)
 }
 pub(crate) fn run_code(
     state: &mut Journal,
     context: &Context,
     input: &[u8],
     gas: u64,
-    code: Vec<u8>,
+    code: &[u8],
     depth: usize,
 ) -> Result<Outcome, CapabilityError> {
     if depth >= CALLER_STACK_FRAMES && !ON_DEEP_STACK.with(|on| on.get()) {
-        return Err(CapabilityError::StateUnavailable(DEEP_CALLS.into()));
+        let _permit = acquire_deep_stack_slot();
+        return std::thread::scope(|scope| {
+            let deep = std::thread::Builder::new()
+                .name("quai-evm-deep".into())
+                .stack_size(DEEP_STACK_BYTES)
+                .spawn_scoped(scope, || {
+                    ON_DEEP_STACK.with(|on| on.set(true));
+                    run_code_inner(state, context, input, gas, code, depth)
+                })
+                .map_err(|error| {
+                    CapabilityError::StateUnavailable(format!("EVM stack thread: {error}"))
+                })?;
+            deep.join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        });
     }
+    run_code_inner(state, context, input, gas, code, depth)
+}
+fn run_code_inner(
+    state: &mut Journal,
+    context: &Context,
+    input: &[u8],
+    gas: u64,
+    code: &[u8],
+    depth: usize,
+) -> Result<Outcome, CapabilityError> {
     let initial_size = state
         .world()
         .account(&context.address)?
         .map(|a| a.storage_size)
         .unwrap_or(Word::ZERO);
-    let mut jumps = BTreeSet::new();
-    let mut pc = 0;
-    while let Some(&op) = code.get(pc) {
-        if op == 0x5b {
-            jumps.insert(pc);
-        }
-        pc += 1;
-        if (0x60..=0x7f).contains(&op) {
-            pc += (op - 0x5f) as usize;
-        }
-    }
-    let mut machine = Machine {
+    let jumps = JumpTable::analyze(code);
+    let cancel = state.cancel.clone();
+    let mut machine = Box::new(Machine {
         ctx: context,
         state,
         depth,
@@ -1324,12 +1461,19 @@ pub(crate) fn run_code(
         state_gas: 0,
 
         jumps,
-    };
+    });
     // Gas bounds the loop: see the module documentation for the halting argument.
     let stop = if machine.code.is_empty() {
         Stop::Success(vec![])
     } else {
+        let mut steps: u32 = 0;
         loop {
+            if let Some(flag) = &cancel {
+                steps = steps.wrapping_add(1);
+                if steps & 0x3ff == 0 && flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    break Stop::Capability(CapabilityError::Limit("cancelled"));
+                }
+            }
             if let Err(stop) = machine.step() {
                 break stop;
             }

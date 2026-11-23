@@ -74,6 +74,99 @@ impl NodeSet {
     }
 }
 
+/// Multi-slice node set for arbitrary hierarchy expansion numbers
+/// (`quai_primitives::spec::hierarchy_size(expansion)` = `(regions, zones)`).
+/// Keeps one prime node, `regions` region nodes, and `regions * zones` zone
+/// nodes so coordinator fork choice works cleanly beyond expansion 0.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpandedNodeSet {
+    pub expansion: u8,
+    pub regions: usize,
+    pub zones: usize,
+    pub prime: Node,
+    pub region_nodes: Vec<Node>,
+    pub zone_nodes: Vec<Node>,
+}
+impl ExpandedNodeSet {
+    pub fn at(expansion: u8, hash: Hash, entropy: U256) -> Self {
+        let (r, z) = quai_primitives::spec::hierarchy_size(expansion);
+        let regions = r as usize;
+        let zones = z as usize;
+        let node = Node { hash, entropy };
+        Self {
+            expansion,
+            regions,
+            zones,
+            prime: node,
+            region_nodes: vec![node; regions],
+            zone_nodes: vec![node; regions * zones],
+        }
+    }
+    pub fn zone_index(&self, slice: [u8; 2]) -> Option<usize> {
+        let r = slice[0] as usize;
+        let z = slice[1] as usize;
+        if r < self.regions && z < self.zones {
+            Some(r * self.zones + z)
+        } else {
+            None
+        }
+    }
+    pub fn extendable(&self, slice: [u8; 2], parents: &[Hash; 3], order: u8) -> bool {
+        let Some(zi) = self.zone_index(slice) else {
+            return false;
+        };
+        let ri = slice[0] as usize;
+        match order {
+            0 => {
+                parents[0] == self.prime.hash
+                    && parents[1] == self.region_nodes[ri].hash
+                    && parents[2] == self.zone_nodes[zi].hash
+            }
+            1 => parents[1] == self.region_nodes[ri].hash && parents[2] == self.zone_nodes[zi].hash,
+            2 => parents[2] == self.zone_nodes[zi].hash,
+            _ => false,
+        }
+    }
+    pub fn update(&mut self, slice: [u8; 2], hash: Hash, entropy: U256, order: u8) -> bool {
+        let Some(zi) = self.zone_index(slice) else {
+            return false;
+        };
+        let ri = slice[0] as usize;
+        let node = Node { hash, entropy };
+        match order {
+            0 => {
+                self.prime = node;
+                self.region_nodes[ri] = node;
+                self.zone_nodes[zi] = node;
+                true
+            }
+            1 => {
+                self.region_nodes[ri] = node;
+                self.zone_nodes[zi] = node;
+                true
+            }
+            2 => {
+                self.zone_nodes[zi] = node;
+                true
+            }
+            _ => false,
+        }
+    }
+    pub fn entropy(&self) -> U256 {
+        let mut total = self.prime.entropy;
+        for n in &self.region_nodes {
+            total = total.wrapping_add(&n.entropy);
+        }
+        for n in &self.zone_nodes {
+            total = total.wrapping_add(&n.entropy);
+        }
+        total
+    }
+    pub fn zone(&self, slice: [u8; 2]) -> Option<Hash> {
+        self.zone_index(slice).map(|i| self.zone_nodes[i].hash)
+    }
+}
+
 /// The entropy-keyed pending node sets and the best entropy.
 pub struct Choice {
     sets: HashMap<U256, NodeSet>,
@@ -111,9 +204,36 @@ impl Choice {
             let Some(old) = self.inserted.pop_front() else {
                 break;
             };
+            // Never evict the current best node set; keep it at the back of
+            // the eviction queue so it stays addressable across low-entropy bursts.
+            if old == self.best && self.sets.len() > 1 {
+                self.inserted.push_back(old);
+                continue;
+            }
             self.sets.remove(&old);
-            self.order.retain(|k| *k != old);
+            if let Ok(pos) = self.order.binary_search(&old) {
+                self.order.remove(pos);
+            }
         }
+    }
+    /// Remove every candidate node set referencing `hash` (for example after
+    /// state execution rejects a block that passed stateless checks), and
+    /// recompute `best` from the remaining sets.
+    pub fn remove_hash(&mut self, hash: &Hash) {
+        let mut removed = Vec::new();
+        self.sets.retain(|k, set| {
+            let keep = !set.nodes.iter().any(|n| n.hash == *hash);
+            if !keep {
+                removed.push(*k);
+            }
+            keep
+        });
+        if removed.is_empty() {
+            return;
+        }
+        self.inserted.retain(|k| self.sets.contains_key(k));
+        self.order.retain(|k| self.sets.contains_key(k));
+        self.best = self.order.last().copied().unwrap_or(U256::ZERO);
     }
     pub fn best_entropy(&self) -> U256 {
         self.best
@@ -157,11 +277,12 @@ impl Choice {
         }
         for (key, set) in fresh {
             if !self.sets.contains_key(&key) {
-                self.order.push(key);
+                if let Err(pos) = self.order.binary_search(&key) {
+                    self.order.insert(pos, key);
+                }
                 self.insert(key, set);
             }
         }
-        self.order.sort();
         self.best()
     }
 }
@@ -290,5 +411,22 @@ mod tests {
             .build([[1; 32], [1; 32], [2; 32]], [3; 32], 2, U256::from_u64(8))
             .unwrap();
         assert_eq!(best.zone(), [3; 32]);
+    }
+    #[test]
+    fn expanded_node_set_tracks_multi_slice_hierarchies() {
+        let mut s1 = ExpandedNodeSet::at(1, [0; 32], U256::from_u64(1));
+        assert_eq!((s1.regions, s1.zones), (1, 2));
+        assert_eq!(s1.zone_index([0, 0]), Some(0));
+        assert_eq!(s1.zone_index([0, 1]), Some(1));
+        assert_eq!(s1.zone_index([1, 0]), None);
+        assert!(s1.extendable([0, 1], &[[0; 32]; 3], 2));
+        assert!(s1.update([0, 1], [0xab; 32], U256::from_u64(10), 2));
+        assert_eq!(s1.zone_nodes[1].hash, [0xab; 32]);
+        assert_eq!(s1.zone_nodes[0].hash, [0; 32]);
+
+        let s2 = ExpandedNodeSet::at(2, [1; 32], U256::from_u64(2));
+        assert_eq!((s2.regions, s2.zones), (2, 2));
+        assert_eq!(s2.zone_nodes.len(), 4);
+        assert_eq!(s2.zone_index([1, 1]), Some(3));
     }
 }

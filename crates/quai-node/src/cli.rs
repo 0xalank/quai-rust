@@ -28,7 +28,9 @@ Global options:
   --config <FILE>       Configuration file (TOML; see below). Command line
                         options override it
   --datadir <DIR>       Data directory (default: $HOME/.quai-node)
-  --network <NAME>      Chain environment: colosseum (mainnet, default) or local
+  --network <NAME>      Chain environment: colosseum (mainnet, default),
+                        garden, orchard, lighthouse, or local
+  --slice <R-Z>         Zone slice to run (e.g. 0-0, 1-2; default: 0-0)
   --log-level <LEVEL>   error, warn, info or debug (default: info)
 
 Replay options:
@@ -54,17 +56,22 @@ Replay options:
                         dataset and 1 GiB more, else light. Every header is
                         checked in full in each mode
 
-RPC options:
-  --export <DIR>        Serve this export (the one the replay checked)
+RPC options (rpc, and run):
+  --export <DIR>        (rpc only) Serve this export (the one the replay checked)
                         instead of the block store
-  --listen <ADDR>       Listen address (default: 127.0.0.1:8547)
+  --listen <ADDR>       (rpc only) Listen address (default: 127.0.0.1:8547)
+  --ipc-path <PATH>     Unix domain socket IPC path (mode 0600, all APIs), or off
+  --rpc-http-api <CSV>  Allowed HTTP JSON-RPC namespaces (default: quai,eth,net,web3,txpool)
+  --rpc-ws-api <CSV>    Allowed WebSocket JSON-RPC namespaces (default: quai,eth,net,web3,txpool,miner)
+  --rpc-cors-domain <CSV>  Allowed HTTP CORS origins (e.g. * or http://localhost:3000)
+  --rpc-vhosts <CSV>    Allowed HTTP Host headers (e.g. localhost,127.0.0.1 or *)
 
 Transaction pool options (rpc, and run with state):
   --no-txpool           No transaction pool: quai_sendRawTransaction and
                         txpool_* refuse, the pending nonce is the head's
   --txpool-sharing-clients <URLS>
-                        Comma-separated http:// endpoints that receive each
-                        submitted transaction (go-quai's
+                        Comma-separated http:// or ws:// endpoints that receive
+                        each submitted transaction (go-quai's
                         --txpool.sharing-clients; default: none)
   --txpool-sync-tx-with-return <BOOL>
                         With sharing clients: forward to the first one,
@@ -78,13 +85,35 @@ Run options:
   --metrics-listen <ADDR>  Prometheus metrics address, or off
                         (default: 127.0.0.1:9101)
   --peer <MULTIADDR>    A peer to dial, with /p2p/<id> (repeatable)
-  --no-public           Do not use the colosseum boot peers and the DHT
+  --no-public           Do not use boot peers and the DHT
+  --p2p-relay-service   Enable the libp2p circuit relay v2 server
+  --p2p-publish         Allow broadcasting locally mined blocks and workshares
   --margin <N>          Stay N zone blocks below the peers' head (default: 64)
   --max-peers <N>       Peers to fetch from (default: 8)
   --no-gossip           At the peers' head, poll by number instead of
                         following the head through gossip
   --no-store            Keep no block store (about 50 KB per zone block);
                         needs --rpc-listen off. For a long shadow run
+  --archive             Persist per-height state versions for historical RPC reads
+  --index-address-utxos Index workshares, donors, supply analytics and locked Quai
+  --prune-blocks <N>    Retain at most N recent canonical blocks in the block store
+  --mine                Enable the pending-header and AuxPoW block template miner
+  --coinbase <ADDR>     20-byte hex miner reward address
+  --miner-extra <STR>   Extra data string embedded in mined headers
+  --miner-gaslimit <N>  Target gas limit for mined blocks
+  --miner-gasprice <N>  Minimum gas price (wei) for mined transactions
+  --miner-lockup-byte <0..3>  Coinbase lockup schedule byte (default: 0)
+  --miner-preference <F>  Quai/Qi reward preference in [0.0, 1.0] (default: 0.5)
+  --stratum             Enable the native Stratum v1 pool server and dashboard
+  --stratum-sha-addr <ADDR|off>     SHA-256d Stratum address (default: 0.0.0.0:3333)
+  --stratum-scrypt-addr <ADDR|off>  Scrypt Stratum address (default: 0.0.0.0:3334)
+  --stratum-kawpow-addr <ADDR|off>  KAWPOW Stratum address (default: 0.0.0.0:3335)
+  --stratum-api-addr <ADDR|off>     Pool dashboard HTTP/WS address (default: 0.0.0.0:3336)
+  --stratum-name <STR>  Pool display name in the dashboard API
+  --stratum-pool-tag <STR>  Coinbase pool tag embedded in donor templates
+  --stratum-no-vardiff  Disable automatic Stratum variable difficulty
+  --stratum-proxy-protocol  Expect HAProxy PROXY protocol v1/v2 on Stratum ports
+  --stratum-api-ws-origins <CSV>  Allowed WebSocket origins for /api/ws
   --shadow-bootstrap <HASH|auto>
                         TEST TOOL for the shadow run, not for production.
                         With --stateless and an empty data directory, start
@@ -131,16 +160,25 @@ Checkpoints go to <datadir>/replay/<chain>/{state,headers}/ every
 SIGINT or SIGTERM stops `replay` and `run` after the current height with a
 checkpoint (a second signal stops at once).
 
-Configuration file keys: datadir, network, log_level, rpc.listen,
+Configuration file keys: datadir, network, slice, log_level,
+rpc.listen, rpc.ipc_path, rpc.http_api, rpc.ws_api, rpc.cors_domain, rpc.vhosts,
 metrics.listen, sync.stateless, sync.jobs, sync.margin, sync.max_peers,
 sync.public, sync.peers, sync.checkpoint_every, sync.commit_every,
-txpool.enabled, txpool.sharing_clients, txpool.sync_tx_with_return.
+sync.archive, sync.index_address_utxos, sync.prune_blocks,
+p2p.relay_service, p2p.publish,
+txpool.enabled, txpool.sharing_clients, txpool.sync_tx_with_return,
+miner.enabled, miner.coinbase, miner.extra, miner.gas_limit, miner.gas_price,
+miner.lockup_byte, miner.preference,
+stratum.enabled, stratum.sha_addr, stratum.scrypt_addr, stratum.kawpow_addr,
+stratum.api_addr, stratum.name, stratum.pool_tag, stratum.no_vardiff,
+stratum.proxy_protocol, stratum.api_ws_origins.
 
 Exit status: 0 all checks passed, 1 a check failed, 2 usage or setup error,
 130 or 143 stopped by SIGINT or SIGTERM.
 ";
 
 #[derive(Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     Help,
     /// `observe` for this many seconds.
@@ -153,7 +191,58 @@ pub enum Command {
 pub struct RpcArgs {
     pub export: Option<PathBuf>,
     pub listen: String,
+    pub slice: [u8; 2],
     pub txpool: TxpoolOptions,
+    pub security: RpcSecurityOptions,
+}
+/// RPC transport security & Unix IPC options (`rpc` and `run`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RpcSecurityOptions {
+    pub ipc_path: Option<PathBuf>,
+    pub http_apis: Vec<String>,
+    pub ws_apis: Vec<String>,
+    pub cors_domains: Vec<String>,
+    pub vhosts: Vec<String>,
+}
+/// Local mining worker options (`run`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MinerOptions {
+    pub enabled: bool,
+    pub coinbase: Option<quai_primitives::transaction::Address>,
+    pub extra: String,
+    pub gas_limit: u64,
+    pub gas_price: u64,
+    pub lockup_byte: u8,
+    /// Miner preference in basis points (0..=10_000 => 0.0..=1.0).
+    pub preference_bps: u16,
+}
+impl Default for MinerOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            coinbase: None,
+            extra: "quai-rust".into(),
+            gas_limit: quai_primitives::spec::STATE_CEIL,
+            gas_price: 1_000_000_000,
+            lockup_byte: 0,
+            preference_bps: 5_000,
+        }
+    }
+}
+impl MinerOptions {
+    pub fn to_miner_config(&self, pool_tag: Option<&str>) -> crate::miner::MinerConfig {
+        crate::miner::MinerConfig {
+            enabled: self.enabled,
+            primary_coinbase: self.coinbase.unwrap_or([0u8; 20]),
+            extra: self.extra.as_bytes().to_vec(),
+            gas_ceil: self.gas_limit,
+            gas_price: crypto_bigint::U256::from_u64(self.gas_price),
+            lockup_byte: self.lockup_byte,
+            miner_preference: f64::from(self.preference_bps) / 10_000.0,
+            pool_tag: pool_tag.unwrap_or("quai-rust").to_string(),
+            ..crate::miner::MinerConfig::default()
+        }
+    }
 }
 /// The transaction pool's options.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -206,6 +295,44 @@ fn number<T: std::str::FromStr>(flag: &str, value: &str) -> Result<T, String> {
 fn off(v: String) -> Option<String> {
     (v != "off" && !v.is_empty()).then_some(v)
 }
+fn parse_csv(v: &str) -> Vec<String> {
+    v.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+fn parse_slice(flag: &str, v: &str) -> Result<[u8; 2], String> {
+    let cleaned = v.trim().trim_start_matches('[').trim_end_matches(']');
+    let parts: Vec<&str> = cleaned
+        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() != 2 {
+        return Err(format!("{flag}: expected R,Z (e.g. 0,0), got {v:?}"));
+    }
+    let r: u8 = parts[0]
+        .parse()
+        .map_err(|_| format!("{flag}: invalid region {:?}", parts[0]))?;
+    let z: u8 = parts[1]
+        .parse()
+        .map_err(|_| format!("{flag}: invalid zone {:?}", parts[1]))?;
+    Ok([r, z])
+}
+fn parse_address(flag: &str, v: &str) -> Result<quai_primitives::transaction::Address, String> {
+    let raw =
+        quai_primitives::decode_hex(v).map_err(|_| format!("{flag}: not a hex address: {v:?}"))?;
+    raw.try_into()
+        .map_err(|_| format!("{flag}: expected 20-byte address: {v:?}"))
+}
+fn parse_preference_bps(flag: &str, v: &str) -> Result<u16, String> {
+    let p: f64 = v
+        .parse()
+        .map_err(|_| format!("{flag}: not a number: {v:?}"))?;
+    if !p.is_finite() || !(0.0..=1.0).contains(&p) {
+        return Err(format!("{flag}: must be between 0.0 and 1.0, got {v:?}"));
+    }
+    Ok((p * 10_000.0).round() as u16)
+}
 
 /// Flags as given, before the configuration file fills the gaps.
 #[derive(Default)]
@@ -213,6 +340,7 @@ struct Flags {
     config: Option<PathBuf>,
     datadir: Option<PathBuf>,
     network: Option<String>,
+    slice: Option<[u8; 2]>,
     level: Option<Level>,
     command: Option<String>,
     export: Option<PathBuf>,
@@ -243,6 +371,37 @@ struct Flags {
     no_txpool: bool,
     sharing_clients: Option<Vec<String>>,
     sync_tx_with_return: Option<bool>,
+    // Storage & P2P extensions
+    archive: bool,
+    index_address_utxos: bool,
+    prune_blocks: Option<u64>,
+    p2p_relay_service: bool,
+    p2p_publish: bool,
+    // RPC security & IPC
+    ipc_path: Option<PathBuf>,
+    rpc_http_api: Option<Vec<String>>,
+    rpc_ws_api: Option<Vec<String>>,
+    rpc_cors_domain: Option<Vec<String>>,
+    rpc_vhosts: Option<Vec<String>>,
+    // Miner
+    mine: bool,
+    coinbase: Option<quai_primitives::transaction::Address>,
+    miner_extra: Option<String>,
+    miner_gaslimit: Option<u64>,
+    miner_gasprice: Option<u64>,
+    miner_lockup_byte: Option<u8>,
+    miner_preference_bps: Option<u16>,
+    // Stratum
+    stratum: bool,
+    stratum_sha_addr: Option<String>,
+    stratum_scrypt_addr: Option<String>,
+    stratum_kawpow_addr: Option<String>,
+    stratum_api_addr: Option<String>,
+    stratum_name: Option<String>,
+    stratum_pool_tag: Option<String>,
+    stratum_no_vardiff: bool,
+    stratum_proxy_protocol: bool,
+    stratum_api_ws_origins: Option<Vec<String>>,
 }
 const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report", "--pow-dag"];
 const RUN_ONLY: &[&str] = &[
@@ -258,6 +417,36 @@ const RUN_ONLY: &[&str] = &[
     "--shadow-bootstrap",
     "--shadow-bootstrap-quorum",
     "--shadow-bootstrap-depth",
+    "--archive",
+    "--index-address-utxos",
+    "--prune-blocks",
+    "--p2p-relay-service",
+    "--p2p-publish",
+    "--mine",
+    "--coinbase",
+    "--miner-extra",
+    "--miner-gaslimit",
+    "--miner-gasprice",
+    "--miner-lockup-byte",
+    "--miner-preference",
+    "--stratum",
+    "--stratum-sha-addr",
+    "--stratum-scrypt-addr",
+    "--stratum-kawpow-addr",
+    "--stratum-api-addr",
+    "--stratum-name",
+    "--stratum-pool-tag",
+    "--stratum-no-vardiff",
+    "--stratum-proxy-protocol",
+    "--stratum-api-ws-origins",
+];
+const RPC_AND_RUN: &[&str] = &[
+    "--slice",
+    "--ipc-path",
+    "--rpc-http-api",
+    "--rpc-ws-api",
+    "--rpc-cors-domain",
+    "--rpc-vhosts",
 ];
 const SYNC: &[&str] = &[
     "--to",
@@ -305,6 +494,26 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--pow-dag"
                 | "--txpool-sharing-clients"
                 | "--txpool-sync-tx-with-return"
+                | "--slice"
+                | "--prune-blocks"
+                | "--ipc-path"
+                | "--rpc-http-api"
+                | "--rpc-ws-api"
+                | "--rpc-cors-domain"
+                | "--rpc-vhosts"
+                | "--coinbase"
+                | "--miner-extra"
+                | "--miner-gaslimit"
+                | "--miner-gasprice"
+                | "--miner-lockup-byte"
+                | "--miner-preference"
+                | "--stratum-sha-addr"
+                | "--stratum-scrypt-addr"
+                | "--stratum-kawpow-addr"
+                | "--stratum-api-addr"
+                | "--stratum-name"
+                | "--stratum-pool-tag"
+                | "--stratum-api-ws-origins"
         );
         let value = if takes_value {
             match inline {
@@ -413,6 +622,42 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     _ => return Err(format!("{flag}: true or false, not {v:?}")),
                 })
             }
+            "--slice" => f.slice = Some(parse_slice("--slice", &v)?),
+            "--archive" => f.archive = true,
+            "--index-address-utxos" => f.index_address_utxos = true,
+            "--prune-blocks" => f.prune_blocks = Some(number("--prune-blocks", &v)?),
+            "--p2p-relay-service" => f.p2p_relay_service = true,
+            "--p2p-publish" => f.p2p_publish = true,
+            "--ipc-path" => f.ipc_path = Some(PathBuf::from(v)),
+            "--rpc-http-api" => f.rpc_http_api = Some(parse_csv(&v)),
+            "--rpc-ws-api" => f.rpc_ws_api = Some(parse_csv(&v)),
+            "--rpc-cors-domain" => f.rpc_cors_domain = Some(parse_csv(&v)),
+            "--rpc-vhosts" => f.rpc_vhosts = Some(parse_csv(&v)),
+            "--mine" => f.mine = true,
+            "--coinbase" => f.coinbase = Some(parse_address("--coinbase", &v)?),
+            "--miner-extra" => f.miner_extra = Some(v),
+            "--miner-gaslimit" => f.miner_gaslimit = Some(number("--miner-gaslimit", &v)?),
+            "--miner-gasprice" => f.miner_gasprice = Some(number("--miner-gasprice", &v)?),
+            "--miner-lockup-byte" => {
+                let b: u8 = number("--miner-lockup-byte", &v)?;
+                if b > 3 {
+                    return Err("--miner-lockup-byte must be between 0 and 3".into());
+                }
+                f.miner_lockup_byte = Some(b);
+            }
+            "--miner-preference" => {
+                f.miner_preference_bps = Some(parse_preference_bps("--miner-preference", &v)?)
+            }
+            "--stratum" => f.stratum = true,
+            "--stratum-sha-addr" => f.stratum_sha_addr = Some(v),
+            "--stratum-scrypt-addr" => f.stratum_scrypt_addr = Some(v),
+            "--stratum-kawpow-addr" => f.stratum_kawpow_addr = Some(v),
+            "--stratum-api-addr" => f.stratum_api_addr = Some(v),
+            "--stratum-name" => f.stratum_name = Some(v),
+            "--stratum-pool-tag" => f.stratum_pool_tag = Some(v),
+            "--stratum-no-vardiff" => f.stratum_no_vardiff = true,
+            "--stratum-proxy-protocol" => f.stratum_proxy_protocol = true,
+            "--stratum-api-ws-origins" => f.stratum_api_ws_origins = Some(parse_csv(&v)),
             "--checkpoint-every" | "--commit-every" => {
                 let n: u64 = number(&flag, &v)?;
                 if n == 0 {
@@ -479,6 +724,36 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         ],
         &["rpc", "run"],
     )?;
+    belongs(RPC_AND_RUN, &["rpc", "run"])?;
+    let slice = match f.slice {
+        Some(s) => s,
+        None => match config.text("slice")? {
+            Some(s) => parse_slice("slice", &s)?,
+            None => [0, 0],
+        },
+    };
+    let rpc_security = RpcSecurityOptions {
+        ipc_path: match f.ipc_path.or(config.path("rpc.ipc_path")?) {
+            Some(p) if !p.as_os_str().is_empty() && p.as_os_str() != "off" => Some(p),
+            _ => None,
+        },
+        http_apis: match f.rpc_http_api {
+            Some(v) => v,
+            None => config.list("rpc.http_api")?.unwrap_or_default(),
+        },
+        ws_apis: match f.rpc_ws_api {
+            Some(v) => v,
+            None => config.list("rpc.ws_api")?.unwrap_or_default(),
+        },
+        cors_domains: match f.rpc_cors_domain {
+            Some(v) => v,
+            None => config.list("rpc.cors_domain")?.unwrap_or_default(),
+        },
+        vhosts: match f.rpc_vhosts {
+            Some(v) => v,
+            None => config.list("rpc.vhosts")?.unwrap_or_default(),
+        },
+    };
     let txpool = TxpoolOptions {
         enabled: !f.no_txpool && config.flag("txpool.enabled")?.unwrap_or(true),
         sharing_clients: match f.sharing_clients.take() {
@@ -515,7 +790,9 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 .listen
                 .or(config.text("rpc.listen")?.and_then(off))
                 .unwrap_or_else(|| "127.0.0.1:8547".into()),
+            slice,
             txpool: txpool.clone(),
+            security: rpc_security.clone(),
         }),
         "run" => {
             let jobs = match f.jobs {
@@ -524,9 +801,90 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     .number("sync.jobs")?
                     .map_or_else(default_jobs, |n| n as usize),
             };
+            let miner_coinbase = match f.coinbase {
+                Some(c) => Some(c),
+                None => match config.text("miner.coinbase")? {
+                    Some(s) => Some(parse_address("miner.coinbase", &s)?),
+                    None => None,
+                },
+            };
+            let miner_pref_bps = match f.miner_preference_bps {
+                Some(p) => p,
+                None => match config.text("miner.preference")? {
+                    Some(s) => parse_preference_bps("miner.preference", &s)?,
+                    None => 5_000,
+                },
+            };
+            let miner = MinerOptions {
+                enabled: f.mine || config.flag("miner.enabled")?.unwrap_or(false),
+                coinbase: miner_coinbase,
+                extra: f
+                    .miner_extra
+                    .or(config.text("miner.extra")?)
+                    .unwrap_or_else(|| "quai-rust".into()),
+                gas_limit: match f.miner_gaslimit {
+                    Some(g) => g,
+                    None => config
+                        .number("miner.gas_limit")?
+                        .unwrap_or(quai_primitives::spec::STATE_CEIL),
+                },
+                gas_price: match f.miner_gasprice {
+                    Some(g) => g,
+                    None => config.number("miner.gas_price")?.unwrap_or(1_000_000_000),
+                },
+                lockup_byte: match f.miner_lockup_byte {
+                    Some(b) => b,
+                    None => config.number("miner.lockup_byte")?.unwrap_or(0).min(3) as u8,
+                },
+                preference_bps: miner_pref_bps,
+            };
+            let default_stratum = crate::stratum::StratumConfig::default();
+            let stratum = crate::stratum::StratumConfig {
+                enabled: f.stratum || config.flag("stratum.enabled")?.unwrap_or(false),
+                sha_addr: match f.stratum_sha_addr.or(config.text("stratum.sha_addr")?) {
+                    Some(v) => off(v),
+                    None => default_stratum.sha_addr,
+                },
+                scrypt_addr: match f
+                    .stratum_scrypt_addr
+                    .or(config.text("stratum.scrypt_addr")?)
+                {
+                    Some(v) => off(v),
+                    None => default_stratum.scrypt_addr,
+                },
+                kawpow_addr: match f
+                    .stratum_kawpow_addr
+                    .or(config.text("stratum.kawpow_addr")?)
+                {
+                    Some(v) => off(v),
+                    None => default_stratum.kawpow_addr,
+                },
+                api_addr: match f.stratum_api_addr.or(config.text("stratum.api_addr")?) {
+                    Some(v) => off(v),
+                    None => default_stratum.api_addr,
+                },
+                pool_name: f
+                    .stratum_name
+                    .or(config.text("stratum.name")?)
+                    .unwrap_or(default_stratum.pool_name),
+                pool_tag: f
+                    .stratum_pool_tag
+                    .or(config.text("stratum.pool_tag")?)
+                    .unwrap_or(default_stratum.pool_tag),
+                vardiff_enabled: !f.stratum_no_vardiff
+                    && !config.flag("stratum.no_vardiff")?.unwrap_or(false),
+                proxy_protocol: f.stratum_proxy_protocol
+                    || config.flag("stratum.proxy_protocol")?.unwrap_or(false),
+                ws_origins: match f.stratum_api_ws_origins {
+                    Some(v) => v,
+                    None => config.list("stratum.api_ws_origins")?.unwrap_or_default(),
+                },
+                ..default_stratum
+            };
             let o = crate::node::Options {
                 datadir: datadir.clone(),
                 network: network.clone(),
+                slice,
                 stateless: f.stateless || config.flag("sync.stateless")?.unwrap_or(false),
                 jobs,
                 progress: Duration::from_secs(f.progress.unwrap_or(10)),
@@ -566,6 +924,16 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 bootstrap_quorum: f.bootstrap_quorum.unwrap_or(crate::bootstrap::QUORUM),
                 bootstrap_depth: f.bootstrap_depth.unwrap_or(crate::bootstrap::DEPTH),
                 store: !f.no_store,
+                archive: f.archive || config.flag("sync.archive")?.unwrap_or(false),
+                index_address_utxos: f.index_address_utxos
+                    || config.flag("sync.index_address_utxos")?.unwrap_or(false),
+                prune_blocks: f.prune_blocks.or(config.number("sync.prune_blocks")?),
+                p2p_relay_service: f.p2p_relay_service
+                    || config.flag("p2p.relay_service")?.unwrap_or(false),
+                p2p_publish: f.p2p_publish || config.flag("p2p.publish")?.unwrap_or(false),
+                rpc_security,
+                miner,
+                stratum,
                 txpool: txpool.clone(),
             };
             if !o.store && o.rpc_listen.is_some() {
@@ -615,15 +983,42 @@ pub fn pool_config(o: &TxpoolOptions, datadir: &std::path::Path) -> crate::txpoo
 }
 /// The native RPC config of `rpc` and `run`: go-quai's 5 MiB request
 /// limit (`maxRequestContentLength`), so that every transaction go-quai
-/// takes fits.
-pub fn rpc_config(listen: String) -> quai_rpc::Config {
+/// takes fits, with per-transport namespace allowlists, CORS, and vhosts.
+pub fn rpc_config_with(listen: String, sec: &RpcSecurityOptions) -> quai_rpc::Config {
+    let http_apis = if sec.http_apis.is_empty() {
+        Some(
+            quai_rpc::DEFAULT_HTTP_APIS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        )
+    } else {
+        Some(sec.http_apis.clone())
+    };
+    let ws_apis = if sec.ws_apis.is_empty() {
+        Some(
+            quai_rpc::DEFAULT_WS_APIS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        )
+    } else {
+        Some(sec.ws_apis.clone())
+    };
     quai_rpc::Config {
         mode: "native".into(),
         listen,
         timeout_ms: 30_000,
         max_body_bytes: 5 * 1024 * 1024,
+        http_apis,
+        ws_apis,
+        cors_domains: sec.cors_domains.clone(),
+        vhosts: sec.vhosts.clone(),
         ..quai_rpc::Config::default()
     }
+}
+pub fn rpc_config(listen: String) -> quai_rpc::Config {
+    rpc_config_with(listen, &RpcSecurityOptions::default())
 }
 /// Start a transaction pool over `view` (which must keep state) and answer
 /// the pool methods from it.
@@ -675,7 +1070,7 @@ fn serve_rpc(
     datadir: &std::path::Path,
     log: Log,
 ) -> Result<(), String> {
-    let config = rpc_config(r.listen);
+    let config = rpc_config_with(r.listen, &r.security);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.workers)
         .enable_all()
@@ -692,12 +1087,29 @@ fn serve_rpc(
     )?;
     let mode = config.mode.clone();
     let listen = config.listen.clone();
+    let ipc_path = r.security.ipc_path.clone();
     let app = quai_rpc::App::native(config, Arc::new(view))?;
+    let ipc_stop = stop.clone();
     let result = runtime.block_on(async move {
         let listener = tokio::net::TcpListener::bind(&listen)
             .await
             .map_err(|e| format!("listen {listen}: {e}"))?;
         let address = listener.local_addr().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        if let Some(ipc) = ipc_path {
+            let ipc_app = app.clone();
+            let ipc_log = log;
+            tokio::spawn(async move {
+                let done = async move {
+                    while !ipc_stop.load(Ordering::Relaxed) {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                };
+                if let Err(e) = quai_rpc::ipc::serve_ipc(ipc_app, ipc, done).await {
+                    ipc_log.error(&format!("ipc: {e}"));
+                }
+            });
+        }
         println!(
             "{}",
             serde_json::json!({"ready":true,"address":address.to_string(),"mode":mode,"version":quai_rpc::VERSION})
@@ -885,7 +1297,9 @@ mod tests {
             Command::Rpc(RpcArgs {
                 export: Some("/x".into()),
                 listen: "127.0.0.1:8547".into(),
+                slice: [0, 0],
                 txpool: TxpoolOptions::default(),
+                security: RpcSecurityOptions::default(),
             })
         );
         assert_eq!(
@@ -895,7 +1309,9 @@ mod tests {
             Command::Rpc(RpcArgs {
                 export: Some("/x".into()),
                 listen: "0.0.0.0:1".into(),
+                slice: [0, 0],
                 txpool: TxpoolOptions::default(),
+                security: RpcSecurityOptions::default(),
             })
         );
         assert_eq!(
@@ -903,14 +1319,16 @@ mod tests {
             Command::Rpc(RpcArgs {
                 export: None,
                 listen: "127.0.0.1:8547".into(),
+                slice: [0, 0],
                 txpool: TxpoolOptions::default(),
+                security: RpcSecurityOptions::default(),
             })
         );
-        // Pool options: flags, then the file; only http:// sharing clients.
+        // Pool options: flags, then the file; http:// and ws:// sharing clients are allowed.
         let Command::Rpc(r) = parse(&args(&[
             "rpc",
             "--txpool-sharing-clients",
-            "http://127.0.0.1:9,http://10.0.0.1:8",
+            "http://127.0.0.1:9,ws://10.0.0.1:8",
             "--txpool-sync-tx-with-return=false",
         ]))
         .unwrap()
@@ -922,11 +1340,11 @@ mod tests {
             r.txpool,
             TxpoolOptions {
                 enabled: true,
-                sharing_clients: vec!["http://127.0.0.1:9".into(), "http://10.0.0.1:8".into()],
+                sharing_clients: vec!["http://127.0.0.1:9".into(), "ws://10.0.0.1:8".into()],
                 sync_tx_with_return: false,
             }
         );
-        assert!(parse(&args(&["rpc", "--txpool-sharing-clients", "ws://a:1"])).is_err());
+        assert!(parse(&args(&["rpc", "--txpool-sharing-clients", "ftp://a:1"])).is_err());
         assert!(parse(&args(&["replay", "--export", "/x", "--no-txpool"])).is_err());
         let Command::Rpc(r) = parse(&args(&["rpc", "--no-txpool"])).unwrap().command else {
             panic!("not rpc")

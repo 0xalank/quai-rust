@@ -165,10 +165,12 @@ pub fn check_zone_header_projection(
             .as_ref()
             .map(|b| crate::auxiliary::Auxiliary::decode(b))
             .transpose()?;
-        let kaw = share_rules::next_kawpow_difficulty(
+        let kaw = share_rules::next_kawpow_difficulty_at(
             share_rules::uint(pw.kawpow_difficulty.as_deref().unwrap_or_default())?,
             header.prime,
             aux.as_ref(),
+            pw.time.unwrap_or(0),
+            &FORKS,
         )?;
         if share_rules::uint(fields::bytes(
             &w.kawpow_difficulty,

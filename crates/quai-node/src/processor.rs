@@ -283,6 +283,10 @@ struct Checker {
     /// The RPC's live view: unlock events and the rolling fee window.
     live: Option<Arc<crate::rpc_view::Live>>,
     fees: RollingFees,
+    /// Maintain workshare, donor, supply analytics, and locked Quai indexes.
+    index_address_utxos: bool,
+    quai_supply: Uint,
+    qi_supply: Uint,
 }
 /// go-quai's rolling fee window (core/state_processor.go
 /// `calcRollingFeeInfo`, `GetRollingFeeInfo`) over the blocks this process
@@ -291,7 +295,7 @@ struct Checker {
 /// running mean of the blocks' average fees (their Quai fees over the count
 /// of their Quai and Qi transactions). Blocks without such a transaction
 /// change nothing.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RollingFees {
     min: Option<Uint>,
     max: Option<Uint>,
@@ -377,6 +381,9 @@ impl Checker {
             collect: false,
             live: None,
             fees: RollingFees::default(),
+            index_address_utxos: false,
+            quai_supply: Uint::ZERO,
+            qi_supply: Uint::ZERO,
             window,
             heads: [None; 3],
             orders: HashMap::new(),
@@ -965,6 +972,71 @@ impl Checker {
             }
             _ => None,
         };
+        let (workshare_hashes, donor_hashes, supply, locked_deltas) = if self.index_address_utxos {
+            let mut ws_hashes = vec![zone.id()];
+            let mut dn_hashes = vec![];
+            if let Some(d) = extract_donor_pow_hash(zone.header()) {
+                dn_hashes.push(d);
+            }
+            for u in zone.uncles().unwrap_or_default() {
+                if let Ok(h) = u.block_hash() {
+                    ws_hashes.push(h);
+                }
+                if let Some(d) = extract_donor_pow_hash(&u) {
+                    dn_hashes.push(d);
+                }
+            }
+            let (supply, locked_deltas) = if let Some(x) = executed {
+                let quai_added = x.execution.supply_added;
+                let quai_removed = x.execution.supply_removed;
+                self.quai_supply = self
+                    .quai_supply
+                    .saturating_add(&quai_added)
+                    .saturating_sub(&quai_removed);
+                let mut qi_added_u128 = 0u128;
+                if let Some(u) = &utxos {
+                    for c in &u.created {
+                        let denom = quai_execution::qi::DENOMINATIONS
+                            .get(c.denomination as usize)
+                            .copied()
+                            .unwrap_or(0);
+                        qi_added_u128 = qi_added_u128.saturating_add(u128::from(denom));
+                    }
+                }
+                let qi_added = Uint::from_u128(qi_added_u128);
+                let qi_removed = x.execution.qi_fees;
+                self.qi_supply = self
+                    .qi_supply
+                    .saturating_add(&qi_added)
+                    .saturating_sub(&qi_removed);
+                let supply = quai_rpc::view::SupplyAnalytics {
+                    quai_added: quai_added.to_be_bytes(),
+                    quai_removed: quai_removed.to_be_bytes(),
+                    quai_total: self.quai_supply.to_be_bytes(),
+                    qi_added: qi_added.to_be_bytes(),
+                    qi_removed: qi_removed.to_be_bytes(),
+                    qi_total: self.qi_supply.to_be_bytes(),
+                };
+                let mut deltas = vec![];
+                for tx in txs {
+                    if let Kind::External(e) = tx.kind() {
+                        // Coinbase (1), Conversion (2), and CoinbaseLockup (3) to Quai ledger addresses.
+                        if matches!(e.etx_type, 1..=3) && e.to[1] <= 0x7f && !e.value.is_empty() {
+                            deltas.push((e.to, true, u256(&e.value)));
+                        }
+                    }
+                }
+                for u in &x.execution.unlocks {
+                    deltas.push((u.address, false, quai_execution::evm::word::bytes(u.amount)));
+                }
+                (Some(supply), deltas)
+            } else {
+                (None, vec![])
+            };
+            (ws_hashes, dn_hashes, supply, locked_deltas)
+        } else {
+            (vec![], vec![], None, vec![])
+        };
         Accepted {
             number: zone.number(2).unwrap_or_default(),
             hash: zone.id(),
@@ -972,6 +1044,10 @@ impl Checker {
             order,
             block: h.zone().block.clone(),
             dominant: dominant_views(h),
+            workshare_hashes,
+            donor_hashes,
+            supply,
+            locked_deltas,
             receipts,
             tx_hashes,
             uncle_kinds,
@@ -1023,6 +1099,10 @@ impl Checker {
             order,
             block: zone.bytes().to_vec(),
             dominant,
+            workshare_hashes: vec![],
+            donor_hashes: vec![],
+            supply: None,
+            locked_deltas: vec![],
             receipts: None,
             tx_hashes,
             uncle_kinds,
@@ -1050,6 +1130,19 @@ impl Checker {
                 })
                 .collect(),
         )
+    }
+}
+fn extract_donor_pow_hash(header: &quai_primitives::Header) -> Option<Hash> {
+    let aux_bytes = header.wire().aux_pow.as_deref()?;
+    let aux = quai_consensus::auxiliary::Auxiliary::decode(aux_bytes).ok()?;
+    let h = aux.header();
+    if h.len() < 80 {
+        return None;
+    }
+    match aux.id() {
+        2 | 3 => quai_consensus::donor::sha256d(h).ok(),
+        4 => quai_consensus::donor::scrypt(h).ok(),
+        _ => None,
     }
 }
 fn u256(v: &[u8]) -> Hash {
@@ -1463,6 +1556,13 @@ pub struct Settings {
     /// Off, the processor starts only from the genesis or a checkpoint whose
     /// whole ancestry it validated.
     pub shadow: bool,
+    /// Preserve every historical state version (skip compaction and state file
+    /// pruning) and record height -> version pointers for archive RPC queries.
+    pub archive: bool,
+    /// Maintain workshare, donor, supply analytics, and locked Quai indexes.
+    pub index_address_utxos: bool,
+    /// Keep only the newest N canonical blocks in `blocks.redb` (None keeps all).
+    pub prune_blocks: Option<u64>,
 }
 /// Staged blocks the store writes in one non-durable transaction.
 const STORE_BATCH: usize = 256;
@@ -1612,6 +1712,7 @@ impl Processor {
             }
         };
         let mut checker = checker;
+        checker.index_address_utxos = settings.index_address_utxos;
         let store = match (&dir, settings.store) {
             (Some(dir), true) => Some(open_store(
                 dir,
@@ -1695,8 +1796,11 @@ impl Processor {
         let (hash, number) = self.checker.heads[2].ok_or("live view before genesis")?;
         let head = (number, hash);
         let state = self.head_state()?;
-        let (view, live) =
+        let (mut view, live) =
             crate::rpc_view::ExportView::live(self.checker.chain.clone(), reader, head, state)?;
+        if let (true, Some(dir)) = (self.settings.state, &self.dir) {
+            view.set_state_dir(dir.clone());
+        }
         self.live = Some(live.clone());
         self.checker.live = Some(live.clone());
         Ok((view, live))
@@ -1865,12 +1969,32 @@ impl Processor {
                 if let (Some(st), Some((block, h))) =
                     (self.checker.state.as_mut(), self.checker.heads[2])
                 {
-                    if h > 0 && h % self.settings.commit_every == 0 {
+                    if h > 0 && (self.settings.archive || h % self.settings.commit_every == 0) {
                         // The store is durable before the state it serves.
                         if let Some(store) = self.store.as_mut() {
                             store.flush(true).map_err(io_err("block store"))?;
                         }
                         st.commit_state(h, block).map_err(io_err("state commit"))?;
+                        if self.settings.archive {
+                            if let Some(store) = self.store.as_mut() {
+                                let entry = blockstore::StateVersionEntry {
+                                    file_height: st.store.file_height,
+                                    version: st.store.version,
+                                    commitment: st.store.commitment.clone(),
+                                };
+                                store
+                                    .record_state_version(h, &entry, false)
+                                    .map_err(io_err("block store"))?;
+                            }
+                        }
+                    }
+                }
+                if let (Some(keep), Some(store)) = (self.settings.prune_blocks, self.store.as_mut())
+                {
+                    if zone_height > keep && zone_height % 256 == 0 {
+                        let _ = store
+                            .prune_below(zone_height - keep)
+                            .map_err(io_err("block store prune"))?;
                     }
                 }
                 if zone_height % self.settings.checkpoint_every == 0
@@ -1966,16 +2090,30 @@ impl Processor {
         let (block, height) = checker.heads[2].ok_or("checkpoint before genesis")?;
         let started = Instant::now();
         let mut copied = None;
+        let archive = self.settings.archive;
         let state = match checker.state.as_mut() {
             Some(st) => {
                 st.commit_state(height, block)
                     .map_err(io_err("state commit"))?;
-                copied = Some(
-                    st.store
-                        .compact_to(height)
-                        .map_err(io_err("state compaction"))?,
-                );
-                st.rebase().map_err(io_err("state reload"))?;
+                if archive {
+                    if let Some(store) = self.store.as_mut() {
+                        let entry = blockstore::StateVersionEntry {
+                            file_height: st.store.file_height,
+                            version: st.store.version,
+                            commitment: st.store.commitment.clone(),
+                        };
+                        store
+                            .record_state_version(height, &entry, true)
+                            .map_err(io_err("block store"))?;
+                    }
+                } else {
+                    copied = Some(
+                        st.store
+                            .compact_to(height)
+                            .map_err(io_err("state compaction"))?,
+                    );
+                    st.rebase().map_err(io_err("state reload"))?;
+                }
                 Some(st.section())
             }
             None => None,
@@ -1989,7 +2127,14 @@ impl Processor {
         let cp = checker.checkpoint(counters, state)?;
         let path = checkpoint::write(&dir, &cp).map_err(io_err("checkpoint write"))?;
         store::fault(&dir, "checkpoint-written", height).map_err(io_err("checkpoint write"))?;
-        prune(&dir, checker.state.as_mut())?;
+        if !archive {
+            prune(&dir, checker.state.as_mut())?;
+        }
+        if let (Some(keep), Some(store)) = (self.settings.prune_blocks, self.store.as_mut()) {
+            let _ = store
+                .prune_below(height.saturating_sub(keep))
+                .map_err(io_err("block store prune"))?;
+        }
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         log.info(&format!(
             "checkpoint {height} written ({} KB{}) in {:.1}s",
@@ -2027,6 +2172,10 @@ fn genesis_block(slot: &Slot, receipts: bool, state: bool) -> Accepted {
         order: 0,
         block: zone.block.clone(),
         dominant: dominant_views(&slot.height),
+        workshare_hashes: vec![],
+        donor_hashes: vec![],
+        supply: None,
+        locked_deltas: vec![],
         // The genesis has no transactions: its receipts are known to be
         // none whenever the node keeps receipts (Go export or execution).
         receipts: (receipts || state).then(|| zone.receipts.clone()),
@@ -2107,6 +2256,9 @@ struct TipBlock {
     /// With state: the state version committed after the block, while it is
     /// canonical. A reorg restores the version of the common ancestor.
     version: Option<state::Version>,
+    /// Snapshot of `Checker::fees` after this block became canonical, so a
+    /// reorg restores the rolling fee window without drift.
+    fees: Option<RollingFees>,
 }
 /// The head, the blocks above the tip base and go-quai's choice among them.
 ///
@@ -2127,6 +2279,8 @@ pub struct Tip {
     base_ctx: TipContext,
     /// With state: the state version of the base.
     base_version: Option<state::Version>,
+    /// Rolling fee window snapshot at `base`.
+    base_fees: RollingFees,
     /// Canonical blocks kept above the base.
     keep: u64,
 }
@@ -2322,6 +2476,7 @@ impl Processor {
             }
             None => None,
         };
+        let base_fees = c.fees.clone();
         self.tip = Some(Tip {
             choice: crate::forkchoice::Choice::new(seed),
             blocks: HashMap::new(),
@@ -2329,9 +2484,36 @@ impl Processor {
             base,
             base_ctx: TipContext { heads, controller },
             base_version,
+            base_fees,
             keep: self.tip_keep,
         });
         Ok(())
+    }
+    /// Canonical prime, region, and zone heads formatted for the GossipSub
+    /// validator so untrusted gossip cannot poison or eclipse this node.
+    pub fn canonical_gossip_heads(&mut self) -> [Option<quai_network::public::validate::Head>; 3] {
+        let c = &mut self.checker;
+        let mut out: [Option<quai_network::public::validate::Head>; 3] = [None, None, None];
+        for (ctx, slot) in out.iter_mut().enumerate() {
+            let Some((hash, _)) = c.heads[ctx] else {
+                continue;
+            };
+            let record = match c.histories[ctx]
+                .get(&hash)
+                .or_else(|_| c.histories[2].get(&hash))
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let pow = match c.verifier.verify_header_proof(record.header()) {
+                Ok(p) => p.hash(),
+                Err(_) => continue,
+            };
+            if let Ok(head) = quai_network::public::validate::head_from_record(ctx, &record, pow) {
+                *slot = Some(head);
+            }
+        }
+        out
     }
     /// Canonical blocks the tip keeps above its final base (default 4 x 60).
     /// A smaller value is for tests: it must stay above the reorg depth.
@@ -2488,16 +2670,42 @@ impl Processor {
                 checked,
                 after,
                 version: None,
+                fees: None,
             },
         );
-        // Appended (go-quai's ChainEvent), whatever the head choice does.
-        if let Some(live) = &self.live {
-            live.appended(hash, number, order, Arc::new(zone_raw.block.clone()));
-        }
-        let tip = self.tip.as_mut().ok_or("tip mode")?;
         let best = tip.choice.build(parents, hash, order, entropy);
         let target = best.map(|b| b.zone()).unwrap_or(tip.head().0);
-        self.move_head(target, log)
+        let offer = self.move_head(target, log)?;
+        // Emit ChainEvent (`live.appended`) only when the block was accepted
+        // (never for a block rejected by state execution).
+        if matches!(offer, Offer::Accepted { .. }) {
+            if let Some(live) = &self.live {
+                live.appended(hash, number, order, Arc::new(zone_raw.block.clone()));
+            }
+        }
+        Ok(offer)
+    }
+    /// Purge a block that failed state execution and all of its descendants
+    /// from the tip candidate tree and fork-choice cache.
+    fn purge_invalid_tip_branch(&mut self, bad_hash: Hash) {
+        let Some(tip) = self.tip.as_mut() else {
+            return;
+        };
+        let mut to_remove = vec![bad_hash];
+        let mut i = 0;
+        while i < to_remove.len() {
+            let parent = to_remove[i];
+            i += 1;
+            for (&h, b) in &tip.blocks {
+                if b.parent == parent && !to_remove.contains(&h) {
+                    to_remove.push(h);
+                }
+            }
+        }
+        for h in to_remove {
+            tip.blocks.remove(&h);
+            tip.choice.remove_hash(&h);
+        }
     }
     /// `SetCurrentHeader`: make `target` the head, rolling the canonical
     /// chain back to the common ancestor first when needed.
@@ -2543,25 +2751,162 @@ impl Processor {
                 refused: true,
             });
         }
+        // Pre-execute the candidate branch on an isolated staged state BEFORE
+        // rolling back canonical storage, state, or metrics. An invalid-state
+        // fork is cleanly rejected without damaging the canonical chain or
+        // crashing the node.
+        let mut precomputed: Option<(
+            Hash,
+            block::Executed,
+            quai_consensus::zone_execution::State,
+        )> = None;
+        if self.checker.state.is_some() && !path.is_empty() {
+            let common_version = {
+                let tip = self.tip.as_ref().ok_or("tip mode")?;
+                if common == tip.base.0 {
+                    tip.base_version.clone()
+                } else {
+                    tip.blocks.get(&common).and_then(|b| b.version.clone())
+                }
+                .ok_or("no state version of the common block")?
+            };
+            let mut staged_state = self
+                .checker
+                .state
+                .as_ref()
+                .ok_or("state replay")?
+                .restore_detached(&common_version)
+                .map_err(io_err("staged state restore"))?;
+            let mut staged_confirmed: HashMap<Hash, Arc<Vec<Transaction>>> = HashMap::new();
+            type StagedHeight = (u64, Vec<Transaction>, Vec<(OutPoint, u8)>);
+            let mut staged_incoming: Vec<StagedHeight> = vec![];
+            let mut failed: Option<(Hash, u64, String)> = None;
+            let mut single_exec: Option<block::Executed> = None;
+            for &h in &path {
+                let tip = self.tip.as_ref().ok_or("tip mode")?;
+                let b = tip.blocks.get(&h).ok_or("tip block")?;
+                let parent_ctx = tip
+                    .context_of(&b.parent)
+                    .cloned()
+                    .ok_or("tip parent context")?;
+                let number = b.number;
+                let zone = b.zone.clone();
+                let c = &mut self.checker;
+                let st = c.state.as_ref().ok_or("state replay")?;
+                let mut staged_past = state::StagedPast::new(&st.past, common_number);
+                for (ph, inc, cre) in &staged_incoming {
+                    staged_past.record(*ph, inc.clone(), cre.clone());
+                }
+                let maps = st.staged_maps(&staged_confirmed);
+                let known = state::KnownView {
+                    orders: &c.orders,
+                    region_rollups: &c.rollups,
+                    maps: Some(maps),
+                };
+                let parent = block::Parent {
+                    chain: &c.chain,
+                    histories: &c.histories,
+                    indexes: &c.indexes,
+                    heads: parent_ctx.heads.map(|x| x.unwrap_or_default()),
+                    known: &known,
+                    controller: &parent_ctx.controller,
+                    now: unix_now(),
+                };
+                let mut parent_state = quai_consensus::block::ParentState {
+                    state: &mut staged_state,
+                    past: &staged_past,
+                    profile: &st.profile,
+                };
+                match block::execute(&mut c.verifier, &parent, &mut parent_state, &b.checked) {
+                    Ok(exec) => {
+                        let incoming: Vec<Transaction> = zone
+                            .object()
+                            .transactions()
+                            .iter()
+                            .filter(|tx| matches!(tx.kind(), Kind::External(_)))
+                            .cloned()
+                            .collect();
+                        staged_incoming.push((
+                            number,
+                            incoming,
+                            exec.execution.created_keys.clone(),
+                        ));
+                        staged_confirmed.insert(h, Arc::new(exec.confirmed.clone()));
+                        if path.len() == 1 {
+                            single_exec = Some(exec);
+                        }
+                    }
+                    Err(f) => {
+                        failed = Some((h, number, f.to_string()));
+                        break;
+                    }
+                }
+            }
+            if let Some((bad_hash, bad_number, reason)) = failed {
+                log.warn(&format!(
+                    "tip: block {} at {bad_number} rejected by state execution: {reason}",
+                    hex(&bad_hash)
+                ));
+                self.purge_invalid_tip_branch(bad_hash);
+                return Ok(Offer::Rejected(Failure {
+                    zone_height: Some(bad_number),
+                    context: "zone".into(),
+                    number: Some(bad_number),
+                    hash: Some(bad_hash),
+                    check: "state execution".into(),
+                    expected: "valid state transition and header roots".into(),
+                    actual: reason,
+                }));
+            }
+            if let (1, Some(exec)) = (path.len(), single_exec) {
+                precomputed = Some((path[0], exec, staged_state));
+            }
+        }
         // Roll back to the common ancestor.
         let mut removed = vec![];
         if common != current.0 {
-            let tip = self.tip.as_mut().ok_or("tip mode")?;
-            let keep = tip
-                .canonical
-                .iter()
-                .position(|h| *h == common)
-                .map_or(0, |i| i + 1);
-            for h in tip.canonical.drain(keep..).rev() {
-                let n = tip.blocks.get(&h).map_or(0, |b| b.number);
-                removed.push((h, n));
-            }
-            let (ctx, version) = if common == tip.base.0 {
-                (tip.base_ctx.clone(), tip.base_version.clone())
-            } else {
-                let b = tip.blocks.get(&common).ok_or("common block")?;
-                (b.after.clone(), b.version.clone())
+            let mut removed_orders = vec![];
+            let (ctx, version, common_fees) = {
+                let tip = self.tip.as_mut().ok_or("tip mode")?;
+                let keep = tip
+                    .canonical
+                    .iter()
+                    .position(|h| *h == common)
+                    .map_or(0, |i| i + 1);
+                for h in tip.canonical.drain(keep..).rev() {
+                    let (n, ord) = tip
+                        .blocks
+                        .get(&h)
+                        .map_or((0, 2), |b| (b.number, b.checked.order));
+                    removed.push((h, n));
+                    removed_orders.push(ord);
+                }
+                if common == tip.base.0 {
+                    (
+                        tip.base_ctx.clone(),
+                        tip.base_version.clone(),
+                        tip.base_fees.clone(),
+                    )
+                } else {
+                    let b = tip.blocks.get(&common).ok_or("common block")?;
+                    (
+                        b.after.clone(),
+                        b.version.clone(),
+                        b.fees.clone().unwrap_or_else(|| tip.base_fees.clone()),
+                    )
+                }
             };
+            // Keep summary counters and rolling fee window consistent across reorgs.
+            self.summary.heights = self.summary.heights.saturating_sub(removed.len() as u64);
+            for ord in removed_orders {
+                for ctxi in ord as usize..3 {
+                    self.summary.records[ctxi] = self.summary.records[ctxi].saturating_sub(1);
+                }
+            }
+            self.checker.fees = common_fees;
+            if let Some(live) = &self.live {
+                live.node().set_rolling_fees(self.checker.fees.get());
+            }
             if let Some(st) = self.checker.state.as_mut() {
                 // Every canonical tip block and the base have a committed
                 // version: the reorg returns to the common ancestor's.
@@ -2632,7 +2977,13 @@ impl Processor {
         // Apply the new branch.
         let reorg = !removed.is_empty();
         for h in path {
-            let number = self.apply_tip_block(h, log)?;
+            let ready = precomputed
+                .as_ref()
+                .is_some_and(|(ph, _, _)| *ph == h)
+                .then(|| precomputed.take())
+                .flatten()
+                .map(|(_, exec, st)| (exec, st));
+            let number = self.apply_tip_block(h, ready, log)?;
             if let (Some(dir), true) = (&self.dir, reorg) {
                 store::fault(dir, "reorg-applied", number).map_err(io_err("reorg"))?;
             }
@@ -2646,7 +2997,12 @@ impl Processor {
     }
     /// Make a checked tip block canonical: execute it (with state) and commit
     /// its state version, store it and move the heads. Returns its number.
-    fn apply_tip_block(&mut self, hash: Hash, log: &Log) -> Result<u64, String> {
+    fn apply_tip_block(
+        &mut self,
+        hash: Hash,
+        precomputed: Option<(block::Executed, quai_consensus::zone_execution::State)>,
+        log: &Log,
+    ) -> Result<u64, String> {
         let tip = self.tip.as_mut().ok_or("tip mode")?;
         let b = tip.blocks.get(&hash).ok_or("tip block")?;
         let parent_ctx = tip
@@ -2656,8 +3012,12 @@ impl Processor {
         let zone = b.zone.clone();
         let number = b.number;
         let c = &mut self.checker;
-        let executed = match c.state.as_mut() {
-            Some(st) => {
+        let executed = match (c.state.as_mut(), precomputed) {
+            (Some(st), Some((exec, post_state))) => {
+                st.state = post_state;
+                Some(exec)
+            }
+            (Some(st), None) => {
                 let (maps, mut parent_state) = st.split();
                 let known = state::KnownView {
                     orders: &c.orders,
@@ -2679,7 +3039,7 @@ impl Processor {
                         .map_err(|f| format!("tip block {} at {number}: {f}", hex(&hash)))?,
                 )
             }
-            None => None,
+            (None, _) => None,
         };
         let b = tip.blocks.get(&hash).ok_or("tip block")?;
         let accepted = if c.collect {
@@ -2695,16 +3055,26 @@ impl Processor {
         c.heads = after.heads;
         c.controller = Some(after.controller);
         // Every canonical block commits its state as a version of its own.
-        let version = match c.state.as_mut() {
+        let (version, archive_entry) = match c.state.as_mut() {
             Some(st) => {
                 st.commit_state(number, hash)
                     .map_err(io_err("state commit"))?;
-                Some(st.version_point())
+                let entry = self
+                    .settings
+                    .archive
+                    .then(|| blockstore::StateVersionEntry {
+                        file_height: st.store.file_height,
+                        version: st.store.version,
+                        commitment: st.store.commitment.clone(),
+                    });
+                (Some(st.version_point()), entry)
             }
-            None => None,
+            None => (None, None),
         };
+        let fees_snapshot = c.fees.clone();
         let b = tip.blocks.get_mut(&hash).ok_or("tip block")?;
         b.version = version;
+        b.fees = Some(fees_snapshot);
         let order = b.checked.order;
         tip.canonical.push(hash);
         // Keep the tip bounded: the oldest canonical block becomes the final
@@ -2716,6 +3086,9 @@ impl Processor {
                 tip.base = (old, b.number);
                 tip.base_ctx = b.after;
                 tip.base_version = b.version;
+                if let Some(f) = b.fees {
+                    tip.base_fees = f;
+                }
                 advanced = Some(b.number);
             }
             let floor = tip.base.1;
@@ -2723,6 +3096,11 @@ impl Processor {
         }
         if let (Some(store), Some(a)) = (self.store.as_mut(), accepted) {
             store.stage(a).map_err(io_err("block store"))?;
+            if let Some(entry) = archive_entry {
+                store
+                    .record_state_version(number, &entry, false)
+                    .map_err(io_err("block store"))?;
+            }
         }
         let s = &mut self.summary;
         s.highest_passed = Some(number);
@@ -2736,6 +3114,13 @@ impl Processor {
             m.blocks.fetch_add(1, Ordering::Relaxed);
         }
         if let Some(base) = advanced {
+            if let (Some(keep), Some(store)) = (self.settings.prune_blocks, self.store.as_mut()) {
+                if base.is_multiple_of(256) {
+                    let _ = store
+                        .prune_below(base.saturating_sub(keep))
+                        .map_err(io_err("block store prune"))?;
+                }
+            }
             if self.dir.is_some()
                 && base.is_multiple_of(self.settings.checkpoint_every)
                 && self.summary.checkpoint != Some(base)
@@ -2760,18 +3145,30 @@ impl Processor {
         }
         let started = Instant::now();
         let mut copied = None;
+        let archive = self.settings.archive;
         let state = match self.checker.state.as_mut() {
             Some(st) => {
                 let version = base_version.ok_or("no state version of the tip base")?;
-                st.restore_version(base, &version)
-                    .map_err(io_err("state restore"))?;
-                copied = Some(
-                    st.store
-                        .compact_to(base)
-                        .map_err(io_err("state compaction"))?,
-                );
-                st.rebase().map_err(io_err("state reload"))?;
-                Some(st.section())
+                if archive {
+                    let cur_height = st.committed_height;
+                    let cur_version = st.version_point();
+                    st.restore_version(base, &version)
+                        .map_err(io_err("state restore"))?;
+                    let sec = st.section();
+                    st.restore_version(cur_height, &cur_version)
+                        .map_err(io_err("state restore"))?;
+                    Some(sec)
+                } else {
+                    st.restore_version(base, &version)
+                        .map_err(io_err("state restore"))?;
+                    copied = Some(
+                        st.store
+                            .compact_to(base)
+                            .map_err(io_err("state compaction"))?,
+                    );
+                    st.rebase().map_err(io_err("state reload"))?;
+                    Some(st.section())
+                }
             }
             None => None,
         };
@@ -2786,11 +3183,15 @@ impl Processor {
             .checkpoint_at(ctx.heads, &ctx.controller, counters, state)?;
         let path = checkpoint::write(&dir, &cp).map_err(io_err("checkpoint write"))?;
         store::fault(&dir, "checkpoint-written", base).map_err(io_err("checkpoint write"))?;
-        prune(&dir, self.checker.state.as_mut())?;
-        let again = if self.checker.state.is_some() {
-            self.reexecute_tip()?
-        } else {
+        let again = if archive {
             0
+        } else {
+            prune(&dir, self.checker.state.as_mut())?;
+            if self.checker.state.is_some() {
+                self.reexecute_tip()?
+            } else {
+                0
+            }
         };
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         log.info(&format!(

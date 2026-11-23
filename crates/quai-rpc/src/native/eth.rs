@@ -15,6 +15,8 @@ use super::chain::{state_ref, StateRef};
 use super::{by_number, count, head_block, json, qi, quai_internal, uncle, RpcError, R};
 use crate::view::{BlockData, ChainView};
 use serde_json::{Map, Value};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 /// `eth_` names that run the same Go function as a `quai_` name.
 pub const ALIASES: &[(&str, &str)] = &[
@@ -97,6 +99,14 @@ pub const METHODS: &[&str] = &[
 ];
 
 pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<Value>> {
+    dispatch_cancellable(view, method, params, None)
+}
+pub fn dispatch_cancellable(
+    view: &dyn ChainView,
+    method: &str,
+    params: &Value,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Option<R<Value>> {
     Some(match method {
         // The same bodies as the `quai_` methods.
         "eth_chainId" => super::dispatch(view, "quai_chainId", params),
@@ -175,14 +185,14 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<
         })(),
         "eth_getTransactionReceipt" => receipt(view, params),
         // The same body as quai_call on a zone node that processes state.
-        "eth_call" => super::dispatch(view, "quai_call", params),
+        "eth_call" => super::dispatch_cancellable(view, "quai_call", params, cancel),
         "eth_estimateGas" => (|| {
             let a = Args::new(params, 2)?;
             let call = a.get(0, super::call_args)?;
             let at = a
                 .get_optional(1, args::block_ref)?
                 .unwrap_or(BlockRef::Number(BlockNumber::Latest));
-            super::do_estimate_gas(view, call, at)
+            super::do_estimate_gas_cancellable(view, call, at, cancel)
         })(),
         "eth_createAccessList" => (|| {
             // The default block is the pending one (quai_: latest).
@@ -191,7 +201,7 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<
             let at = a
                 .get_optional(1, args::block_ref)?
                 .unwrap_or(BlockRef::Number(BlockNumber::Pending));
-            super::create_access_list(view, &call, at)
+            super::create_access_list_cancellable(view, &call, at, cancel)
         })(),
         _ => return None,
     })

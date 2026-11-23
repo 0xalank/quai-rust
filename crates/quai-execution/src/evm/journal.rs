@@ -84,6 +84,9 @@ pub struct Journal {
     pub(crate) slots: BTreeSet<(Address, Hash)>,
     /// The RPC call mode (`evm::message`). Consensus execution never sets it.
     pub(crate) debug: Option<Box<super::message::Debug>>,
+    /// Optional cooperative cancellation flag for timed-out RPC calls.
+    /// Consensus execution never sets it.
+    pub(crate) cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 impl Journal {
     /// Go `StateDB.AddressInAccessList`: true for every address in the
@@ -133,7 +136,59 @@ impl Journal {
             addresses: BTreeSet::new(),
             slots: BTreeSet::new(),
             debug: None,
+            cancel: None,
         })
+    }
+    /// Take ownership of an already-validated `World` without cloning.
+    pub(crate) fn new_validated(world: World) -> Result<Self, CapabilityError> {
+        let owner = OWNERS
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
+            .map_err(|_| CapabilityError::Limit("journal identity"))?;
+        Ok(Self {
+            owner,
+            deleted: Default::default(),
+            deleted_hashes: vec![],
+            allow_calls: false,
+            etxs: vec![],
+            transaction_hash: None,
+            eligible_slices: None,
+            access_list: vec![],
+            world,
+            suicided: BTreeSet::new(),
+            touched: BTreeSet::new(),
+            sticky_touched: BTreeSet::new(),
+            delete_empty: false,
+            block_hashes: BTreeMap::new(),
+            prime_number: None,
+            initial_sizes: BTreeMap::new(),
+            trace_hash: [0; 32],
+            trace_steps: 0,
+            trace_bytes: 0,
+            undo: vec![],
+            revisions: vec![],
+            next_revision: 0,
+            original: BTreeMap::new(),
+            refund: 0,
+            logs: vec![],
+            transient: BTreeMap::new(),
+            addresses: BTreeSet::new(),
+            slots: BTreeSet::new(),
+            debug: None,
+            cancel: None,
+        })
+    }
+    /// Unconditionally restore lockups and revert to `outer`, returning the
+    /// underlying `World` after a capability/runtime error. Callers that opened
+    /// `World::begin_tx` perform an exact overlay rollback via `rollback_tx`.
+    pub(crate) fn abort_to(mut self, outer: Revision) -> World {
+        if !self.world.has_tx_rollback() {
+            let deleted = std::mem::take(&mut self.deleted);
+            for (k, v) in deleted.iter() {
+                let _ = self.world.set_lockup(*k, Some(v.clone()));
+            }
+            let _ = self.revert(outer);
+        }
+        self.world
     }
     pub fn world(&self) -> &World {
         &self.world
@@ -167,6 +222,23 @@ impl Journal {
         self.world.validate().map_err(|error| {
             CapabilityError::state(error, CapabilityError::Limit("world snapshot"))
         })?;
+        Ok(self.world)
+    }
+    /// Validate and return the owned `World`, returning it alongside the error
+    /// on failure so the caller can roll back in-place transaction state.
+    pub(crate) fn finish_world(self) -> Result<World, (World, CapabilityError)> {
+        if !self.revisions.is_empty() {
+            return Err((
+                self.world,
+                CapabilityError::Context("unclosed state revisions"),
+            ));
+        }
+        if let Err(error) = self.world.validate() {
+            return Err((
+                self.world,
+                CapabilityError::state(error, CapabilityError::Limit("world snapshot")),
+            ));
+        }
         Ok(self.world)
     }
     pub(crate) fn delete_lockup(
@@ -409,6 +481,14 @@ impl Journal {
         let old = self.suicided.contains(&a);
         self.record(Undo::Suicided(a, old))?;
         self.suicided.insert(a);
+        // Match go-quai v0.57.0/v0.57.1 `StateDB.Suicide`: zero `Size` without
+        // journaling it so a reverted `SELFDESTRUCT` preserves exact `evm_root`
+        // parity with live mainnet. (Subsequent slot deletion still fails
+        // closed on `storage size underflow` rather than panicking in RLP.)
+        self.world.zero_suicide_size(a)?;
+        if let Some((size, _)) = self.initial_sizes.get_mut(&a) {
+            *size = Word::ZERO;
+        }
         self.set_balance(a, Word::ZERO)
     }
     pub(crate) fn finalize_deletions(&mut self) -> Result<(), CapabilityError> {

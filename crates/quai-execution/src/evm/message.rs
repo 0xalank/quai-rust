@@ -185,6 +185,18 @@ pub fn apply(
     message: &Message,
     tracer: Option<AccessListTracer>,
 ) -> Result<Applied, CapabilityError> {
+    apply_cancellable(world, block, environment, message, tracer, None)
+}
+/// As [`apply`], with an optional cooperative cancellation flag checked
+/// periodically inside the EVM loop (used by RPC timeouts).
+pub fn apply_cancellable(
+    world: &World,
+    block: &Context,
+    environment: &Environment,
+    message: &Message,
+    tracer: Option<AccessListTracer>,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<Applied, CapabilityError> {
     let location = block.location;
     let from = message.from;
     // preCheck: a local Quai sender with the state nonce (by construction)
@@ -268,17 +280,16 @@ pub fn apply(
     }
     let mut world = world.clone();
     world.begin_block();
-    let (outcome, refund, debug) = super::with_call_stack(&mut world, |world| {
-        run(
-            world,
-            block,
-            environment,
-            message,
-            value,
-            gas,
-            tracer.clone(),
-        )
-    })?;
+    let (outcome, refund, debug) = run(
+        &mut world,
+        block,
+        environment,
+        message,
+        value,
+        gas,
+        tracer,
+        cancel,
+    )?;
     let used = message.gas - outcome.gas_remaining;
     let used_gas = used - refund.min(used / 5);
     let error = match outcome.error {
@@ -319,9 +330,14 @@ fn run(
     value: Word,
     gas: u64,
     tracer: Option<AccessListTracer>,
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<(Outcome, u64, Debug), CapabilityError> {
     let from = message.from;
-    let mut state = Journal::new(world.clone())?;
+    world
+        .validate()
+        .map_err(|error| CapabilityError::state(error, CapabilityError::Limit("world snapshot")))?;
+    let mut state = Journal::new_validated(std::mem::take(world))?;
+    state.cancel = cancel;
     state.allow_calls = true;
     state.delete_empty = environment.delete_empty;
     state.prime_number = environment.prime_number;

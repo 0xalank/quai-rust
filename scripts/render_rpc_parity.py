@@ -191,7 +191,7 @@ for x in inv['outside']:
     outside.append({'method': x['method'], 'class': outside_class(x['method']),
                     'rust': x['method'] in METHODS})
 keys = {r['key'] for r in rows}
-methods = {r['method'] for r in rows}
+methods = {r['method'] for r in rows} | {o['method'] for o in outside}
 unknown = sorted(n for n in METHODS if n not in methods and not n.endswith('_unsubscribe'))
 assert not unknown, f'Rust serves methods that go-quai does not register: {unknown}'
 

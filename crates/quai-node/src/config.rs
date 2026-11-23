@@ -2,11 +2,17 @@
 //!
 //! ```toml
 //! datadir = "/Users/me/.quai-node"
-//! network = "colosseum"          # or "local"
+//! network = "colosseum"          # colosseum, garden, orchard, lighthouse, local
+//! slice = "0-0"                  # zone slice (region-zone)
 //! log_level = "info"             # error, warn, info, debug
 //!
 //! [rpc]
 //! listen = "127.0.0.1:8547"      # "off": no RPC
+//! ipc_path = "/Users/me/.quai-node/quai.ipc"
+//! http_api = ["quai", "eth", "net", "web3", "txpool"]
+//! ws_api = ["quai", "eth", "net", "web3", "txpool", "miner"]
+//! cors_domain = ["http://localhost:3000"]
+//! vhosts = ["localhost", "127.0.0.1"]
 //!
 //! [metrics]
 //! listen = "127.0.0.1:9101"      # "off": no metrics endpoint
@@ -16,15 +22,40 @@
 //! jobs = 3                       # proof-of-work threads
 //! margin = 64                    # stay this many zone blocks below the peers' head
 //! max_peers = 8
-//! public = true                  # colosseum boot peers and the DHT
+//! public = true                  # boot peers and the DHT
 //! peers = ["/ip4/127.0.0.1/tcp/4002/p2p/12D3Koo..."]
+//! archive = false                # persist per-height state versions
+//! index_address_utxos = false    # workshare, donor, supply & locked-Quai indexes
+//! prune_blocks = 0               # optional canonical block retention window
 //! checkpoint_every = 10000
 //! commit_every = 1000
 //!
+//! [p2p]
+//! relay_service = false          # libp2p circuit relay v2 server
+//! publish = false                # broadcast mined blocks & workshares
+//!
 //! [txpool]
 //! enabled = true                 # the transaction pool (rpc and run with state)
-//! sharing_clients = ["http://127.0.0.1:9201"]   # go-quai's --txpool.sharing-clients
+//! sharing_clients = ["http://127.0.0.1:9201"]   # http:// or ws:// endpoints
 //! sync_tx_with_return = true     # go-quai's --txpool.sync-tx-with-return
+//!
+//! [miner]
+//! enabled = false
+//! coinbase = "0x0000000000000000000000000000000000000001"
+//! extra = "quai-rust"
+//! lockup_byte = 0
+//! preference = "0.5"
+//!
+//! [stratum]
+//! enabled = false
+//! sha_addr = "0.0.0.0:3333"
+//! scrypt_addr = "0.0.0.0:3334"
+//! kawpow_addr = "0.0.0.0:3335"
+//! api_addr = "0.0.0.0:3336"
+//! name = "quai-rust Stratum"
+//! pool_tag = "quai-rust"
+//! no_vardiff = false
+//! proxy_protocol = false
 //! ```
 //!
 //! Values are strings in double quotes (with `\"` and `\\` escapes),
@@ -45,8 +76,14 @@ pub enum Value {
 pub const KEYS: &[&str] = &[
     "datadir",
     "network",
+    "slice",
     "log_level",
     "rpc.listen",
+    "rpc.ipc_path",
+    "rpc.http_api",
+    "rpc.ws_api",
+    "rpc.cors_domain",
+    "rpc.vhosts",
     "metrics.listen",
     "sync.stateless",
     "sync.jobs",
@@ -56,9 +93,31 @@ pub const KEYS: &[&str] = &[
     "sync.peers",
     "sync.checkpoint_every",
     "sync.commit_every",
+    "sync.archive",
+    "sync.index_address_utxos",
+    "sync.prune_blocks",
+    "p2p.relay_service",
+    "p2p.publish",
     "txpool.enabled",
     "txpool.sharing_clients",
     "txpool.sync_tx_with_return",
+    "miner.enabled",
+    "miner.coinbase",
+    "miner.extra",
+    "miner.gas_limit",
+    "miner.gas_price",
+    "miner.lockup_byte",
+    "miner.preference",
+    "stratum.enabled",
+    "stratum.sha_addr",
+    "stratum.scrypt_addr",
+    "stratum.kawpow_addr",
+    "stratum.api_addr",
+    "stratum.name",
+    "stratum.pool_tag",
+    "stratum.no_vardiff",
+    "stratum.proxy_protocol",
+    "stratum.api_ws_origins",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

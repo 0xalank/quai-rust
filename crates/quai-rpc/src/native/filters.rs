@@ -33,13 +33,13 @@
 //! subscription's connection holds up to `OUTBOX` messages, beyond which
 //! notifications are dropped as Go drops them.
 use super::args::{self, Args, BlockNumber};
-use super::{filter, filter_logs, json, matches, Filter, RpcError, MAX_FILTER_RANGE};
+use super::{filter, filter_logs_cancellable, json, matches, Filter, RpcError, MAX_FILTER_RANGE};
 use crate::view::{BlockData, ChainView, LogData};
 use quai_primitives::Hash;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -52,6 +52,11 @@ type BlockLogs = (Arc<BlockData>, Vec<(LogData, Value)>);
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// go-quai's `--rpc.ws-max-subs` default.
 pub const DEFAULT_SUBSCRIPTION_LIMIT: usize = 1000;
+/// Maximum active HTTP polling filters (`go-quai` `maxPollingFilters`).
+pub const MAX_POLLING_FILTERS: usize = 256;
+/// Maximum queued items per polling filter before overflowing (`go-quai`
+/// `maxPendingFilterItems`).
+pub const MAX_PENDING_FILTER_ITEMS: usize = 4096;
 /// Messages a WebSocket connection may have queued before notifications
 /// are dropped.
 pub const OUTBOX: usize = 4096;
@@ -72,8 +77,7 @@ pub const METHODS: &[&str] = &[
 ];
 
 /// The WebSocket subscriptions of this module (the names `quai_subscribe`
-/// and `eth_subscribe` take). docs/rpc-parity.md lists the ones go-quai
-/// has besides.
+/// and `eth_subscribe` take).
 pub const SUBSCRIPTIONS: &[&str] = &[
     "newHeads",
     "newHeadsV2",
@@ -82,6 +86,10 @@ pub const SUBSCRIPTIONS: &[&str] = &[
     "newChainBlocks",
     "newChainBlocksV2",
     "accesses",
+    "pendingHeader",
+    "blockTemplateUpdates",
+    "newWorkshares",
+    "newWorksharesV2",
 ];
 
 /// What an event-system subscription receives.
@@ -89,8 +97,7 @@ pub const SUBSCRIPTIONS: &[&str] = &[
 enum Event {
     /// `LogsSubscription`: mined logs that match the criteria.
     Logs(Filter),
-    /// `PendingLogsSubscription` (the miner's pending logs; no miner here)
-    /// and `MinedAndPendingLogsSubscription` (no handler in go-quai).
+    /// `PendingLogsSubscription` and `MinedAndPendingLogsSubscription`.
     Silent,
     /// `PendingTransactionsSubscription`: nothing sends to `txsCh`.
     PendingTxs,
@@ -104,6 +111,12 @@ enum Event {
     /// "accesses": the heads whose transactions touch the address, and the
     /// blocks that unlock its lockups.
     Accesses(super::args::Address),
+    /// "pendingHeader": new pending work object headers (protobuf bytes hex).
+    PendingHeader,
+    /// "blockTemplateUpdates": new AuxPoW block template JSON for requested params.
+    BlockTemplateUpdates(Option<Value>),
+    /// "newWorkshares" / "newWorksharesV2": newly received/mined workshares.
+    Workshares { _v2: bool },
 }
 
 /// `EventSystem.SubscribeLogs`: the subscription type of a criteria.
@@ -164,6 +177,7 @@ struct Poll {
     deadline: Instant,
     hashes: Vec<Hash>,
     logs: Vec<Value>,
+    overflow: bool,
 }
 
 struct Sub {
@@ -180,7 +194,11 @@ impl Sub {
     fn notify(&mut self, id: &str, result: &Value) {
         let text = notification_in(self.namespace, id, result);
         match &mut self.buffer {
-            Some(b) => b.push(text),
+            Some(b) => {
+                if b.len() < OUTBOX {
+                    b.push(text);
+                }
+            }
             None => {
                 let _ = self.out.try_send(text);
             }
@@ -206,8 +224,6 @@ pub fn notification_in(namespace: &str, id: &str, result: &Value) -> String {
 struct State {
     polls: HashMap<String, Poll>,
     subs: HashMap<String, Sub>,
-    /// `activeSubscriptions`.
-    active: usize,
     /// The canonical chain the event loop last saw (recent part).
     chain: BTreeMap<u64, Hash>,
     /// The head of the last head event.
@@ -265,6 +281,8 @@ pub struct FilterApi {
     view: Arc<dyn ChainView>,
     timeout: Duration,
     limit: usize,
+    /// Shared active subscription counter across namespaces (`quai` and `eth`).
+    active: Arc<AtomicUsize>,
     state: Mutex<State>,
     ids: IdGen,
     started: AtomicBool,
@@ -272,10 +290,19 @@ pub struct FilterApi {
 
 impl FilterApi {
     pub fn new(view: Arc<dyn ChainView>, timeout: Duration, limit: usize) -> Arc<Self> {
+        Self::with_shared_active(view, timeout, limit, Arc::new(AtomicUsize::new(0)))
+    }
+    pub fn with_shared_active(
+        view: Arc<dyn ChainView>,
+        timeout: Duration,
+        limit: usize,
+        active: Arc<AtomicUsize>,
+    ) -> Arc<Self> {
         let api = Arc::new(Self {
             view,
             timeout,
             limit,
+            active,
             state: Mutex::new(State::default()),
             ids: IdGen::new(),
             started: AtomicBool::new(false),
@@ -349,6 +376,51 @@ impl FilterApi {
                 }
             });
         }
+        if let Some(mut events) = self.view.pending_header_events() {
+            let api = Arc::downgrade(self);
+            tokio::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    let raw = match events.recv().await {
+                        Ok(b) => b,
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => return,
+                    };
+                    let Some(api) = api.upgrade() else { return };
+                    api.on_pending_header(&raw);
+                }
+            });
+        }
+        if let Some(mut events) = self.view.template_update_events() {
+            let api = Arc::downgrade(self);
+            tokio::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    let _pow_id = match events.recv().await {
+                        Ok(p) => p,
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => return,
+                    };
+                    let Some(api) = api.upgrade() else { return };
+                    let _ = tokio::task::spawn_blocking(move || api.on_template_update()).await;
+                }
+            });
+        }
+        if let Some(mut events) = self.view.workshare_events() {
+            let api = Arc::downgrade(self);
+            tokio::spawn(async move {
+                use tokio::sync::broadcast::error::RecvError;
+                loop {
+                    let wo = match events.recv().await {
+                        Ok(w) => w,
+                        Err(RecvError::Lagged(_)) => continue,
+                        Err(RecvError::Closed) => return,
+                    };
+                    let Some(api) = api.upgrade() else { return };
+                    api.on_workshare(&wo);
+                }
+            });
+        }
         // `timeoutLoop`: a ticker of `timeout` removes the filters whose
         // deadline passed.
         let api = Arc::downgrade(self);
@@ -375,7 +447,8 @@ impl FilterApi {
             "quai_getFilterLogs" => {
                 let api = self.clone();
                 let params = params.clone();
-                match tokio::task::spawn_blocking(move || api.get_filter_logs(&params)).await {
+                match tokio::task::spawn_blocking(move || api.get_filter_logs(&params, None)).await
+                {
                     Ok(r) => r,
                     Err(_) => Err(RpcError::go("method handler crashed")),
                 }
@@ -384,20 +457,60 @@ impl FilterApi {
         })
     }
 
-    fn install(&self, typ: PollType, event: Event, crit: Option<Filter>) -> String {
+    /// Same as [`FilterApi::call`], holding `permit` inside `spawn_blocking`
+    /// for `quai_getFilterLogs` and checking `cancel` cooperatively.
+    pub async fn call_cancellable(
+        self: &Arc<Self>,
+        method: &str,
+        params: &Value,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        cancel: Arc<AtomicBool>,
+    ) -> R<Value> {
+        self.start();
+        match method {
+            "quai_getFilterLogs" => {
+                let api = self.clone();
+                let params = params.clone();
+                match tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    api.get_filter_logs(&params, Some(cancel.as_ref()))
+                })
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_) => Err(RpcError::go("method handler crashed")),
+                }
+            }
+            _ => {
+                let _permit = permit;
+                self.call_sync(method, params)
+            }
+        }
+    }
+
+    fn install(&self, typ: PollType, event: Event, crit: Option<Filter>) -> R<String> {
+        let now = Instant::now();
+        let mut st = self.lock();
+        if st.polls.len() >= MAX_POLLING_FILTERS {
+            st.polls.retain(|_, f| f.deadline > now);
+            if st.polls.len() >= MAX_POLLING_FILTERS {
+                return Err(RpcError::go("too many polling filters"));
+            }
+        }
         let id = self.ids.next();
-        self.lock().polls.insert(
+        st.polls.insert(
             id.clone(),
             Poll {
                 typ,
                 event,
                 crit,
-                deadline: Instant::now() + self.timeout,
+                deadline: now + self.timeout,
                 hashes: vec![],
                 logs: vec![],
+                overflow: false,
             },
         );
-        id
+        Ok(id)
     }
 
     /// Every filter method except `quai_getFilterLogs`.
@@ -409,7 +522,7 @@ impl FilterApi {
                     PollType::PendingTxs,
                     Event::PendingTxs,
                     None,
-                )))
+                )?))
             }
             "quai_newBlockFilter" => {
                 Args::new(params, 0)?;
@@ -417,7 +530,7 @@ impl FilterApi {
                     PollType::Blocks,
                     Event::Heads,
                     None,
-                )))
+                )?))
             }
             "quai_newFilter" => {
                 let a = Args::new(params, 1)?;
@@ -427,7 +540,7 @@ impl FilterApi {
                     PollType::Logs,
                     event,
                     Some(crit),
-                )))
+                )?))
             }
             "quai_uninstallFilter" => {
                 let a = Args::new(params, 1)?;
@@ -442,6 +555,7 @@ impl FilterApi {
                     return Err(RpcError::go("filter not found"));
                 };
                 f.deadline = Instant::now() + self.timeout;
+                f.overflow = false;
                 Ok(match f.typ {
                     PollType::PendingTxs | PollType::Blocks => Value::Array(
                         std::mem::take(&mut f.hashes)
@@ -452,14 +566,14 @@ impl FilterApi {
                     PollType::Logs => Value::Array(std::mem::take(&mut f.logs)),
                 })
             }
-            "quai_getFilterLogs" => self.get_filter_logs(params),
+            "quai_getFilterLogs" => self.get_filter_logs(params, None),
             _ => Err(RpcError::method_not_found(method)),
         }
     }
 
     /// `GetFilterLogs`: run the filter's criteria as a range or block
     /// filter. It does not reset the deadline.
-    fn get_filter_logs(&self, params: &Value) -> R<Value> {
+    fn get_filter_logs(&self, params: &Value, cancel: Option<&AtomicBool>) -> R<Value> {
         let a = Args::new(params, 1)?;
         let id = a.get(0, rpc_id)?;
         let crit = {
@@ -474,7 +588,7 @@ impl FilterApi {
             }
         };
         let view = self.view.pinned().unwrap_or_else(|| self.view.clone());
-        filter_logs(view.as_ref(), &crit)
+        filter_logs_cancellable(view.as_ref(), &crit, cancel)
     }
 
     /// `quai_subscribe` on connection `conn`: the subscription ID. The
@@ -496,9 +610,12 @@ impl FilterApi {
                 | "newHeadsV2"
                 | "newPendingTransactions"
                 | "newChainBlocks"
-                | "newChainBlocksV2",
+                | "newChainBlocksV2"
+                | "pendingHeader"
+                | "newWorkshares"
+                | "newWorksharesV2",
             ) => 1,
-            ("quai" | "eth", "logs" | "accesses") => 2,
+            ("quai" | "eth", "logs" | "accesses" | "blockTemplateUpdates") => 2,
             _ => {
                 return Err(RpcError {
                     code: -32601,
@@ -522,16 +639,57 @@ impl FilterApi {
         } else {
             None
         };
+        let template_req = if name == "blockTemplateUpdates" {
+            params
+                .as_array()
+                .and_then(|arr| arr.get(1))
+                .filter(|v| !v.is_null())
+                .cloned()
+        } else {
+            None
+        };
         let mut st = self.lock();
-        if st.active >= self.limit {
-            return Err(RpcError::go("too many subscribers"));
+        // Reserve one slot in the shared subscription counter BEFORE checking
+        // event criteria (go-quai enforces the limit first), releasing it on
+        // error via a drop guard.
+        loop {
+            let cur = self.active.load(Ordering::Acquire);
+            if cur >= self.limit {
+                return Err(RpcError::go("too many subscribers"));
+            }
+            if self
+                .active
+                .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
         }
+        struct SlotGuard<'a> {
+            active: &'a AtomicUsize,
+            armed: bool,
+        }
+        impl Drop for SlotGuard<'_> {
+            fn drop(&mut self) {
+                if self.armed {
+                    self.active.fetch_sub(1, Ordering::AcqRel);
+                }
+            }
+        }
+        let mut slot = SlotGuard {
+            active: &self.active,
+            armed: true,
+        };
         let event = match name.as_str() {
             "newHeads" => Event::Heads,
             "newHeadsV2" => Event::HeadsV2,
             "newPendingTransactions" => Event::PendingTxs,
             "newChainBlocks" => Event::ChainBlocks { v2: false },
             "newChainBlocksV2" => Event::ChainBlocks { v2: true },
+            "pendingHeader" => Event::PendingHeader,
+            "blockTemplateUpdates" => Event::BlockTemplateUpdates(template_req),
+            "newWorkshares" => Event::Workshares { _v2: false },
+            "newWorksharesV2" => Event::Workshares { _v2: true },
             "accesses" => {
                 // `addr.InternalAddress()`.
                 let address = accessed.unwrap_or_default();
@@ -544,7 +702,7 @@ impl FilterApi {
                 .map_err(RpcError::go)?,
         };
         let id = self.ids.next();
-        st.active += 1;
+        slot.armed = false;
         st.subs.insert(
             id.clone(),
             Sub {
@@ -567,6 +725,14 @@ impl FilterApi {
             }
         }
     }
+    /// Cancel a subscription whose subscribe response was never delivered
+    /// (for example when a batch hit `-32005 response too large`).
+    pub fn cancel(&self, id: &str) {
+        let mut st = self.lock();
+        if st.subs.remove(id).is_some() {
+            self.active.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
     /// `*_unsubscribe` on connection `conn` (`handler.unsubscribe`).
     pub fn unsubscribe(&self, conn: u64, params: &Value) -> R<Value> {
         let a = Args::new(params, 1)?;
@@ -575,7 +741,7 @@ impl FilterApi {
         match st.subs.get(&id) {
             Some(s) if s.conn == conn => {
                 st.subs.remove(&id);
-                st.active = st.active.saturating_sub(1);
+                self.active.fetch_sub(1, Ordering::AcqRel);
                 Ok(Value::Bool(true))
             }
             _ => Err(RpcError::go("subscription not found")),
@@ -587,7 +753,9 @@ impl FilterApi {
         let before = st.subs.len();
         st.subs.retain(|_, s| s.conn != conn);
         let ended = before - st.subs.len();
-        st.active = st.active.saturating_sub(ended);
+        if ended > 0 {
+            self.active.fetch_sub(ended, Ordering::AcqRel);
+        }
     }
 
     /// One head event: send the logs of the blocks that became canonical,
@@ -686,11 +854,19 @@ impl FilterApi {
         for (b, logs) in &block_logs {
             for p in polls.values_mut() {
                 if let Event::Logs(f) = &p.event {
-                    p.logs.extend(
-                        logs.iter()
-                            .filter(|(l, _)| event_matches(f, l, b.number))
-                            .map(|(_, v)| v.clone()),
-                    );
+                    if p.overflow {
+                        continue;
+                    }
+                    for (l, v) in logs {
+                        if event_matches(f, l, b.number) {
+                            if p.logs.len() >= MAX_PENDING_FILTER_ITEMS {
+                                p.logs.clear();
+                                p.overflow = true;
+                                break;
+                            }
+                            p.logs.push(v.clone());
+                        }
+                    }
                 }
             }
             for (id, s) in subs.iter_mut() {
@@ -708,8 +884,13 @@ impl FilterApi {
         }
         // The head event (go-quai's `chainHeadFeed`).
         for p in polls.values_mut() {
-            if matches!(p.event, Event::Heads) {
-                p.hashes.push(head.hash);
+            if matches!(p.event, Event::Heads) && !p.overflow {
+                if p.hashes.len() >= MAX_PENDING_FILTER_ITEMS {
+                    p.hashes.clear();
+                    p.overflow = true;
+                } else {
+                    p.hashes.push(head.hash);
+                }
             }
         }
         let mut head_json = None;
@@ -768,6 +949,70 @@ impl FilterApi {
                 if unlocks.addresses.contains(address) {
                     s.notify(id, &hash);
                 }
+            }
+        }
+    }
+    /// A new pending header (`pendingHeader` subscription).
+    pub fn on_pending_header(&self, raw: &[u8]) {
+        let val = json::bytes_hex(raw);
+        let mut st = self.lock();
+        for (id, s) in st.subs.iter_mut() {
+            if matches!(s.event, Event::PendingHeader) {
+                s.notify(id, &val);
+            }
+        }
+    }
+    /// A new block template update (`blockTemplateUpdates` subscription).
+    pub fn on_template_update(&self) {
+        let reqs: Vec<(String, Option<Value>)> = {
+            let st = self.lock();
+            st.subs
+                .iter()
+                .filter_map(|(id, s)| match &s.event {
+                    Event::BlockTemplateUpdates(req) => Some((id.clone(), req.clone())),
+                    _ => None,
+                })
+                .collect()
+        };
+        if reqs.is_empty() {
+            return;
+        }
+        let view = self.view.pinned().unwrap_or_else(|| self.view.clone());
+        let mut updates = Vec::new();
+        for (id, req) in reqs {
+            if let Ok(tpl) = view.get_block_template(req.as_ref()) {
+                updates.push((id, tpl));
+            }
+        }
+        let mut st = self.lock();
+        for (id, tpl) in updates {
+            if let Some(s) = st.subs.get_mut(&id) {
+                s.notify(&id, &tpl);
+            }
+        }
+    }
+    /// A new workshare (`newWorkshares` and `newWorksharesV2` subscriptions).
+    pub fn on_workshare(&self, wo: &quai_primitives::work::WorkObject) {
+        let Ok(header) = wo.auxiliary_work_header(quai_consensus::verifier::PINNED_SCHEDULE) else {
+            return;
+        };
+        let hw = header.wire();
+        let hash = header.block_hash().unwrap_or_default();
+        let num = quai_consensus::share_rules::number(hw.number.as_deref().unwrap_or_default())
+            .unwrap_or(0);
+        let payload = serde_json::json!({
+            "hash": json::hash_hex(&hash),
+            "parentHash": json::bytes_hex(hw.parent_hash.as_ref().map(|h| h.value.as_slice()).unwrap_or_default()),
+            "number": json::u64_hex(num),
+            "difficulty": json::big_hex(hw.difficulty.as_deref().unwrap_or_default()),
+            "primaryCoinbase": json::bytes_hex(hw.primary_coinbase.as_ref().map(|c| c.value.as_slice()).unwrap_or_default()),
+            "time": json::u64_hex(hw.time.unwrap_or(0)),
+            "lock": json::u64_hex(u64::from(hw.lock.unwrap_or(0))),
+        });
+        let mut st = self.lock();
+        for (id, s) in st.subs.iter_mut() {
+            if matches!(s.event, Event::Workshares { .. }) {
+                s.notify(id, &payload);
             }
         }
     }

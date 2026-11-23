@@ -150,6 +150,9 @@ pub fn run_until(
         commit_every: opts.commit_every,
         store: opts.store,
         shadow: false,
+        archive: false,
+        index_address_utxos: false,
+        prune_blocks: None,
     };
     let caches = match caches {
         Some(c) => Some(c),

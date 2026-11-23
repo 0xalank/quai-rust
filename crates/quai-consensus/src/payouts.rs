@@ -82,11 +82,49 @@ pub fn average_fees(
             .quotient(&U1024::from_u64(100)),
     )
 }
+/// AuxPoW template age using Quai time as a floor (`a60f36fb1`):
+/// cannot be reduced by freezing the donor timestamp, and invalid future
+/// signatures stay stale (`u64::MAX`).
+pub fn auxpow_template_age(quai_time: u64, donor_timestamp: u32, signature: u32) -> u64 {
+    let timestamp = quai_time.max(u64::from(donor_timestamp));
+    if timestamp < u64::from(signature) {
+        u64::MAX
+    } else {
+        timestamp - u64::from(signature)
+    }
+}
 /// Includes the original u32 subtraction/addition wraparound and per-algorithm
 /// liveness cutoff. Signature-time extraction errors supply zero in Go.
 pub fn time_discount(reward: Uint, id: u8, timestamp: u32, signature: u32) -> Result<Uint, Error> {
     let live = if matches!(id, 2 | 3) { 30u32 } else { 18 };
     let elapsed = timestamp.wrapping_sub(signature).clamp(3, live);
+    let span = live - 3;
+    let numerator = 70 * span + 30 * (live - elapsed);
+    narrow(
+        wide(reward)
+            .wrapping_mul(&U1024::from_u64(numerator as u64))
+            .quotient(&U1024::from_u64((100 * span) as u64)),
+    )
+}
+/// Fork-aware share reward time discount (`go-quai a60f36fb1`): after
+/// `StateRepairForkBlock`, uses `auxpow_template_age(quai_time, donor_ts, sig)`
+/// instead of raw `u32` wraparound subtraction on the donor timestamp alone.
+pub fn time_discount_at(
+    reward: Uint,
+    id: u8,
+    donor_timestamp: u32,
+    quai_time: u64,
+    signature: u32,
+    prime: u64,
+    forks: &quai_primitives::spec::ForkSchedule,
+) -> Result<Uint, Error> {
+    if !forks.state_repair_active(prime) {
+        return time_discount(reward, id, donor_timestamp, signature);
+    }
+    let live = if matches!(id, 2 | 3) { 30u32 } else { 18 };
+    let age =
+        auxpow_template_age(quai_time, donor_timestamp, signature).min(u64::from(u32::MAX)) as u32;
+    let elapsed = age.clamp(3, live);
     let span = live - 3;
     let numerator = 70 * span + 30 * (live - elapsed);
     narrow(
@@ -259,7 +297,21 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
                         reward
                     }
                 } else {
-                    time_discount(reward, aux.id(), timestamp, signature)?
+                    let share_prime = h
+                        .prime_terminus_number
+                        .as_deref()
+                        .and_then(|b| share_rules::number(b).ok())
+                        .unwrap_or(block.prime);
+                    let quai_time = h.time.unwrap_or(0);
+                    time_discount_at(
+                        reward,
+                        aux.id(),
+                        timestamp,
+                        quai_time,
+                        signature,
+                        share_prime,
+                        &FORKS,
+                    )?
                 };
             } else {
                 reward = narrow(
@@ -293,7 +345,8 @@ pub fn project<F: FnMut(&Header) -> Result<Hash, Error>>(
         reward = reward.max(Uint::ONE);
         let index = first_index
             .checked_add(out.len())
-            .ok_or(Error::ResourceLimit("reward ETX index"))? as u16;
+            .and_then(|n| u16::try_from(n).ok())
+            .ok_or(Error::ResourceLimit("reward ETX index"))?;
         let mut data = h.data.clone();
         data.extend(
             header
@@ -334,4 +387,28 @@ pub fn native_components(
     project(history, block, location, exchange, first_index, |h| {
         verifier.work_for_inclusion(h, &location).map(|v| v.hash())
     })
+}
+
+#[cfg(test)]
+mod liveness_tests {
+    use super::*;
+
+    #[test]
+    fn auxpow_liveness_switches_to_quai_time_floor_at_state_repair_fork() {
+        let mut forks = FORKS;
+        forks.state_repair = 1000;
+        let reward = Uint::from_u64(10_000);
+        // Frozen donor timestamp (t=100, sig=100) while Quai time has moved forward to 200:
+        // Before fork: uses donor_timestamp - sig = 0 -> full 100% reward.
+        let pre = time_discount_at(reward, 2, 100, 200, 100, 999, &forks).unwrap();
+        assert_eq!(pre, reward);
+        // At/after fork: Quai time 200 floors the age at 100s (>30s cutoff) -> discounted to 70%.
+        let post = time_discount_at(reward, 2, 100, 200, 100, 1000, &forks).unwrap();
+        assert_eq!(post, Uint::from_u64(7_000));
+        // Future signature after fork stays stale (70%).
+        let future = time_discount_at(reward, 2, 100, 100, 500, 1000, &forks).unwrap();
+        assert_eq!(future, Uint::from_u64(7_000));
+        assert_eq!(auxpow_template_age(100, 100, 500), u64::MAX);
+        assert_eq!(auxpow_template_age(200, 100, 150), 50);
+    }
 }

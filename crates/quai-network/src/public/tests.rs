@@ -787,3 +787,31 @@ async fn a_kademlia_contact_with_only_a_circuit_address_is_dialed_through_its_re
     assert!(address::is_circuit(&address), "{address}");
     assert_eq!(node.stats().await.unwrap().circuit_dials, 1);
 }
+
+#[test]
+fn relay_cap_slice_validator_and_peer_scoring_defaults() {
+    let relay = PeerId::random();
+    let circuit: Multiaddr = format!("/ip4/1.2.3.4/tcp/4001/p2p/{relay}/p2p-circuit")
+        .parse()
+        .unwrap();
+    assert_eq!(address::relay_peer(&circuit), Some(relay));
+    assert_eq!(
+        address::relay_peer(&"/ip4/1.2.3.4/tcp/4001".parse().unwrap()),
+        None
+    );
+
+    // Slice validator constructs cleanly for non-[0,0] slices.
+    let v = validate::Validator::with_slice(
+        Arc::new(quai_consensus::pow::SharedCaches::new(2).unwrap()),
+        Arc::new(std::sync::RwLock::new(validate::Heads::default())),
+        [0, 1],
+    );
+    let _ = v;
+
+    // Conservative GossipSub peer/topic scoring params construct cleanly.
+    let (params, thresholds) = gossip::peer_score_params();
+    assert!(thresholds.graylist_threshold <= thresholds.publish_threshold);
+    assert!(thresholds.gossip_threshold >= thresholds.graylist_threshold);
+    assert!(params.decay_interval > Duration::ZERO);
+    let _ = gossip::topic_score_params();
+}

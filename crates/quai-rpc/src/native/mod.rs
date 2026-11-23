@@ -10,18 +10,21 @@
 //! Filters (`quai_newFilter` and the others) and subscriptions live in
 //! `filters.rs`, driven by `ChainView::head_events`; the Qi and conversion
 //! quotes in `qi.rs`.
+pub mod admin_debug;
 pub mod args;
 pub mod chain;
 pub mod eth;
 pub mod fees;
 pub mod filters;
 pub mod json;
+pub mod miner;
 pub mod qi;
 
 use crate::view::{BlockData, CallError, CallRequest, ChainView, ViewError};
 use args::{Address, Args, BlockNumber, BlockRef};
 use quai_primitives::{transaction::AccessTuple, Hash};
 use serde_json::{json, Map, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// A JSON-RPC error object (`rpc.jsonError`).
@@ -198,6 +201,73 @@ pub const METHODS: &[&str] = &[
     "eth_getLogs",
     "eth_subscribe",
     "eth_unsubscribe",
+    // Mining, AuxPoW & Workshares (miner.rs)
+    "eth_mining",
+    "eth_primaryCoinbase",
+    "eth_coinbase",
+    "eth_hashrate",
+    "quai_mining",
+    "quai_hashrate",
+    "miner_start",
+    "miner_setExtra",
+    "miner_setGasLimit",
+    "miner_setGasPrice",
+    "miner_setLockupByte",
+    "miner_setMinerPreference",
+    "miner_setPrimaryCoinbase",
+    "miner_setRecommitInterval",
+    "quai_calcOrder",
+    "quai_getBlockTemplate",
+    "quai_getCoinbaseTxForWorkShareHash",
+    "quai_getDonorChainInfoForWorkshare",
+    "quai_getMiningInfo",
+    "quai_getPendingHeader",
+    "quai_getPendingWorkShares",
+    "quai_getQuaiHeaderForDonorHash",
+    "quai_getSubsidyChainHeight",
+    "quai_getWorkShareP2PThreshold",
+    "quai_receiveMinedHeader",
+    "quai_receiveRawWorkShare",
+    "quai_receiveWorkShare",
+    "quai_setWorkShareP2PThreshold",
+    "quai_signAuxTemplate",
+    "quai_submitAuxTemplate",
+    "quai_submitKawpowBlock",
+    "quai_submitScryptBlock",
+    "quai_submitShaBlock",
+    "workshare_getWorkShareThreshold",
+    "workshare_receiveSubWorkshare",
+    // Admin, Debug & Web3/Eth/Quai utilities (admin_debug.rs)
+    "admin_exportChain",
+    "admin_importChain",
+    "admin_nodeInfo",
+    "admin_peers",
+    "debug_accountRange",
+    "debug_chaindbCompact",
+    "debug_chaindbProperty",
+    "debug_dumpBlock",
+    "debug_getBlockRlp",
+    "debug_getModifiedAccountsByHash",
+    "debug_getModifiedAccountsByNumber",
+    "debug_getWorkshareLRUDump",
+    "debug_preimage",
+    "debug_printBlock",
+    "debug_seedHash",
+    "debug_storageRangeAt",
+    "web3_clientVersion",
+    "web3_sha3",
+    "eth_syncing",
+    "quai_syncing",
+    "eth_feeHistory",
+    "quai_feeHistory",
+    "eth_maxPriorityFeePerGas",
+    "quai_maxPriorityFeePerGas",
+    "eth_getBlockReceipts",
+    "quai_getBlockReceipts",
+    "eth_protocolVersion",
+    "quai_protocolVersion",
+    "txpool_getRollingFeeInfoV2",
+    "quai_getRollingFeeInfo",
 ];
 
 /// Answer one call. View calls do disk reads and proof-of-work, so they run
@@ -213,15 +283,64 @@ pub async fn handle(view: Arc<dyn ChainView>, method: &str, params: &Value) -> R
     }
 }
 
+/// Answer one call while holding `permit` until the blocking thread finishes
+/// and checking `cancel` cooperatively on long loops/EVM calls.
+pub async fn handle_cancellable(
+    view: Arc<dyn ChainView>,
+    method: &str,
+    params: &Value,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    cancel: Arc<AtomicBool>,
+) -> R<Value> {
+    let view = view.pinned().unwrap_or(view);
+    let method = method.to_string();
+    let params = params.clone();
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        dispatch_cancellable(view.as_ref(), &method, &params, Some(&cancel))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(RpcError::go("method handler crashed")),
+    }
+}
+
+fn check_cancel(cancel: Option<&Arc<AtomicBool>>) -> R<()> {
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(RpcError {
+            code: -32002,
+            message: "request timed out".into(),
+            data: None,
+        });
+    }
+    Ok(())
+}
+
 pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> {
+    dispatch_cancellable(view, method, params, None)
+}
+
+pub fn dispatch_cancellable(
+    view: &dyn ChainView,
+    method: &str,
+    params: &Value,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Value> {
     let method = eth::alias(method);
-    if let Some(r) = qi::dispatch(view, method, params) {
+    if let Some(r) = qi::dispatch_cancellable(view, method, params, cancel.map(Arc::as_ref)) {
         return r;
     }
     if let Some(r) = chain::dispatch(view, method, params) {
         return r;
     }
-    if let Some(r) = eth::dispatch(view, method, params) {
+    if let Some(r) = eth::dispatch_cancellable(view, method, params, cancel) {
+        return r;
+    }
+    if let Some(r) = miner::dispatch(view, method, params) {
+        return r;
+    }
+    if let Some(r) = admin_debug::dispatch(view, method, params) {
         return r;
     }
     match method {
@@ -417,7 +536,7 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
         "quai_getLogs" => {
             let a = Args::new(params, 1)?;
             let filter = a.get(0, filter)?;
-            logs(view, &filter)
+            logs_cancellable(view, &filter, cancel)
         }
         "quai_getBalance" => {
             let a = Args::new(params, 2)?;
@@ -561,7 +680,7 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
                     args::type_error("object", "quaiapi.StateOverride"),
                 ));
             }
-            do_call_rpc(view, &call, at)
+            do_call_rpc_cancellable(view, &call, at, cancel)
         }
         "quai_estimateGas" => {
             let a = Args::new(params, 2)?;
@@ -569,7 +688,7 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
             let at = a
                 .get_optional(1, args::block_ref)?
                 .unwrap_or(BlockRef::Number(BlockNumber::Latest));
-            estimate_gas(view, call, at)
+            estimate_gas_cancellable(view, call, at, cancel)
         }
         "quai_createAccessList" => {
             let a = Args::new(params, 2)?;
@@ -577,7 +696,7 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> R<Value> 
             let at = a
                 .get_optional(1, args::block_ref)?
                 .unwrap_or(BlockRef::Number(BlockNumber::Latest));
-            create_access_list(view, &call, at)
+            create_access_list_cancellable(view, &call, at, cancel)
         }
         "quai_gasPrice" => {
             Args::new(params, 0)?;
@@ -1021,8 +1140,36 @@ fn block_logs(view: &dyn ChainView, f: &Filter, block: &BlockData, out: &mut Vec
     Ok(())
 }
 pub(crate) const MAX_FILTER_RANGE: i64 = 10_000;
+/// Test whether `value` has all three 11-bit bloom positions set in a 256-byte
+/// Quai log bloom (matching `quai_primitives::receipt::logs_bloom`).
+fn bloom_test(bloom: &[u8; 256], value: &[u8]) -> bool {
+    let hash = quai_primitives::transaction::keccak(value);
+    for pair in hash[..6].chunks_exact(2) {
+        let bit = usize::from(u16::from_be_bytes([pair[0], pair[1]]) & 0x7ff);
+        if (bloom[255 - (bit >> 3)] & (1 << (bit & 7))) == 0 {
+            return false;
+        }
+    }
+    true
+}
+/// `bloomFilter`: true if a block with `bloom` may contain a log matching `f`.
+pub(crate) fn bloom_matches(bloom: &[u8; 256], f: &Filter) -> bool {
+    if !f.addresses.is_empty() && !f.addresses.iter().any(|a| bloom_test(bloom, a)) {
+        return false;
+    }
+    for set in &f.topics {
+        if !set.is_empty() && !set.iter().any(|t| bloom_test(bloom, t)) {
+            return false;
+        }
+    }
+    true
+}
 /// `PublicFilterAPI.GetLogs`: its range checks, then `Filter.Logs`.
-fn logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
+fn logs_cancellable(
+    view: &dyn ChainView,
+    f: &Filter,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Value> {
     if f.block_hash.is_none() {
         let begin = f.from.map_or(-1, BlockNumber::int64);
         let end = f.to.map_or(-1, BlockNumber::int64);
@@ -1037,14 +1184,25 @@ fn logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
             )));
         }
     }
-    filter_logs(view, f)
+    filter_logs_cancellable(view, f, cancel.map(Arc::as_ref))
 }
 /// `Filter.Logs` of a block filter (`HeaderByHash`: any known block) or a
 /// range filter, in block order. Go collects a range on 8 goroutines and
 /// appends their parts in the order they finish.
-pub(crate) fn filter_logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
+pub(crate) fn filter_logs_cancellable(
+    view: &dyn ChainView,
+    f: &Filter,
+    cancel: Option<&AtomicBool>,
+) -> R<Value> {
     let mut out = vec![];
     if let Some(hash) = f.block_hash {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(RpcError {
+                code: -32002,
+                message: "request timed out".into(),
+                data: None,
+            });
+        }
         let Some(block) = view.block_or_candidate(&hash)? else {
             return Err(RpcError::go("unknown block"));
         };
@@ -1064,9 +1222,24 @@ pub(crate) fn filter_logs(view: &dyn ChainView, f: &Filter) -> R<Value> {
             "filter range exceeds maximum limit of {MAX_FILTER_RANGE} blocks"
         )));
     }
+    let has_criteria = !f.addresses.is_empty() || f.topics.iter().any(|s| !s.is_empty());
     for n in begin..=end.min(head) {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(RpcError {
+                code: -32002,
+                message: "request timed out".into(),
+                data: None,
+            });
+        }
         if !view.may_have_logs(n)? {
             continue;
+        }
+        if has_criteria {
+            if let Some(bloom) = view.bloom_at(n)? {
+                if !bloom_matches(&bloom, f) {
+                    continue;
+                }
+            }
         }
         if let Some(block) = view.block_by_number(n)? {
             block_logs(view, f, &block, &mut out)?;
@@ -1214,7 +1387,15 @@ fn genesis_parent() -> RpcError {
     ))
 }
 /// `DoCall` without overrides.
-fn do_call(view: &dyn ChainView, args: &CallArgs, block: &BlockData) -> Called {
+fn do_call_cancellable(
+    view: &dyn ChainView,
+    args: &CallArgs,
+    block: &BlockData,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> Called {
+    if let Err(e) = check_cancel(cancel) {
+        return Called::Failed(e);
+    }
     let from = args.from();
     if let Err(e) = quai_internal(view, &from) {
         return Called::Failed(e);
@@ -1232,7 +1413,11 @@ fn do_call(view: &dyn ChainView, args: &CallArgs, block: &BlockData) -> Called {
     if block.number == 0 {
         return Called::Failed(genesis_parent());
     }
-    match view.call(block, &request) {
+    let result = match cancel {
+        Some(c) => view.call_cancellable(block, &request, c),
+        None => view.call(block, &request),
+    };
+    match result {
         Ok(result) => Called::Done(result),
         Err(CallError::Message {
             text,
@@ -1279,10 +1464,15 @@ fn revert_error(data: &[u8]) -> RpcError {
     }
 }
 /// `PublicBlockChainQuaiAPI.Call`.
-fn do_call_rpc(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Value> {
+fn do_call_rpc_cancellable(
+    view: &dyn ChainView,
+    args: &CallArgs,
+    at: BlockRef,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Value> {
     let block = resolve(view, at)?;
     view.state(&block)?;
-    match do_call(view, args, &block) {
+    match do_call_cancellable(view, args, &block, cancel) {
         Called::Done(r) => {
             if r.reverted && !r.return_data.is_empty() {
                 return Err(revert_error(&r.return_data));
@@ -1307,7 +1497,12 @@ struct Traced {
 const ACCESS_LIST_ROUNDS: usize = 16;
 /// `AccessList` (internal/quaiapi/api.go): run the message with an
 /// access-list tracer until the list no longer grows.
-fn access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Traced> {
+fn access_list_cancellable(
+    view: &dyn ChainView,
+    args: &CallArgs,
+    at: BlockRef,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Traced> {
     let block = resolve(view, at)?;
     let state = view.state(&block)?;
     // setDefaults
@@ -1348,6 +1543,7 @@ fn access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Traced>
     let mut first = true;
     let mut rounds = 0;
     while rounds < ACCESS_LIST_ROUNDS {
+        check_cancel(cancel)?;
         let request = CallRequest {
             from,
             to: args.to,
@@ -1357,7 +1553,11 @@ fn access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Traced>
             access_list: list.clone(),
             trace_access_list: true,
         };
-        match view.call(&block, &request) {
+        let call_res = match cancel {
+            Some(c) => view.call_cancellable(&block, &request, c),
+            None => view.call(&block, &request),
+        };
+        match call_res {
             Ok(r) => {
                 let traced = r.access_list.ok_or_else(|| {
                     RpcError::from(ViewError::Unavailable("access-list tracing".into()))
@@ -1450,8 +1650,13 @@ fn message_text(r: &CallRequest, nonce: u64) -> String {
     )
 }
 /// `PublicBlockChainQuaiAPI.CreateAccessList`.
-fn create_access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<Value> {
-    let traced = access_list(view, args, at)?;
+fn create_access_list_cancellable(
+    view: &dyn ChainView,
+    args: &CallArgs,
+    at: BlockRef,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Value> {
+    let traced = access_list_cancellable(view, args, at, cancel)?;
     let mut out = Map::new();
     out.insert(
         "accessList".into(),
@@ -1476,7 +1681,12 @@ fn create_access_list(view: &dyn ChainView, args: &CallArgs, at: BlockRef) -> R<
 }
 /// `PublicBlockChainQuaiAPI.EstimateGas`: a conversion and a Qi
 /// transaction have their own branches, then `DoEstimateGas`.
-fn estimate_gas(view: &dyn ChainView, args: CallArgs, at: BlockRef) -> R<Value> {
+fn estimate_gas_cancellable(
+    view: &dyn ChainView,
+    args: CallArgs,
+    at: BlockRef,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Value> {
     let from_quai = !qi(&args.from());
     if from_quai && args.to.is_some_and(|t| qi(&t)) {
         return Err(RpcError::from(ViewError::Unavailable(
@@ -1492,11 +1702,16 @@ fn estimate_gas(view: &dyn ChainView, args: CallArgs, at: BlockRef) -> R<Value> 
         }
         _ => return Err(RpcError::go("unsupported tx type")),
     }
-    do_estimate_gas(view, args, at)
+    do_estimate_gas_cancellable(view, args, at, cancel)
 }
 /// `DoEstimateGas` (internal/quaiapi/api.go), which
 /// `PublicBlockChainAPI.EstimateGas` (`eth_estimateGas`) calls directly.
-fn do_estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<Value> {
+fn do_estimate_gas_cancellable(
+    view: &dyn ChainView,
+    mut args: CallArgs,
+    at: BlockRef,
+    cancel: Option<&Arc<AtomicBool>>,
+) -> R<Value> {
     // The gas ceiling: the given gas, else the gas limit of the block
     // (HeaderByNumberOrHash).
     let mut hi = match args.gas {
@@ -1547,16 +1762,18 @@ fn do_estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<
     // builds, so the estimate pays its intrinsic gas; on an error it goes on
     // without one, as Go does.
     if args.access_list.is_none() && args.to.is_some() && !args.data().is_empty() {
-        if let Ok(traced) = access_list(view, &args, at) {
+        check_cancel(cancel)?;
+        if let Ok(traced) = access_list_cancellable(view, &args, at, cancel) {
             args.access_list = Some(traced.list);
         }
     }
     let block = resolve(view, at)?;
     view.state(&block)?;
     let executable = |gas: u64| -> R<(bool, Option<crate::view::CallResult>)> {
+        check_cancel(cancel)?;
         let mut a = args.clone();
         a.gas = Some(gas);
-        match do_call(view, &a, &block) {
+        match do_call_cancellable(view, &a, &block, cancel) {
             Called::Done(r) => Ok((r.error.is_some() || r.reverted, Some(r))),
             Called::Intrinsic(_) => Ok((true, None)),
             Called::Failed(e) => Err(e),
@@ -1564,6 +1781,7 @@ fn do_estimate_gas(view: &dyn ChainView, mut args: CallArgs, at: BlockRef) -> R<
     };
     let mut lo = TX_GAS - 1;
     while lo + 1 < hi {
+        check_cancel(cancel)?;
         let mid = (hi + lo) / 2;
         if executable(mid)?.0 {
             lo = mid;
@@ -1648,7 +1866,8 @@ mod parity_table_tests {
             };
             assert_eq!(row["rust"].as_bool(), Some(served), "{}", row["key"]);
         }
-        for row in table["outside"].as_array().unwrap() {
+        let outside = table["outside"].as_array().unwrap();
+        for row in outside {
             let method = row["method"].as_str().unwrap();
             assert_eq!(
                 row["rust"].as_bool(),
@@ -1658,8 +1877,9 @@ mod parity_table_tests {
         }
         for method in super::METHODS {
             // Every `*_unsubscribe` reaches one handler (rpc/handler.go).
-            let listed =
-                method.ends_with("_unsubscribe") || rows.iter().any(|r| r["method"] == *method);
+            let listed = method.ends_with("_unsubscribe")
+                || rows.iter().any(|r| r["method"] == *method)
+                || outside.iter().any(|r| r["method"] == *method);
             assert!(listed, "{method} is not in the go-quai inventory");
         }
     }

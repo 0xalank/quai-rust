@@ -113,6 +113,26 @@ pub const COLOSSEUM_BOOTNODES: [&str; 3] = [
     "/dns4/colosseum2.qu.ai/tcp/4002/p2p/12D3KooWPdEr7wZfcWg9d2EoX6cmnyx3GvEnV5pVJvRxMUbkKesB",
     "/dns4/colosseum3.qu.ai/tcp/4002/p2p/12D3KooWMHTexdSq1zQ2Sn4L8zddEa8PWK8TGM56ZHszRuoUPoq1",
 ];
+/// go-quai `common/bootnodes.go`, environment orchard.
+pub const ORCHARD_BOOTNODES: [&str; 2] = [
+    "/dns4/orchard1.qu.ai/tcp/4002/p2p/12D3KooWK755v2ynqqgvrEeTQe38E1i556jDwX9JcduotE1bfvjU",
+    "/dns4/orchard2.qu.ai/tcp/4002/p2p/12D3KooWMjRbhyjQ5PCbt6qzMcVJx3n5NRx6uUv43yQP9ec3DV3U",
+];
+/// go-quai `common/bootnodes.go`, environment garden.
+pub const GARDEN_BOOTNODES: [&str; 0] = [];
+/// go-quai `common/bootnodes.go`, environment lighthouse.
+pub const LIGHTHOUSE_BOOTNODES: [&str; 0] = [];
+
+/// Default bootnodes for a Quai network name (`colosseum`, `orchard`, `garden`, `lighthouse`, `local`).
+pub fn bootnodes_for(network: &str) -> &'static [&'static str] {
+    match network {
+        "colosseum" => &COLOSSEUM_BOOTNODES,
+        "orchard" => &ORCHARD_BOOTNODES,
+        "garden" => &GARDEN_BOOTNODES,
+        "lighthouse" => &LIGHTHOUSE_BOOTNODES,
+        _ => &[],
+    }
+}
 /// Read-only profile: most simultaneous connections, established plus
 /// pending dials.
 pub const MAX_PEERS: u32 = 8;
@@ -121,6 +141,14 @@ const MAX_PENDING_DIALS: u32 = 2;
 pub const GO_MAX_PEERS: usize = 50;
 /// Outbound request streams at once.
 const MAX_STREAMS: usize = 32;
+/// Inbound `/quai/1.0.0` request streams served concurrently (global & per-peer).
+const MAX_INBOUND_STREAMS: usize = 64;
+const MAX_INBOUND_PER_PEER: usize = 8;
+/// Bounded content-hash dedup table for GossipSub replay mitigation.
+const MAX_GOSSIP_SEEN: usize = 8192;
+/// Bounded sizes for long-lived driver metadata maps.
+const MAX_DRIVER_PEERS_CACHE: usize = 8192;
+const MAX_REASON_KEYS: usize = 128;
 /// Genesis checks at once.
 const MAX_CHECKING: usize = 4;
 /// Relays this node holds a reservation on while it is not reachable.
@@ -225,9 +253,15 @@ pub struct Config {
     pub genesis_check: bool,
     /// The zone genesis a peer must answer.
     pub genesis: Hash,
+    /// Slice `[region, zone]` handled by this node (default `[0, 0]`).
+    pub slice: [u8; 2],
     /// Provide the subscribed topic CIDs once the node is reachable, and
     /// find providers for topics with few peers.
     pub provide: bool,
+    /// Offer circuit-relay v2 hop service to peers behind NAT (go-quai `EnableRelayService`).
+    pub relay_server: bool,
+    /// Enable GossipSub v1.1 peer scoring to throttle peers sending invalid messages.
+    pub peer_scoring: bool,
     /// Peer slots: peers that passed the genesis check.
     pub max_peers: usize,
     /// Established connections, slots plus DHT contacts and checks.
@@ -261,7 +295,10 @@ impl Config {
             publish: false,
             genesis_check: false,
             genesis: colosseum_genesis(),
+            slice: [0, 0],
             provide: false,
+            relay_server: false,
+            peer_scoring: false,
             max_peers: (MAX_PEERS - MAX_PENDING_DIALS) as usize,
             max_connections: MAX_PEERS - MAX_PENDING_DIALS,
             max_per_ip: MAX_PEERS as usize,
@@ -290,7 +327,10 @@ impl Config {
             publish: false,
             genesis_check: true,
             genesis: colosseum_genesis(),
+            slice: [0, 0],
             provide: true,
+            relay_server: false,
+            peer_scoring: true,
             max_peers: GO_MAX_PEERS,
             max_connections: GO_MAX_PEERS as u32 + 16,
             max_per_ip: 4,
@@ -314,6 +354,7 @@ struct Behaviour {
     ping: ping::Behaviour,
     kad: kad::Behaviour<kad::store::MemoryStore>,
     relay: Toggle<relay::client::Behaviour>,
+    relay_server: Toggle<relay::Behaviour>,
     dcutr: Toggle<dcutr::Behaviour>,
     autonat: Toggle<autonat::Behaviour>,
 }
@@ -452,6 +493,33 @@ pub struct Stats {
     pub dead_connections: u64,
 }
 
+/// Connected peer snapshot for `admin_peers`.
+#[derive(Clone, Debug, Default)]
+pub struct PeerSnapshot {
+    pub id: String,
+    pub agent: String,
+    pub remote_addr: String,
+    pub inbound: bool,
+    pub outbound: bool,
+    pub relayed: bool,
+    pub verified: bool,
+    pub quality: i32,
+    pub protocols: Vec<String>,
+}
+
+/// Local P2P node info snapshot for `admin_nodeInfo`.
+#[derive(Clone, Debug, Default)]
+pub struct NodeInfoSnapshot {
+    pub peer_id: String,
+    pub listen_addrs: Vec<String>,
+    pub external_addrs: Vec<String>,
+    pub protocols: Vec<String>,
+    pub topics: Vec<String>,
+    pub nat: String,
+    pub slice: [u8; 2],
+    pub relay_server: bool,
+}
+
 type Reply<T> = oneshot::Sender<io::Result<T>>;
 enum Command {
     Dial(Multiaddr, Reply<()>),
@@ -462,6 +530,8 @@ enum Command {
     Publish(String, Vec<u8>, Reply<()>),
     Ban(PeerId, String),
     Stats(oneshot::Sender<Stats>),
+    PeersInfo(oneshot::Sender<Vec<PeerSnapshot>>),
+    NodeInfo(oneshot::Sender<NodeInfoSnapshot>),
 }
 
 /// One gossip message for a validator thread.
@@ -704,11 +774,15 @@ impl PublicNode {
             .with_other_transport(|key| build_transport(key, &c, relay_transport, circuits.clone()))
             .map_err(err)?
             .with_behaviour(|key| {
-                let gossip = gossipsub::Behaviour::new(
+                let mut gossip = gossipsub::Behaviour::new(
                     gossipsub::MessageAuthenticity::Signed(key.clone()),
                     gossip::config(true).map_err(err)?,
                 )
                 .map_err(err)?;
+                if c.peer_scoring {
+                    let (params, thresholds) = gossip::peer_score_params();
+                    gossip.with_peer_score(params, thresholds).map_err(err)?;
+                }
                 let local = key.public().to_peer_id();
                 let mut cfg = kad::Config::new(StreamProtocol::new(KAD_PROTOCOL));
                 cfg.set_query_timeout(Duration::from_secs(20));
@@ -767,6 +841,10 @@ impl PublicNode {
                     ),
                     kad,
                     relay: Toggle::from(relay_behaviour),
+                    relay_server: Toggle::from(
+                        c.relay_server
+                            .then(|| relay::Behaviour::new(local, relay::Config::default())),
+                    ),
                     dcutr: Toggle::from(c.reachability.then(|| dcutr::Behaviour::new(local))),
                     autonat: Toggle::from(autonat),
                 })
@@ -810,10 +888,11 @@ impl PublicNode {
                 let done = done_tx.clone();
                 let caches = caches.clone();
                 let heads = shared.heads.clone();
+                let slice = config.slice;
                 std::thread::Builder::new()
                     .name(format!("gossip-validate-{i}"))
                     .spawn(move || {
-                        let mut validator = Validator::new(caches, heads);
+                        let mut validator = Validator::with_slice(caches, heads, slice);
                         loop {
                             let job = lock(&jobs).recv();
                             let Ok(job) = job else { return };
@@ -857,6 +936,10 @@ impl PublicNode {
             started: Instant::now(),
             stats: Stats::default(),
             circuits,
+            inbound_streams: Arc::new(Semaphore::new(MAX_INBOUND_STREAMS)),
+            inbound_per_peer: Arc::new(Mutex::new(HashMap::new())),
+            gossip_seen: HashMap::new(),
+            gossip_seen_order: VecDeque::new(),
         };
         let driver = tokio::spawn(driver.run(commands, done_rx, internal_rx, incoming));
         Ok(Self {
@@ -913,6 +996,22 @@ impl PublicNode {
         self.commands.send(Command::Stats(tx)).await.map_err(err)?;
         rx.await.map_err(err)
     }
+    pub async fn peers_info(&self) -> io::Result<Vec<PeerSnapshot>> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Command::PeersInfo(tx))
+            .await
+            .map_err(err)?;
+        rx.await.map_err(err)
+    }
+    pub async fn node_info(&self) -> io::Result<NodeInfoSnapshot> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(Command::NodeInfo(tx))
+            .await
+            .map_err(err)?;
+        rx.await.map_err(err)
+    }
     pub fn is_connected(&self, peer: &PeerId) -> bool {
         read(&self.shared.connected).contains(peer)
     }
@@ -920,6 +1019,11 @@ impl PublicNode {
     /// the node starts with go-quai's "not found" answers).
     pub fn serve_from(&self, store: Arc<dyn serve::Store>) {
         *write(&self.shared.store) = store;
+    }
+    /// Anchor a context's gossip head to the node's validated canonical chain,
+    /// preventing unauthenticated gossip blocks from poisoning [`Heads`].
+    pub fn set_canonical_head(&self, ctx: usize, head: validate::Head) {
+        write(&self.shared.heads).set_canonical(ctx, head);
     }
     /// Every peer with an open connection, in a slot or not.
     pub fn connected_peers(&self) -> Vec<PeerId> {
@@ -1260,6 +1364,13 @@ struct Driver {
     stats: Stats,
     /// Peers this node may reach through a relay circuit.
     circuits: Arc<Mutex<HashSet<PeerId>>>,
+    /// Global & per-peer concurrency bounds on inbound `/quai/1.0.0` streams.
+    inbound_streams: Arc<Semaphore>,
+    inbound_per_peer: Arc<Mutex<HashMap<PeerId, usize>>>,
+    /// Content-addressed dedup cache (`keccak(keccak(topic) || keccak(data))`)
+    /// to prevent GossipSub seqno-replay amplification and score farming.
+    gossip_seen: HashMap<Hash, Instant>,
+    gossip_seen_order: VecDeque<(Hash, Instant)>,
 }
 #[derive(Default)]
 struct PeerInfo {
@@ -1267,8 +1378,14 @@ struct PeerInfo {
     connections: HashMap<ConnectionId, bool>,
     /// The connections this node dialed.
     outbound: HashSet<ConnectionId>,
-    /// A direct address this node dialed.
+    /// A direct address this node dialed or accepted.
     dialed: Option<Multiaddr>,
+    /// Last remote address observed on ConnectionEstablished.
+    remote_addr: Option<Multiaddr>,
+    /// Identify agent version.
+    agent: String,
+    /// Identify protocol list.
+    protocols: Vec<String>,
     /// Identify listen addresses that the dial policy allows.
     listen: Vec<Multiaddr>,
     relay_hop: bool,
@@ -1369,13 +1486,45 @@ impl Driver {
         if lock(&self.shared.book).is_banned(&peer, Instant::now()) {
             return;
         }
-        tokio::spawn(serve::serve_stream(
-            stream,
+        let Ok(permit) = self.inbound_streams.clone().try_acquire_owned() else {
+            return;
+        };
+        {
+            let mut per_peer = lock(&self.inbound_per_peer);
+            let count = per_peer.entry(peer).or_default();
+            if *count >= MAX_INBOUND_PER_PEER {
+                return;
+            }
+            *count += 1;
+        }
+        struct PeerStreamGuard {
+            peer: PeerId,
+            counts: Arc<Mutex<HashMap<PeerId, usize>>>,
+            _permit: tokio::sync::OwnedSemaphorePermit,
+        }
+        impl Drop for PeerStreamGuard {
+            fn drop(&mut self) {
+                let mut counts = lock(&self.counts);
+                if let Some(n) = counts.get_mut(&self.peer) {
+                    *n = n.saturating_sub(1);
+                    if *n == 0 {
+                        counts.remove(&self.peer);
+                    }
+                }
+            }
+        }
+        let guard = PeerStreamGuard {
             peer,
-            read(&self.shared.store).clone(),
-            self.shared.book.clone(),
-            self.shared.served.clone(),
-        ));
+            counts: self.inbound_per_peer.clone(),
+            _permit: permit,
+        };
+        let store = read(&self.shared.store).clone();
+        let book = self.shared.book.clone();
+        let served = self.shared.served.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            serve::serve_stream(stream, peer, store, book, served).await;
+        });
     }
 
     fn on_command(&mut self, command: Command) {
@@ -1383,7 +1532,13 @@ impl Driver {
         match command {
             Command::Dial(address, reply) => {
                 if let Some(target) = address::circuit_target(&address) {
-                    lock(&self.circuits).insert(target);
+                    let mut circuits = lock(&self.circuits);
+                    if circuits.len() >= MAX_DRIVER_PEERS_CACHE && !circuits.contains(&target) {
+                        if let Some(evict) = circuits.iter().next().copied() {
+                            circuits.remove(&evict);
+                        }
+                    }
+                    circuits.insert(target);
                 }
                 let result = if !policy.allows_target(&address) {
                     Err(io::Error::new(
@@ -1424,14 +1579,22 @@ impl Driver {
                 let _ = reply.send(result);
             }
             Command::Subscribe(topic, reply) => {
+                let ident = gossipsub::IdentTopic::new(topic.clone());
                 let result = self
                     .swarm
                     .behaviour_mut()
                     .gossip
-                    .subscribe(&gossipsub::IdentTopic::new(topic.clone()))
+                    .subscribe(&ident)
                     .map(|_| ())
                     .map_err(err);
                 if result.is_ok() {
+                    if self.config.peer_scoring {
+                        let _ = self
+                            .swarm
+                            .behaviour_mut()
+                            .gossip
+                            .set_topic_params(ident, gossip::topic_score_params());
+                    }
                     self.topics.insert(topic);
                 }
                 let _ = reply.send(result);
@@ -1475,6 +1638,68 @@ impl Driver {
                 let stats = self.snapshot();
                 let _ = reply.send(stats);
             }
+            Command::PeersInfo(reply) => {
+                let peers = self.peers_snapshot();
+                let _ = reply.send(peers);
+            }
+            Command::NodeInfo(reply) => {
+                let info = self.node_info_snapshot();
+                let _ = reply.send(info);
+            }
+        }
+    }
+
+    fn peers_snapshot(&self) -> Vec<PeerSnapshot> {
+        let verified = read(&self.shared.verified).clone();
+        let book = lock(&self.shared.book);
+        let mut out = Vec::with_capacity(self.peers.len());
+        for (peer_id, info) in &self.peers {
+            let outbound = !info.outbound.is_empty();
+            let inbound = info.connections.len() > info.outbound.len();
+            let relayed = !info.connections.is_empty() && info.connections.values().all(|r| *r);
+            out.push(PeerSnapshot {
+                id: peer_id.to_string(),
+                agent: info.agent.clone(),
+                remote_addr: info
+                    .remote_addr
+                    .as_ref()
+                    .or(info.dialed.as_ref())
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+                inbound,
+                outbound,
+                relayed,
+                verified: verified.contains(peer_id),
+                quality: book.quality(peer_id),
+                protocols: info.protocols.clone(),
+            });
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        out
+    }
+
+    fn node_info_snapshot(&self) -> NodeInfoSnapshot {
+        let mut protocols = vec![
+            IDENTIFY_PROTOCOL_VERSION.to_string(),
+            KAD_PROTOCOL.to_string(),
+            "/meshsub/1.1.0".to_string(),
+        ];
+        if self.config.relay_server {
+            protocols.push(RELAY_HOP_PROTOCOL.to_string());
+        }
+        NodeInfoSnapshot {
+            peer_id: self.swarm.local_peer_id().to_string(),
+            listen_addrs: self.swarm.listeners().map(ToString::to_string).collect(),
+            external_addrs: self
+                .swarm
+                .external_addresses()
+                .map(ToString::to_string)
+                .collect(),
+            protocols,
+            topics: self.topics.iter().cloned().collect(),
+            nat: self.nat.clone(),
+            slice: self.config.slice,
+            relay_server: self.config.relay_server,
         }
     }
 
@@ -1573,12 +1798,48 @@ impl Driver {
             Verdict::Reject(_) => c.rejected += 1,
         }
         if let Some(reason) = verdict.reason() {
-            *self
-                .stats
-                .reasons
-                .entry(format!("{}: {reason}", verdict.label()))
-                .or_default() += 1;
+            let key = format!("{}: {reason}", verdict.label());
+            let bucket = if self.stats.reasons.contains_key(&key)
+                || self.stats.reasons.len() < MAX_REASON_KEYS
+            {
+                key
+            } else {
+                "other".into()
+            };
+            *self.stats.reasons.entry(bucket).or_default() += 1;
         }
+    }
+
+    fn note_gossip_payload(&mut self, topic: &str, data: &[u8]) -> bool {
+        let now = Instant::now();
+        while let Some((h, at)) = self.gossip_seen_order.front().copied() {
+            if now.saturating_duration_since(at) >= gossip::SEEN_TTL {
+                self.gossip_seen_order.pop_front();
+                if self.gossip_seen.get(&h).copied() == Some(at) {
+                    self.gossip_seen.remove(&h);
+                }
+            } else {
+                break;
+            }
+        }
+        let mut combined = [0u8; 64];
+        combined[..32].copy_from_slice(&quai_primitives::transaction::keccak(topic.as_bytes()));
+        combined[32..].copy_from_slice(&quai_primitives::transaction::keccak(data));
+        let digest = quai_primitives::transaction::keccak(&combined);
+        if self.gossip_seen.contains_key(&digest) {
+            return false;
+        }
+        while self.gossip_seen.len() >= MAX_GOSSIP_SEEN {
+            let Some((h, at)) = self.gossip_seen_order.pop_front() else {
+                break;
+            };
+            if self.gossip_seen.get(&h).copied() == Some(at) {
+                self.gossip_seen.remove(&h);
+            }
+        }
+        self.gossip_seen.insert(digest, now);
+        self.gossip_seen_order.push_back((digest, now));
+        true
     }
 
     fn on_gossip(&mut self, peer: PeerId, id: gossipsub::MessageId, message: gossipsub::Message) {
@@ -1589,6 +1850,8 @@ impl Driver {
             Some("peer is connected only through a relay")
         } else if !self.in_slot(&peer) {
             Some("peer has not passed the genesis check")
+        } else if !self.note_gossip_payload(&topic, &message.data) {
+            Some("duplicate gossip payload")
         } else {
             None
         };
@@ -1709,6 +1972,7 @@ impl Driver {
         let mut control = self.control.clone();
         let internal = self.internal.clone();
         let genesis = self.config.genesis;
+        let slice = self.config.slice.to_vec();
         tokio::spawn(async move {
             let result = async {
                 let inner = tokio::time::timeout(
@@ -1725,7 +1989,7 @@ impl Driver {
                     &mut book,
                     QuaiRequestMessage {
                         id: 1,
-                        location: Some(ProtoLocation { value: vec![0, 0] }),
+                        location: Some(ProtoLocation { value: slice }),
                         data: Some(rq::Data::Number(vec![])),
                         request: Some(rq::Request::BlockHash(ProtoHash::default())),
                     },
@@ -1755,6 +2019,13 @@ impl Driver {
         match result {
             Ok(()) => {
                 self.stats.genesis_checks.0 += 1;
+                if self.genesis_ok.len() >= MAX_DRIVER_PEERS_CACHE
+                    && !self.genesis_ok.contains(&peer)
+                {
+                    if let Some(evict) = self.genesis_ok.iter().next().copied() {
+                        self.genesis_ok.remove(&evict);
+                    }
+                }
                 self.genesis_ok.insert(peer);
                 if self.is_connected(&peer) {
                     self.admit(peer);
@@ -1776,6 +2047,21 @@ impl Driver {
             }
         }
         self.fill_slots();
+    }
+
+    fn record_relay_retry(&mut self, relay: PeerId, until: Instant) {
+        let now = Instant::now();
+        if self.relay_retry.len() >= MAX_DRIVER_PEERS_CACHE
+            && !self.relay_retry.contains_key(&relay)
+        {
+            self.relay_retry.retain(|_, t| *t > now);
+            if self.relay_retry.len() >= MAX_DRIVER_PEERS_CACHE {
+                if let Some(evict) = self.relay_retry.keys().next().copied() {
+                    self.relay_retry.remove(&evict);
+                }
+            }
+        }
+        self.relay_retry.insert(relay, until);
     }
 
     fn on_tick(&mut self) {
@@ -1834,7 +2120,7 @@ impl Driver {
                     self.relay_listeners.insert(id, relay);
                 }
                 Err(_) => {
-                    self.relay_retry.insert(relay, now + RELAY_RETRY);
+                    self.record_relay_retry(relay, now + RELAY_RETRY);
                 }
             }
         }
@@ -1897,7 +2183,7 @@ impl Driver {
                     if !accepted {
                         self.stats.reservations_failed += 1;
                     }
-                    self.relay_retry.insert(relay, Instant::now() + RELAY_RETRY);
+                    self.record_relay_retry(relay, Instant::now() + RELAY_RETRY);
                     let why = match reason {
                         Ok(()) => "reservation closed".to_string(),
                         Err(e) => chain(&e),
@@ -1923,6 +2209,7 @@ impl Driver {
                 write(&self.shared.connected).insert(peer_id);
                 let info = self.peers.entry(peer_id).or_default();
                 info.connections.insert(connection_id, relayed);
+                info.remote_addr = Some(address.clone());
                 if endpoint.is_dialer() {
                     info.outbound.insert(connection_id);
                 }
@@ -2011,6 +2298,8 @@ impl Driver {
             })) => {
                 let policy = self.config.policy;
                 let entry = self.peers.entry(peer_id).or_default();
+                entry.agent = info.agent_version.clone();
+                entry.protocols = info.protocols.iter().map(|p| p.to_string()).collect();
                 entry.relay_hop = info
                     .protocols
                     .iter()

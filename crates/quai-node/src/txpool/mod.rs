@@ -31,7 +31,7 @@ pub mod wire;
 use list::{num_slots, Lookup, Lru, PricedList, Tx, TxList};
 use quai_primitives::Hash;
 use quai_rpc::view::{AccountState, BlockData, UtxoData};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use tx::{Address, Body, PoolTx};
 
@@ -83,6 +83,12 @@ pub struct Config {
     /// The journal of local transactions (go-quai: `transactions.rlp` in
     /// the data directory). None: no journal.
     pub journal: Option<std::path::PathBuf>,
+    /// Legacy go-quai v0.57.0 bug-for-bug parity mode (test fixture oracle
+    /// only). Defaults to `false` so production nodes enforce reorg Qi removal
+    /// (`5dab7c402`), in-pool Qi UTXO double-spend checks, corrected
+    /// `poolLimiter` queue capping, and local validation before sharing-client
+    /// forwarding.
+    pub v0570_compat: bool,
 }
 const SECOND: u64 = 1_000_000_000;
 impl Default for Config {
@@ -105,6 +111,7 @@ impl Default for Config {
             sharing_clients: vec![],
             rpc_tx_fee_cap: 10000.0,
             journal: None,
+            v0570_compat: false,
         }
     }
 }
@@ -342,6 +349,9 @@ pub struct Pool {
     current_max_gas: u64,
     locals: BTreeSet<Address>,
     qi_pool: Lru<Hash, QiEntry>,
+    /// Outpoints spent by transactions currently in `qi_pool` (used to reject
+    /// in-pool Qi double-spends unless `v0570_compat` is set).
+    qi_spent: HashMap<(Hash, u16), Hash>,
     qi_fees: Lru<[u8; 16], Vec<u8>>,
     pending: BTreeMap<Address, TxList>,
     queue: BTreeMap<Address, TxList>,
@@ -389,6 +399,7 @@ impl Pool {
             current_max_gas: 0,
             locals: config.locals.iter().copied().collect(),
             qi_pool: Lru::new(config.qi_pool_size),
+            qi_spent: HashMap::new(),
             qi_fees: Lru::new(config.max_fees_cached),
             pending: BTreeMap::new(),
             queue: BTreeMap::new(),
@@ -542,6 +553,11 @@ impl Pool {
         }
         let is_local = local || self.locals_contain(&tx);
         self.validate_tx(&tx)?;
+        // Verify chain ID / pool sender BEFORE evicting existing transactions
+        // from a full pool so foreign-chain transactions can never drain valid
+        // entries at zero cost.
+        let from = tx.pool_sender(self.chain_id).map_err(String::from)?;
+        let internal = internal_and_quai(&from, self.location)?;
         let capacity = self.config.global_slots + self.config.global_queue;
         if (self.all.slots + num_slots(&tx)) as u64 > capacity {
             if self.priced.underpriced(&tx, &self.all) {
@@ -556,8 +572,6 @@ impl Pool {
                 self.remove_tx(&d.hash, false, now);
             }
         }
-        let from = tx.pool_sender(self.chain_id).map_err(String::from)?;
-        let internal = internal_and_quai(&from, self.location)?;
         if self.pending.get(&internal).is_some_and(|l| l.overlaps(&tx)) {
             let list = self.pending.get_mut(&internal).ok_or(ERR_INVALID_SENDER)?;
             let (inserted, old) = list.add(tx.clone(), self.config.price_bump);
@@ -772,12 +786,83 @@ impl Pool {
         (current, r, p)
     }
 
+    /// Validate a transaction before forwarding it to sharing peers (so
+    /// invalid transactions cannot be amplified across peers).
+    pub(crate) fn validate_for_forwarding(&self, tx: &PoolTx) -> Result<(), String> {
+        match &tx.body {
+            Body::Quai(_) => {
+                self.validate_tx(tx)?;
+                let from = tx.pool_sender(self.chain_id).map_err(String::from)?;
+                internal_and_quai(&from, self.location)?;
+                Ok(())
+            }
+            Body::Qi(q) => {
+                let (current, etx_r, etx_p) = self.qi_context();
+                if qi::inactive_output(q, block::expansion_number(&current)) {
+                    return Err("Qi TXO emitted to an inactive chain".into());
+                }
+                if !self.config.v0570_compat
+                    && q.inputs
+                        .iter()
+                        .any(|i| self.qi_spent.contains_key(&(i.hash, i.index)))
+                {
+                    return Err("qi transaction input already spent in pool".into());
+                }
+                let total = qi::validate_inputs(tx, self.chain.as_ref(), &current)?;
+                qi::validate_outputs_and_signature(
+                    tx,
+                    self.chain.as_ref(),
+                    total,
+                    &current,
+                    self.qi_scaling,
+                    etx_r,
+                    etx_p,
+                )?;
+                Ok(())
+            }
+            Body::External(_) => Err("external tx is not supported in tx pool".into()),
+        }
+    }
+
+    fn insert_qi_entry(&mut self, hash: Hash, entry: QiEntry) {
+        let new_inputs: Vec<(Hash, u16)> = entry
+            .tx
+            .qi()
+            .map(|q| q.inputs.iter().map(|i| (i.hash, i.index)).collect())
+            .unwrap_or_default();
+        if let Some((evicted_hash, evicted)) = self.qi_pool.add_returning_evicted(hash, entry) {
+            if let Some(q) = evicted.tx.qi() {
+                for i in &q.inputs {
+                    if self.qi_spent.get(&(i.hash, i.index)) == Some(&evicted_hash) {
+                        self.qi_spent.remove(&(i.hash, i.index));
+                    }
+                }
+            }
+        }
+        for point in new_inputs {
+            self.qi_spent.insert(point, hash);
+        }
+    }
+
+    fn remove_qi_hash(&mut self, hash: &Hash) {
+        if let Some(entry) = self.qi_pool.remove(hash) {
+            if let Some(q) = entry.tx.qi() {
+                for i in &q.inputs {
+                    if self.qi_spent.get(&(i.hash, i.index)) == Some(hash) {
+                        self.qi_spent.remove(&(i.hash, i.index));
+                    }
+                }
+            }
+        }
+    }
+
     /// `addQiTxs`: validate and add Qi transactions.
     fn add_qi_txs(&mut self, txs: Vec<Tx>, now: u64) -> Vec<Result<(), String>> {
         let (current, etx_r, etx_p) = self.qi_context();
         let expansion = block::expansion_number(&current);
         let mut errs = Vec::with_capacity(txs.len());
         let mut ok = vec![];
+        let mut batch_spent: BTreeSet<(Hash, u16)> = BTreeSet::new();
         for tx in txs {
             let Some(q) = tx.qi() else {
                 errs.push(Err("not a Qi transaction".to_string()));
@@ -785,6 +870,15 @@ impl Pool {
             };
             if qi::inactive_output(q, expansion) {
                 errs.push(Err("Qi TXO emitted to an inactive chain".into()));
+                continue;
+            }
+            if !self.config.v0570_compat
+                && q.inputs.iter().any(|i| {
+                    let pt = (i.hash, i.index);
+                    self.qi_spent.contains_key(&pt) || batch_spent.contains(&pt)
+                })
+            {
+                errs.push(Err("qi transaction input already spent in pool".into()));
                 continue;
             }
             let total = match qi::validate_inputs(&tx, self.chain.as_ref(), &current) {
@@ -804,6 +898,11 @@ impl Pool {
                 etx_p,
             ) {
                 Ok(fee) => {
+                    if !self.config.v0570_compat {
+                        for i in &q.inputs {
+                            batch_spent.insert((i.hash, i.index));
+                        }
+                    }
                     errs.push(Ok(()));
                     ok.push((tx, big::from_u64(fee)));
                 }
@@ -812,7 +911,7 @@ impl Pool {
         }
         for (tx, fee) in ok {
             let hash = tx.hash;
-            self.qi_pool.add(
+            self.insert_qi_entry(
                 hash,
                 QiEntry {
                     tx,
@@ -833,6 +932,15 @@ impl Pool {
         for tx in txs {
             let hash = tx.hash;
             if self.qi_pool.get(&hash).is_some() {
+                continue;
+            }
+            if !self.config.v0570_compat
+                && tx.qi().is_some_and(|q| {
+                    q.inputs
+                        .iter()
+                        .any(|i| self.qi_spent.contains_key(&(i.hash, i.index)))
+                })
+            {
                 continue;
             }
             let mut key = [0u8; 16];
@@ -860,7 +968,7 @@ impl Pool {
                     fee
                 }
             };
-            self.qi_pool.add(
+            self.insert_qi_entry(
                 hash,
                 QiEntry {
                     tx,
@@ -873,8 +981,8 @@ impl Pool {
 
     fn remove_qi_txs(&mut self, txs: &[Tx]) {
         for tx in txs {
-            if self.qi_pool.get(&tx.hash).is_some() {
-                self.qi_pool.remove(&tx.hash);
+            if self.qi_pool.peek(&tx.hash).is_some() {
+                self.remove_qi_hash(&tx.hash);
             }
         }
     }
@@ -1008,6 +1116,16 @@ impl Pool {
                                     Some(b) => add = b,
                                     None => return false,
                                 }
+                            }
+                            // Remove Qi transactions included in the winning
+                            // reorg branch (go-quai commit `5dab7c402`).
+                            if !self.config.v0570_compat {
+                                let included_qis: Vec<Tx> = included
+                                    .iter()
+                                    .filter(|t| t.qi().is_some())
+                                    .cloned()
+                                    .collect();
+                                self.remove_qi_txs(&included_qis);
                             }
                             // TxDifferenceWithoutETXs, with the time reset.
                             let remove: BTreeSet<Hash> = included.iter().map(|t| t.hash).collect();
@@ -1311,17 +1429,16 @@ impl Pool {
                 )
             });
             if let Some((h, true)) = expired {
-                self.qi_pool.remove(&h);
+                self.remove_qi_hash(&h);
             }
             i += 1;
         }
     }
 
     /// One pass of `poolLimiterGoroutine` (every 30 seconds). Above
-    /// GlobalQueue it keeps `len - AccountQueue` transactions of each queued
-    /// account (all of them go when an account has no more than
-    /// AccountQueue), as Go's `Cap(len - AccountQueue)` does, then drops
-    /// whole accounts while the queue is still at or above GlobalQueue.
+    /// GlobalQueue it truncates each queued account to `AccountQueue` (or, in
+    /// `v0570_compat`, Go v0.57.0's buggy `Cap(len - AccountQueue)`), then
+    /// drops whole accounts while the queue is still at or above GlobalQueue.
     pub fn limit(&mut self, now: u64) {
         let queued: u64 = self.queue.values().map(|l| l.len() as u64).sum();
         if queued <= self.config.global_queue {
@@ -1332,7 +1449,11 @@ impl Pool {
             let Some(list) = self.queue.get_mut(addr) else {
                 continue;
             };
-            let capacity = (list.len() as i64 - self.config.account_queue as i64).max(0) as usize;
+            let capacity = if self.config.v0570_compat {
+                (list.len() as i64 - self.config.account_queue as i64).max(0) as usize
+            } else {
+                self.config.account_queue as usize
+            };
             let caps = list.cap(capacity);
             for t in &caps {
                 self.all.remove(&t.hash);

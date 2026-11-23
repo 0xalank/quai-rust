@@ -279,6 +279,11 @@ pub trait ChainView: Send + Sync + 'static {
     fn may_have_logs(&self, _number: u64) -> Result<bool, ViewError> {
         Ok(true)
     }
+    /// The 256-byte log bloom of canonical block `number`, if indexed.
+    /// `None` when the view does not keep a separate bloom index.
+    fn bloom_at(&self, _number: u64) -> Result<Option<[u8; 256]>, ViewError> {
+        Ok(None)
+    }
     /// The account state after `block`. `Err(Go(..))` carries go-quai's
     /// answer when that state is not kept ("missing trie node ...").
     fn state(&self, block: &BlockData) -> Result<Arc<dyn AccountState>, ViewError>;
@@ -299,6 +304,16 @@ pub trait ChainView: Send + Sync + 'static {
     /// go-quai's `vm.Config{Debug: true}`, so access-list checks are off
     /// and every account and slot is warm. Discard every change.
     fn call(&self, block: &BlockData, request: &CallRequest) -> Result<CallResult, CallError>;
+    /// Same as [`ChainView::call`], stopping promptly when `cancel` becomes
+    /// true (used when an RPC request times out).
+    fn call_cancellable(
+        &self,
+        block: &BlockData,
+        request: &CallRequest,
+        _cancel: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<CallResult, CallError> {
+        self.call(block, request)
+    }
     /// go-quai `HeaderChain.CalcBaseFee(block)`: the minimum base fee of the
     /// block after `block`, which `quai_gasPrice` raises by 20%. The default
     /// computes it from the block and its prime terminus
@@ -425,6 +440,299 @@ pub trait ChainView: Send + Sync + 'static {
     ) -> Result<Vec<CoinbaseLockup>, ViewError> {
         Err(ViewError::Unavailable("the coinbase lockup records".into()))
     }
+
+    // --- Mining, AuxPoW & Workshare hooks ---
+
+    fn is_mining(&self) -> bool {
+        false
+    }
+    fn hashrate(&self) -> u64 {
+        0
+    }
+    fn primary_coinbase(&self) -> Result<Address, ViewError> {
+        Ok([0u8; 20])
+    }
+    fn miner_start(&self) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_extra(&self, _extra: &[u8]) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_gas_limit(&self, _limit: u64) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_gas_price(&self, _price: U256) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_lockup_byte(&self, _lock: u8) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_miner_preference(&self, _pref: f64) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_primary_coinbase(&self, _addr: Address) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn miner_set_recommit_interval(&self, _ms: u64) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn get_block_template(
+        &self,
+        _params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn get_pending_header(&self) -> Result<Vec<u8>, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn get_pending_workshares(&self) -> Result<serde_json::Value, ViewError> {
+        Ok(serde_json::json!({"kawpow": [], "sha": [], "scrypt": []}))
+    }
+    fn submit_block(&self, _raw: &[u8], _pow_id: u8) -> Result<serde_json::Value, ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn receive_mined_header(&self, _raw: &[u8]) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn receive_raw_workshare(&self, _raw: &[u8]) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn receive_workshare(&self, _workshare: &serde_json::Value) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn receive_sub_workshare(&self, _raw: &[u8]) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn calc_order(&self, _raw: &[u8]) -> Result<u8, ViewError> {
+        Err(ViewError::Unavailable(
+            "calc_order requires a miner or consensus caches".into(),
+        ))
+    }
+    fn workshare_threshold(&self) -> u16 {
+        quai_primitives::spec::WORKSHARES_THRESHOLD_DIFF
+    }
+    fn workshare_p2p_threshold(&self) -> u16 {
+        quai_primitives::spec::WORKSHARE_P2P_THRESHOLD_DIFF
+    }
+    fn set_workshare_p2p_threshold(&self, _threshold: u16) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn submit_aux_template(&self, _raw: &[u8]) -> Result<(), ViewError> {
+        Err(ViewError::Unavailable(
+            "mining is not configured on this view".into(),
+        ))
+    }
+    fn sign_aux_template(
+        &self,
+        _template: &[u8],
+        _other_pubkey: &[u8],
+        _other_nonce: &[u8],
+    ) -> Result<serde_json::Value, ViewError> {
+        Err(ViewError::Unavailable(
+            "MuSig2 signer is not configured".into(),
+        ))
+    }
+    fn subsidy_chain_height(&self) -> Result<serde_json::Value, ViewError> {
+        Err(ViewError::Go("no subsidy chain height found".into()))
+    }
+    fn workshare_lru_dump(&self, _limit: usize) -> Result<serde_json::Value, ViewError> {
+        Ok(serde_json::json!({"receivedCount": 0, "minedCount": 0, "received": [], "mined": []}))
+    }
+
+    // --- Workshare / Donor / Supply index hooks ---
+
+    fn block_for_workshare(&self, ws_hash: &Hash) -> Result<Option<Arc<BlockData>>, ViewError> {
+        // Fallback scan over the most recent 32 blocks when no dedicated index is present.
+        let head = self.head();
+        let start = head.saturating_sub(32);
+        for n in (start..=head).rev() {
+            let Ok(Some(b)) = self.block_by_number(n) else {
+                continue;
+            };
+            if b.hash == *ws_hash
+                || b.uncles
+                    .iter()
+                    .any(|u| u.block_hash().ok() == Some(*ws_hash))
+            {
+                return Ok(Some(b));
+            }
+        }
+        Ok(None)
+    }
+    fn quai_header_for_donor(
+        &self,
+        donor_hash: &Hash,
+    ) -> Result<Option<Arc<BlockData>>, ViewError> {
+        let head = self.head();
+        let start = head.saturating_sub(32);
+        for n in (start..=head).rev() {
+            let Ok(Some(b)) = self.block_by_number(n) else {
+                continue;
+            };
+            if let Some(aux_bytes) = b.header.wire().aux_pow.as_deref() {
+                if let Ok(aux) = quai_consensus::auxiliary::Auxiliary::decode(aux_bytes) {
+                    let h = aux.header();
+                    if h.len() >= 80 {
+                        let hash = match aux.id() {
+                            2 | 3 => quai_consensus::donor::sha256d(h).ok(),
+                            4 => quai_consensus::donor::scrypt(h).ok(),
+                            _ => None,
+                        };
+                        if hash == Some(*donor_hash) {
+                            return Ok(Some(b));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+    fn compute_kawpow_pow_hash(&self, _header: &Header) -> Result<Hash, ViewError> {
+        Err(ViewError::Unavailable(
+            "KAWPOW PoW cache unavailable".into(),
+        ))
+    }
+    fn supply_analytics(&self, _block_hash: &Hash) -> Result<Option<SupplyAnalytics>, ViewError> {
+        Ok(None)
+    }
+
+    // --- Admin, Debug & Sync hooks ---
+
+    fn syncing(&self) -> serde_json::Value {
+        serde_json::Value::Bool(false)
+    }
+    fn admin_node_info(&self) -> Result<serde_json::Value, ViewError> {
+        Ok(serde_json::json!({
+            "name": format!("quai-rust/{}", env!("CARGO_PKG_VERSION")),
+            "protocols": {
+                "quai": {
+                    "chainId": self.chain_id(),
+                    "location": self.location(),
+                    "head": self.head(),
+                }
+            }
+        }))
+    }
+    fn admin_peers(&self) -> Result<serde_json::Value, ViewError> {
+        Ok(serde_json::json!([]))
+    }
+    fn admin_export_chain(
+        &self,
+        _file: &str,
+        _first: Option<u64>,
+        _last: Option<u64>,
+    ) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "chain export is not configured on this view".into(),
+        ))
+    }
+    fn admin_import_chain(&self, _file: &str) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "chain import is not configured on this view".into(),
+        ))
+    }
+    fn debug_dump_block(
+        &self,
+        _block: &BlockData,
+        _start: &[u8],
+        _max_results: usize,
+        _no_code: bool,
+        _no_storage: bool,
+        _incompletes: bool,
+    ) -> Result<serde_json::Value, ViewError> {
+        Err(ViewError::Unavailable(
+            "state dump is not available on this view".into(),
+        ))
+    }
+    fn debug_storage_range_at(
+        &self,
+        _block: &BlockData,
+        _tx_index: usize,
+        _contract: &Address,
+        _key_start: &[u8],
+        _max_result: usize,
+    ) -> Result<serde_json::Value, ViewError> {
+        Err(ViewError::Unavailable(
+            "storage range inspection is not available on this view".into(),
+        ))
+    }
+    fn debug_modified_accounts(
+        &self,
+        _start: &BlockData,
+        _end: &BlockData,
+    ) -> Result<Vec<Address>, ViewError> {
+        Err(ViewError::Unavailable(
+            "modified account diff requires state history".into(),
+        ))
+    }
+    fn debug_preimage(&self, _hash: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
+        Ok(None)
+    }
+    fn debug_chaindb_property(&self, _property: &str) -> Result<String, ViewError> {
+        Ok(format!(
+            "quai-rust redb block store (head: {}, chain_id: {})",
+            self.head(),
+            self.chain_id()
+        ))
+    }
+    fn debug_chaindb_compact(&self) -> Result<(), ViewError> {
+        Ok(())
+    }
+
+    // --- Mining & Workshare subscription streams ---
+
+    fn pending_header_events(&self) -> Option<tokio::sync::broadcast::Receiver<Vec<u8>>> {
+        None
+    }
+    fn template_update_events(&self) -> Option<tokio::sync::broadcast::Receiver<u8>> {
+        None
+    }
+    fn workshare_events(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<WorkObject>>> {
+        None
+    }
+}
+
+/// Persisted supply analytics for a block (`rawdb.ReadSupplyAnalyticsForBlock`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SupplyAnalytics {
+    pub quai_added: U256,
+    pub quai_removed: U256,
+    pub quai_total: U256,
+    pub qi_added: U256,
+    pub qi_removed: U256,
+    pub qi_total: U256,
 }
 
 /// A transaction of the pool and its go-quai hash (`tx.Hash()`).

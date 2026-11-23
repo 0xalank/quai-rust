@@ -141,11 +141,10 @@ pub(crate) fn invoke(
         value
     };
     context.read_only = parent.read_only || kind == Kind::Static;
-    let code = s
-        .world()
-        .account(&target)?
-        .map(|a| a.code.clone())
-        .unwrap_or_default();
+    let target_account = s.world().account(&target)?;
+    let code = target_account
+        .as_deref()
+        .map_or(&[][..], |a| a.code.as_slice());
     let mut outcome = if let Some((id, _)) = precompile {
         match super::precompile::run(id, input, gas)? {
             Ok((output, left)) => {
@@ -221,7 +220,14 @@ fn call_with_env(
     if environment.block_hashes.len() > 256 {
         return Err(CapabilityError::Limit("BLOCKHASH history"));
     }
-    let mut state = Journal::new(world.clone())?;
+    world
+        .validate()
+        .map_err(|error| CapabilityError::state(error, CapabilityError::Limit("world snapshot")))?;
+    let tx_guard = world.begin_tx();
+    let mut state = match Journal::new_validated(std::mem::take(world)) {
+        Ok(s) => s,
+        Err(e) => return Err(e),
+    };
     state.allow_calls = true;
     state.delete_empty = environment.delete_empty;
     state.prime_number = environment.prime_number;
@@ -240,7 +246,14 @@ fn call_with_env(
         state.addresses.insert(a.address);
         state.slots.extend(a.keys.iter().map(|k| (a.address, *k)));
     }
-    let outer = state.snapshot()?;
+    let outer = match state.snapshot() {
+        Ok(cp) => cp,
+        Err(e) => {
+            *world = state.into_world().unwrap_or_default();
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+    };
     let mut parent = context.clone();
     parent.address = context.caller;
     let kind = if context.read_only {
@@ -248,7 +261,7 @@ fn call_with_env(
     } else {
         Kind::Call
     };
-    let mut outcome = invoke(
+    let mut outcome = match invoke(
         &mut state,
         &parent,
         kind,
@@ -257,7 +270,14 @@ fn call_with_env(
         input,
         gas,
         0,
-    )?;
+    ) {
+        Ok(o) => o,
+        Err(e) => {
+            *world = state.abort_to(outer);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+    };
     if outcome.error.is_none() && !outcome.reverted
         || (!context.read_only
             && context.address == crate::lockup::contract(context.location)
@@ -265,7 +285,11 @@ fn call_with_env(
                 .prime_number
                 .is_some_and(|p| p < FORKS.sha_equivalent_difficulty))
     {
-        state.finalize_sizes()?;
+        if let Err(e) = state.finalize_sizes() {
+            *world = state.abort_to(outer);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
         outcome.logs = state.logs.clone();
         outcome.outbound_etxs = state.etxs.clone();
         outcome.refund = state.refund;
@@ -273,18 +297,60 @@ fn call_with_env(
             deleted_hashes: state.deleted_hashes.clone(),
             deleted: (*state.deleted).clone(),
         };
-        state.commit(outer)?;
-        *world = state.into_world()?;
+        if let Err(e) = state.commit(outer) {
+            *world = state.abort_to(outer);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+        match state.finish_world() {
+            Ok(w) => {
+                *world = w;
+                world.commit_tx(tx_guard);
+            }
+            Err((w, e)) => {
+                *world = w;
+                world.rollback_tx(tx_guard);
+                return Err(e);
+            }
+        }
     } else {
-        state.revert(outer)?;
-        world.replace_lockups(state.world());
+        if let Err(e) = state.revert(outer) {
+            *world = state.abort_to(outer);
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
         outcome.logs.clear();
         outcome.refund = 0;
         if environment.delete_empty {
-            let cleanup = state.snapshot()?;
-            state.finalize_sizes()?;
-            state.commit(cleanup)?;
-            *world = state.into_world()?;
+            let cleanup = match state.snapshot() {
+                Ok(cp) => cp,
+                Err(e) => {
+                    *world = state.abort_to(outer);
+                    world.rollback_tx(tx_guard);
+                    return Err(e);
+                }
+            };
+            if let Err(e) = state.finalize_sizes() {
+                *world = state.abort_to(cleanup);
+                world.rollback_tx(tx_guard);
+                return Err(e);
+            }
+            if let Err(e) = state.commit(cleanup) {
+                *world = state.abort_to(cleanup);
+                world.rollback_tx(tx_guard);
+                return Err(e);
+            }
+        }
+        match state.finish_world() {
+            Ok(w) => {
+                *world = w;
+                world.commit_tx(tx_guard);
+            }
+            Err((w, e)) => {
+                *world = w;
+                world.rollback_tx(tx_guard);
+                return Err(e);
+            }
         }
     }
     Ok(outcome)
@@ -408,7 +474,7 @@ pub(crate) fn create(
     if let Some(tracer) = s.debug.as_mut().and_then(|d| d.tracer.as_mut()) {
         tracer.add_address(address);
     }
-    let mut out = run_code(s, &context, &[], gas, code.to_vec(), depth)?;
+    let mut out = run_code(s, &context, &[], gas, code, depth)?;
     if out.error.is_none() && !out.reverted {
         let max = if parent.block_number < Word::from_u64(FORKS.max_code_size) {
             24576
@@ -470,7 +536,14 @@ fn creation_with_env(
     if !local(&context.caller, context.location) {
         return Err(CapabilityError::Context("local creator required"));
     }
-    let mut state = Journal::new(world.clone())?;
+    world
+        .validate()
+        .map_err(|error| CapabilityError::state(error, CapabilityError::Limit("world snapshot")))?;
+    let tx_guard = world.begin_tx();
+    let mut state = match Journal::new_validated(std::mem::take(world)) {
+        Ok(s) => s,
+        Err(e) => return Err(e),
+    };
     state.allow_calls = true;
     state.delete_empty = environment.delete_empty;
     state.prime_number = environment.prime_number;
@@ -491,11 +564,30 @@ fn creation_with_env(
         state.addresses.insert(a.address);
         state.slots.extend(a.keys.iter().map(|k| (a.address, *k)));
     }
-    let outer = state.snapshot()?;
+    let outer = match state.snapshot() {
+        Ok(cp) => cp,
+        Err(e) => {
+            *world = state.into_world().unwrap_or_default();
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+    };
     let mut parent = context.clone();
     parent.address = context.caller;
-    let (mut outcome, address) = create(&mut state, &parent, code, context.value, gas, None, 0)?;
-    state.finalize_sizes()?;
+    let (mut outcome, address) =
+        match create(&mut state, &parent, code, context.value, gas, None, 0) {
+            Ok(out) => out,
+            Err(e) => {
+                *world = state.abort_to(outer);
+                world.rollback_tx(tx_guard);
+                return Err(e);
+            }
+        };
+    if let Err(e) = state.finalize_sizes() {
+        *world = state.abort_to(outer);
+        world.rollback_tx(tx_guard);
+        return Err(e);
+    }
     outcome.logs = state.logs.clone();
     outcome.outbound_etxs = state.etxs.clone();
     outcome.refund = state.refund;
@@ -503,7 +595,21 @@ fn creation_with_env(
         deleted_hashes: state.deleted_hashes.clone(),
         deleted: (*state.deleted).clone(),
     };
-    state.commit(outer)?;
-    *world = state.into_world()?;
+    if let Err(e) = state.commit(outer) {
+        *world = state.abort_to(outer);
+        world.rollback_tx(tx_guard);
+        return Err(e);
+    }
+    match state.finish_world() {
+        Ok(w) => {
+            *world = w;
+            world.commit_tx(tx_guard);
+        }
+        Err((w, e)) => {
+            *world = w;
+            world.rollback_tx(tx_guard);
+            return Err(e);
+        }
+    }
     Ok((outcome, address))
 }

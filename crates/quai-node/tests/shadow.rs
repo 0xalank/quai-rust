@@ -111,6 +111,9 @@ fn settings(data: &Path, resume: bool, shadow: bool) -> Settings {
         commit_every: 1_000,
         store: true,
         shadow,
+        archive: false,
+        index_address_utxos: false,
+        prune_blocks: None,
     }
 }
 fn open(data: &Path, resume: bool, shadow: bool) -> Result<Processor, String> {
@@ -272,6 +275,15 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
         bootstrap_quorum: 3,
         bootstrap_depth: 1_000,
         store: true,
+        slice: [0, 0],
+        archive: false,
+        index_address_utxos: false,
+        prune_blocks: None,
+        p2p_relay_service: false,
+        p2p_publish: false,
+        rpc_security: quai_node::cli::RpcSecurityOptions::default(),
+        miner: quai_node::cli::MinerOptions::default(),
+        stratum: quai_node::stratum::StratumConfig::default(),
         txpool: quai_node::cli::TxpoolOptions::default(),
     };
     let e = quai_node::node::run(&o, &log).err().unwrap();

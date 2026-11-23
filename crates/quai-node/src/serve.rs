@@ -70,7 +70,8 @@ impl StoreServer {
         }];
         let mut previous = *hash;
         for i in 1..BATCH {
-            let next = self.hash_at(ctx, number + i)?;
+            let height = number.checked_add(i)?;
+            let next = self.hash_at(ctx, height)?;
             let wo = self.object(ctx, &next)?;
             // "The parent hash has to be continuous".
             if parent_in(&wo, ctx)? != previous {

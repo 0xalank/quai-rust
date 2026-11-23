@@ -264,17 +264,14 @@ impl Lookup {
     }
 }
 
-/// `priceHeap` with `container/heap`. `Less` is true for equal prices, as
-/// in Go's `cmp`, which returns -1 then.
+/// `priceHeap` with `container/heap` (strict weak order on gas price,
+/// matching go-quai commit `1938b6171`).
 #[derive(Default, Clone)]
 pub struct PriceHeap {
     pub list: Vec<Tx>,
 }
 fn price_cmp(a: &Tx, b: &Tx) -> std::cmp::Ordering {
-    match big::cmp(a.gas_price(), b.gas_price()) {
-        std::cmp::Ordering::Equal => std::cmp::Ordering::Less,
-        o => o,
-    }
+    big::cmp(a.gas_price(), b.gas_price())
 }
 impl PriceHeap {
     fn less(&self, i: usize, j: usize) -> bool {
@@ -458,19 +455,28 @@ impl<K: std::hash::Hash + Eq + Clone, V> Lru<K, V> {
     }
     /// Returns true when an entry was evicted.
     pub fn add(&mut self, key: K, value: V) -> bool {
+        self.add_returning_evicted(key, value).is_some()
+    }
+    /// Insert or update `key`, returning the evicted `(key, value)` if the LRU
+    /// exceeded capacity.
+    pub fn add_returning_evicted(&mut self, key: K, value: V) -> Option<(K, V)> {
         if let Some(entry) = self.items.get_mut(&key) {
             entry.0 = value;
             self.touch(&key);
-            return false;
+            return None;
         }
         self.next += 1;
         self.items.insert(key.clone(), (value, self.next));
         self.order.insert(self.next, key);
         if self.items.len() > self.size {
-            self.remove_oldest();
-            return true;
+            let oldest = self.order.keys().next().copied()?;
+            let evicted_key = self.order.remove(&oldest)?;
+            return self
+                .items
+                .remove(&evicted_key)
+                .map(|(v, _)| (evicted_key, v));
         }
-        false
+        None
     }
     pub fn get(&mut self, key: &K) -> Option<&V> {
         if !self.items.contains_key(key) {

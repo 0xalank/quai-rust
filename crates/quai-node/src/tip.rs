@@ -39,9 +39,23 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-const LOCATIONS: [&[u8]; 3] = [&[], &[0], &[0, 0]];
 /// Ancestors fetched for one gossip block at most.
 const MAX_ANCESTORS: usize = 256;
+/// Maximum ancestors fetched per outer loop tick before re-draining gossip
+/// (prevents head-of-line starvation during deep orphan bursts).
+const MAX_ANCESTORS_PER_TICK: usize = 32;
+/// Per-attempt timeout when fetching a missing ancestor block.
+const ANCESTOR_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Attempts when fetching a missing block by hash.
+const FETCH_ATTEMPTS: usize = 2;
+
+fn location_for(slice: [u8; 2], ctx: usize) -> Vec<u8> {
+    match ctx {
+        0 => vec![],
+        1 => vec![slice[0]],
+        _ => slice.to_vec(),
+    }
+}
 
 fn hex(b: &[u8]) -> String {
     encode_hex(b)
@@ -72,18 +86,73 @@ pub fn subscribe(
     pool: Option<Arc<crate::txpool::service::Service>>,
     log: Log,
 ) -> Result<Receiver<Gossip>, String> {
-    let genesis = quai_network::public::colosseum_topic_genesis();
-    let topics = slice_topic_names(&genesis, [0, 0])?;
+    subscribe_slice(
+        runtime,
+        node,
+        quai_network::public::colosseum_topic_genesis(),
+        [0, 0],
+        stop,
+        stats,
+        pool,
+        log,
+    )
+}
+
+/// Subscribe to an arbitrary chain topic genesis and slice `[region, zone]`.
+#[allow(clippy::too_many_arguments)]
+pub fn subscribe_slice(
+    runtime: &tokio::runtime::Handle,
+    node: Arc<PublicNode>,
+    topic_genesis: Hash,
+    slice: [u8; 2],
+    stop: Arc<AtomicBool>,
+    stats: Arc<GossipStats>,
+    pool: Option<Arc<crate::txpool::service::Service>>,
+    log: Log,
+) -> Result<Receiver<Gossip>, String> {
+    let (_tx, rx) = subscribe_slice_with_miner(
+        runtime,
+        node,
+        topic_genesis,
+        slice,
+        stop,
+        stats,
+        pool,
+        None,
+        log,
+    )?;
+    Ok(rx)
+}
+
+/// Subscribe to an arbitrary chain topic genesis and slice `[region, zone]`,
+/// forwarding accepted workshares to `miner` (if configured) and returning a
+/// sender that lets local mining inject newly mined blocks into the tip loop.
+#[allow(clippy::too_many_arguments)]
+pub fn subscribe_slice_with_miner(
+    runtime: &tokio::runtime::Handle,
+    node: Arc<PublicNode>,
+    topic_genesis: Hash,
+    slice: [u8; 2],
+    stop: Arc<AtomicBool>,
+    stats: Arc<GossipStats>,
+    pool: Option<Arc<crate::txpool::service::Service>>,
+    miner: Option<Arc<crate::miner::Miner>>,
+    log: Log,
+) -> Result<(std::sync::mpsc::SyncSender<Gossip>, Receiver<Gossip>), String> {
+    let topics = slice_topic_names(&topic_genesis, slice)?;
     for t in &topics {
         runtime
             .block_on(node.subscribe(t.clone()))
             .map_err(|e| format!("subscribe {t}: {e}"))?;
     }
     log.info(&format!(
-        "gossip: subscribed to {} topics of slice [0 0]",
-        topics.len()
+        "gossip: subscribed to {} topics of slice [{} {}]",
+        topics.len(),
+        slice[0],
+        slice[1]
     ));
     let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+    let local_tx = tx.clone();
     runtime.spawn(async move {
         while !stop.load(Ordering::Relaxed) {
             let Ok(Ok(event)) = tokio::time::timeout(Duration::from_secs(1), node.next()).await
@@ -117,7 +186,11 @@ pub fn subscribe(
                         continue;
                     };
                     let Some(wo) = view.work_object else { continue };
-                    if tx.try_send(Gossip::Workshare(wo.encode_to_vec())).is_err() {
+                    let raw = wo.encode_to_vec();
+                    if let Some(m) = &miner {
+                        let _ = m.receive_raw_workshare(&raw);
+                    }
+                    if tx.try_send(Gossip::Workshare(raw)).is_err() {
                         stats.ignored.fetch_add(1, Ordering::Relaxed);
                     }
                 }
@@ -135,7 +208,7 @@ pub fn subscribe(
             }
         }
     });
-    Ok(rx)
+    Ok((local_tx, rx))
 }
 
 /// The transactions of a gossiped workshare view, decoded as go-quai's
@@ -169,11 +242,22 @@ pub fn fetch(
     ctx: usize,
     hash: Hash,
 ) -> Option<Block> {
-    for _ in 0..3 {
+    fetch_for_slice(runtime, node, node.config.slice, ctx, hash)
+}
+/// A block by hash in a context for a specific slice from the peers.
+pub fn fetch_for_slice(
+    runtime: &tokio::runtime::Handle,
+    node: &PublicNode,
+    slice: [u8; 2],
+    ctx: usize,
+    hash: Hash,
+) -> Option<Block> {
+    let loc = location_for(slice, ctx);
+    for attempt in 0..FETCH_ATTEMPTS {
         let answer = runtime.block_on(async {
             tokio::time::timeout(
-                Duration::from_secs(20),
-                node.request(LOCATIONS[ctx], Query::Hash(hash), Want::Block),
+                ANCESTOR_FETCH_TIMEOUT,
+                node.request(&loc, Query::Hash(hash), Want::Block),
             )
             .await
         });
@@ -186,16 +270,19 @@ pub fn fetch(
                 }
             }
         }
-        std::thread::sleep(Duration::from_millis(500));
+        if attempt + 1 < FETCH_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(200));
+        }
     }
     None
 }
 /// The canonical zone hash at `number` of the peers, if one answers.
 pub fn hash_at(runtime: &tokio::runtime::Handle, node: &PublicNode, number: u64) -> Option<Hash> {
+    let loc = location_for(node.config.slice, 2);
     let answer = runtime.block_on(async {
         tokio::time::timeout(
-            Duration::from_secs(20),
-            node.request(LOCATIONS[2], Query::Number(number), Want::BlockHash),
+            ANCESTOR_FETCH_TIMEOUT,
+            node.request(&loc, Query::Number(number), Want::BlockHash),
         )
         .await
     });
@@ -590,6 +677,7 @@ pub fn follow(
                 &mut dead,
             )?;
         }
+        let mut tick_fetches = 0usize;
         while let Some(block) = queue.pop_front() {
             let mut chain = vec![block];
             while let Some(top) = chain.last().cloned() {
@@ -626,10 +714,11 @@ pub fn follow(
                             chain.pop();
                             continue;
                         }
-                        if chain.len() >= MAX_ANCESTORS {
+                        if chain.len() >= MAX_ANCESTORS || tick_fetches >= MAX_ANCESTORS_PER_TICK {
                             log.warn("tip: too many missing ancestors; waiting for the next block");
                             break;
                         }
+                        tick_fetches += 1;
                         match fetch(runtime, &node, 2, p) {
                             Some(b) => {
                                 stats.fetched += 1;
@@ -647,6 +736,7 @@ pub fn follow(
                         removed,
                         refused,
                     } => {
+                        crate::node::sync_gossip_heads(processor, &node);
                         stats.accepted += 1;
                         detector.block_included(top.hash, top.number, &uncle_hashes(&top));
                         if refused {
@@ -884,6 +974,7 @@ fn catch_up(
         metrics.as_deref(),
     )?;
     drop(source);
+    crate::node::sync_gossip_heads(processor, node);
     if let Some(h) = done.rejected {
         dead.insert(h);
     }
@@ -940,7 +1031,7 @@ fn workshare(
     let number =
         share_rules::number(header.wire().number.as_deref().unwrap_or_default()).unwrap_or(0);
     let head = processor.tip().map_or(0, |t| t.head().1);
-    if number + SHARE_DISTANCE < head {
+    if number.saturating_add(SHARE_DISTANCE) < head {
         stats.shares_old += 1;
         detector.count_old();
         return;

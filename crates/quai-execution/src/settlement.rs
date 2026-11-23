@@ -139,6 +139,25 @@ fn apply_authenticated(
     block: &mut BlockContext,
     sender: Address,
 ) -> Result<AppliedTransaction, Error> {
+    let owned = world.begin_tx();
+    match apply_authenticated_in_place(world, transaction, block, sender) {
+        Ok(result) => {
+            world.commit_tx(owned);
+            Ok(result)
+        }
+        Err(err) => {
+            world.rollback_tx(owned);
+            Err(err)
+        }
+    }
+}
+
+fn apply_authenticated_in_place(
+    world: &mut World,
+    transaction: &Transaction,
+    block: &mut BlockContext,
+    sender: Address,
+) -> Result<AppliedTransaction, Error> {
     let Kind::Quai(tx) = transaction.kind() else {
         return Err(Error::Invalid("not a Quai transaction"));
     };
@@ -175,7 +194,8 @@ fn apply_authenticated(
     let wide_value: U512 = value.resize();
     let cost = wide_price.wrapping_mul(&U512::from_u64(tx.gas));
     let required = cost.wrapping_add(&wide_value);
-    let available: U512 = balance(world, &sender)?.resize();
+    let sender_balance = account.as_ref().map_or(Word::ZERO, |a| a.balance);
+    let available: U512 = sender_balance.resize();
     if available < required {
         return Err(Error::Invalid("insufficient_funds"));
     }
@@ -187,12 +207,37 @@ fn apply_authenticated(
     if intrinsic > tx.gas {
         return Err(Error::Invalid("intrinsic_gas"));
     }
-    let mut staged = world.clone();
-    set_balance(
-        &mut staged,
-        sender,
-        balance(world, &sender)?.wrapping_sub(&cost.resize()),
-    )?;
+    // Validate pre-execution conditions before mutating `world` in place.
+    let authority_height = if sender == KQUAI_AUTHORITY {
+        Some(evm::word::uint(block.vm.block_number).ok_or(Error::Invalid("authority height"))?)
+    } else {
+        None
+    };
+    let selfdestruct_target = if sender != KQUAI_AUTHORITY {
+        if let Some(target) = tx.to {
+            let suicide = tx
+                .data
+                .strip_prefix(b"Suicide")
+                .and_then(|rest| Address::try_from(rest).ok());
+            if let (Some(beneficiary), true) = (suicide, target == sender) {
+                if !calls::local(&beneficiary, block.vm.location) {
+                    return Err(Error::Invalid("selfdestruct_beneficiary"));
+                }
+                let prime = block
+                    .environment
+                    .prime_number
+                    .ok_or(CapabilityError::Context("selfdestruct prime context"))?;
+                Some((beneficiary, prime))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    set_balance(world, sender, sender_balance.wrapping_sub(&cost.resize()))?;
     let mut context = block.vm.clone();
     context.caller = sender;
     context.origin = sender;
@@ -206,15 +251,13 @@ fn apply_authenticated(
     environment.transaction_hash = Some(id);
     let mut deleted_sender = false;
     let mut early_return = false;
-    let (outcome, contract_address) = if sender == KQUAI_AUTHORITY {
+    let (outcome, contract_address) = if let Some(height) = authority_height {
         early_return = true;
-        let height =
-            evm::word::uint(context.block_number).ok_or(Error::Invalid("authority height"))?;
         if height < crate::economic_state::YEAR {
-            existing(&mut staged, &sender)?.nonce = nonce.wrapping_add(1);
+            existing(world, &sender)?.nonce = nonce.wrapping_add(1);
         }
         let successful =
-            crate::economic_state::authority(&mut staged, &tx.data, height, tx.to.is_none())?;
+            crate::economic_state::authority(world, &tx.data, height, tx.to.is_none())?;
         (
             Outcome {
                 auxiliary: Default::default(),
@@ -235,73 +278,59 @@ fn apply_authenticated(
             },
             None,
         )
+    } else if let Some((beneficiary, prime)) = selfdestruct_target {
+        early_return = true;
+        let amount = balance(world, &sender)?;
+        if prime >= FORKS.polaris {
+            existing(world, &sender)?.nonce = nonce.wrapping_add(1);
+            set_balance(world, sender, Word::ZERO)?;
+            if beneficiary != sender {
+                add_balance(world, beneficiary, amount)?;
+            }
+        } else {
+            set_balance(world, sender, Word::ZERO)?;
+            let rent = Word::from_u64(evm::state_gas::scaled(
+                context.state_size,
+                Word::ZERO,
+                25000,
+            ))
+            .wrapping_mul(&context.base_fee);
+            add_balance(world, beneficiary, amount.wrapping_add(&rent))?;
+            deleted_sender = true;
+        }
+        (
+            Outcome {
+                auxiliary: Default::default(),
+                error: None,
+                reverted: false,
+                output: vec![],
+                gas_remaining: gas,
+                state_gas: 0,
+                refund: 0,
+                logs: vec![],
+                outbound_etxs: vec![],
+                trace_hash: [0; 32],
+                trace_steps: 0,
+            },
+            None,
+        )
     } else if let Some(target) = tx.to {
         context.address = target;
-        // "Suicide" followed by a 20-byte beneficiary: 27 bytes of data.
-        let suicide = tx
-            .data
-            .strip_prefix(b"Suicide")
-            .and_then(|rest| Address::try_from(rest).ok());
-        if let (Some(beneficiary), true) = (suicide, target == sender) {
-            early_return = true;
-            if !calls::local(&beneficiary, context.location) {
-                return Err(Error::Invalid("selfdestruct_beneficiary"));
-            }
-            let prime = block
-                .environment
-                .prime_number
-                .ok_or(CapabilityError::Context("selfdestruct prime context"))?;
-            let amount = balance(&staged, &sender)?;
-            if prime >= FORKS.polaris {
-                existing(&mut staged, &sender)?.nonce = nonce.wrapping_add(1);
-                set_balance(&mut staged, sender, Word::ZERO)?;
-                if beneficiary != sender {
-                    add_balance(&mut staged, beneficiary, amount)?;
-                }
-            } else {
-                set_balance(&mut staged, sender, Word::ZERO)?;
-                let rent = Word::from_u64(evm::state_gas::scaled(
-                    context.state_size,
-                    Word::ZERO,
-                    25000,
-                ))
-                .wrapping_mul(&context.base_fee);
-                add_balance(&mut staged, beneficiary, amount.wrapping_add(&rent))?;
-                deleted_sender = true;
-            }
-            (
-                Outcome {
-                    auxiliary: Default::default(),
-                    error: None,
-                    reverted: false,
-                    output: vec![],
-                    gas_remaining: gas,
-                    state_gas: 0,
-                    refund: 0,
-                    logs: vec![],
-                    outbound_etxs: vec![],
-                    trace_hash: [0; 32],
-                    trace_steps: 0,
-                },
-                None,
-            )
-        } else {
-            existing(&mut staged, &sender)?.nonce = nonce.wrapping_add(1);
-            (
-                calls::execute_call_with_env(
-                    &mut staged,
-                    &context,
-                    &tx.access_list,
-                    &tx.data,
-                    gas,
-                    &environment,
-                )?,
-                None,
-            )
-        }
+        existing(world, &sender)?.nonce = nonce.wrapping_add(1);
+        (
+            calls::execute_call_with_env(
+                world,
+                &context,
+                &tx.access_list,
+                &tx.data,
+                gas,
+                &environment,
+            )?,
+            None,
+        )
     } else {
         calls::execute_creation_with_env(
-            &mut staged,
+            world,
             &context,
             &tx.access_list,
             &tx.data,
@@ -322,13 +351,6 @@ fn apply_authenticated(
         .gas
         .checked_sub(remaining)
         .ok_or(Error::Invalid("gas_accounting"))?;
-    if !early_return {
-        let returned = wide_price.wrapping_mul(&U512::from_u64(remaining));
-        add_balance(&mut staged, sender, returned.resize())?;
-    }
-    if deleted_sender {
-        staged.remove(&sender)?;
-    }
     let cumulative = block
         .cumulative_gas
         .checked_add(used)
@@ -337,9 +359,16 @@ fn apply_authenticated(
         .state_used
         .checked_add(outcome.state_gas)
         .ok_or(Error::Invalid("state_gas_overflow"))?;
+    if !early_return {
+        let returned = wide_price.wrapping_mul(&U512::from_u64(remaining));
+        add_balance(world, sender, returned.resize())?;
+    }
+    if deleted_sender {
+        world.remove(&sender)?;
+    }
     if block.environment.delete_empty && (outcome.error.is_some() || outcome.reverted) {
         for (k, v) in &outcome.auxiliary.deleted {
-            staged.set_lockup(*k, Some(v.clone()))?;
+            world.set_lockup(*k, Some(v.clone()))?;
         }
     }
     let receipt = Receipt {
@@ -371,12 +400,11 @@ fn apply_authenticated(
         reverted: outcome.reverted,
         contract_address,
     };
-    if !staged.in_block() {
-        staged.validate().map_err(|error| {
+    if !world.in_block() {
+        world.validate().map_err(|error| {
             CapabilityError::state(error, CapabilityError::Limit("settled world"))
         })?;
     }
-    *world = staged;
     block.gas_remaining -= if early_return { tx.gas } else { used };
     block.cumulative_gas = cumulative;
     block.state_used = state_used;
@@ -386,6 +414,24 @@ fn apply_authenticated(
 /// Execute an already-ordered incoming account ETX. Relay eligibility and queue
 /// membership belong to the enclosing block transition; there is no signature.
 pub fn apply_external(
+    world: &mut World,
+    transaction: &Transaction,
+    block: &mut BlockContext,
+) -> Result<AppliedTransaction, Error> {
+    let owned = world.begin_tx();
+    match apply_external_in_place(world, transaction, block) {
+        Ok(result) => {
+            world.commit_tx(owned);
+            Ok(result)
+        }
+        Err(err) => {
+            world.rollback_tx(owned);
+            Err(err)
+        }
+    }
+}
+
+fn apply_external_in_place(
     world: &mut World,
     transaction: &Transaction,
     block: &mut BlockContext,
@@ -417,10 +463,9 @@ pub fn apply_external(
     if !oversize && tx.gas < intrinsic && prime < FORKS.security_hardening {
         return Err(Error::Invalid("intrinsic_gas"));
     }
-    let mut staged = world.clone();
     let previous = balance(world, &zero)?;
     let value = from_bytes(&tx.value);
-    set_balance(&mut staged, zero, value)?;
+    set_balance(world, zero, value)?;
     let (outcome, address) = if oversize || tx.gas < intrinsic {
         (
             Outcome {
@@ -453,7 +498,7 @@ pub fn apply_external(
         environment.transaction_hash = Some(id);
         if creation {
             calls::execute_creation_with_env(
-                &mut staged,
+                world,
                 &c,
                 &tx.access_list,
                 &tx.data,
@@ -461,11 +506,11 @@ pub fn apply_external(
                 &environment,
             )?
         } else {
-            let account = existing(&mut staged, &zero)?;
+            let account = existing(world, &zero)?;
             account.nonce = account.nonce.wrapping_add(1);
             (
                 calls::execute_call_with_env(
-                    &mut staged,
+                    world,
                     &c,
                     &tx.access_list,
                     &tx.data,
@@ -492,15 +537,15 @@ pub fn apply_external(
         .ok_or(Error::Invalid("ETX cumulative state"))?;
     if outcome.error.is_some() || outcome.reverted {
         for (k, v) in &outcome.auxiliary.deleted {
-            staged.set_lockup(*k, Some(v.clone()))?;
+            world.set_lockup(*k, Some(v.clone()))?;
         }
     }
-    set_balance(&mut staged, zero, previous)?;
+    set_balance(world, zero, previous)?;
     // This dirty zero account is finalized at the block boundary in Go.
-    if staged.account(&zero)?.is_some_and(|a| {
+    if world.account(&zero)?.is_some_and(|a| {
         a.nonce == 0 && a.balance == Word::ZERO && a.code.is_empty() && a.storage_size == Word::ZERO
     }) {
-        staged.remove(&zero)?;
+        world.remove(&zero)?;
     }
     let receipt = Receipt {
         transaction_type: 1,
@@ -531,7 +576,6 @@ pub fn apply_external(
         reverted: outcome.reverted,
         contract_address: address,
     };
-    *world = staged;
     block.gas_remaining -= used;
     block.cumulative_gas = cumulative;
     block.state_used = state;

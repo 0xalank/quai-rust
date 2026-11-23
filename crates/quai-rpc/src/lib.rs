@@ -10,7 +10,7 @@ use futures_util::{stream, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{PoisonError, RwLockReadGuard};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Semaphore;
@@ -19,9 +19,24 @@ use tokio::sync::Semaphore;
 mod fresh;
 #[cfg(feature = "reference-gateway")]
 pub mod ingest;
+pub mod ipc;
 pub mod native;
 pub mod view;
 mod ws;
+
+/// Which JSON-RPC transport received a call (controls namespace allowlisting).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransportKind {
+    Http,
+    Ws,
+    Ipc,
+}
+
+/// Default safe namespaces exposed over HTTP when `--rpc-http-api` is not overridden.
+pub const DEFAULT_HTTP_APIS: &[&str] =
+    &["quai", "eth", "net", "txpool", "web3", "workshare", "rpc"];
+/// Default namespaces exposed over WebSocket when `--rpc-ws-api` is not overridden.
+pub const DEFAULT_WS_APIS: &[&str] = &["quai", "eth", "net", "txpool", "web3", "workshare", "rpc"];
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -52,6 +67,14 @@ pub struct Config {
     /// Native mode: origins allowed to open a WebSocket (go-quai's
     /// `--rpc.ws-origins`; empty: localhost and this host's name; "*": any).
     pub ws_origins: Vec<String>,
+    /// Optional namespace allowlist for HTTP (`None` = all namespaces enabled).
+    pub http_apis: Option<Vec<String>>,
+    /// Optional namespace allowlist for WebSocket (`None` = all namespaces enabled).
+    pub ws_apis: Option<Vec<String>>,
+    /// HTTP CORS allowed origins (`--rpc-cors-domain`; empty = no CORS header; `"*"` = wildcard).
+    pub cors_domains: Vec<String>,
+    /// HTTP Virtual Host allowlist (`--rpc-vhosts`; empty = allow all; `"*"` = wildcard).
+    pub vhosts: Vec<String>,
 }
 
 impl Default for Config {
@@ -76,6 +99,10 @@ impl Default for Config {
             filter_timeout_ms: 300_000,
             ws_max_subscriptions: native::filters::DEFAULT_SUBSCRIPTION_LIMIT,
             ws_origins: vec![],
+            http_apis: None,
+            ws_apis: None,
+            cors_domains: vec![],
+            vhosts: vec![],
         }
     }
 }
@@ -177,10 +204,12 @@ pub struct App {
     /// The validated chain data of `--mode native`.
     view: Option<Arc<dyn view::ChainView>>,
     /// Filters and subscriptions of the native view, made on first use:
-    /// go-quai registers one filter API in "quai" and another in "eth",
-    /// each with its own filters and subscription count.
+    /// "quai" and "eth" keep separate filter tables, while sharing the global
+    /// `--rpc.ws-max-subs` subscription counter so clients cannot double the
+    /// cap across namespaces.
     filters: std::sync::OnceLock<Arc<native::filters::FilterApi>>,
     eth_filters: std::sync::OnceLock<Arc<native::filters::FilterApi>>,
+    active_subs: Arc<AtomicUsize>,
     ingestion: std::sync::RwLock<Value>,
     native_hits: AtomicU64,
     native_receipt_hits: AtomicU64,
@@ -285,6 +314,7 @@ impl App {
             view,
             filters: std::sync::OnceLock::new(),
             eth_filters: std::sync::OnceLock::new(),
+            active_subs: Arc::new(AtomicUsize::new(0)),
             ingestion: std::sync::RwLock::new(json!({"enabled":config.follow,"state":"starting"})),
             native_hits: AtomicU64::new(0),
             native_receipt_hits: AtomicU64::new(0),
@@ -316,10 +346,11 @@ impl App {
             &self.filters
         };
         let api = cell.get_or_init(|| {
-            native::filters::FilterApi::new(
+            native::filters::FilterApi::with_shared_active(
                 view.clone(),
                 Duration::from_millis(self.config.filter_timeout_ms),
                 self.config.ws_max_subscriptions,
+                self.active_subs.clone(),
             )
         });
         api.start();
@@ -538,15 +569,48 @@ impl App {
         Outcome::Result(value["result"].clone())
     }
 
+    /// Check whether `method`'s namespace is enabled on `transport`.
+    fn namespace_allowed(&self, transport: TransportKind, method: &str) -> bool {
+        let Some((ns, _)) = method.split_once('_') else {
+            return true;
+        };
+        if ns == "rpc" {
+            return true;
+        }
+        let allow = match transport {
+            TransportKind::Ipc => return true,
+            TransportKind::Http => self.config.http_apis.as_deref(),
+            TransportKind::Ws => self.config.ws_apis.as_deref(),
+        };
+        match allow {
+            None => true,
+            Some(list) => list.iter().any(|n| n.eq_ignore_ascii_case(ns)),
+        }
+    }
+
+    fn modules_for_transport(&self, transport: TransportKind) -> Value {
+        let mut m = serde_json::Map::new();
+        for method in native::METHODS {
+            if let Some((ns, _)) = method.split_once('_') {
+                if self.namespace_allowed(transport, method) {
+                    m.insert(ns.into(), Value::String("1.0".into()));
+                }
+            }
+        }
+        m.insert("rpc".into(), Value::String("1.0".into()));
+        Value::Object(m)
+    }
+
     /// One request, over HTTP (`ws` None) or on a WebSocket connection. The
     /// answer, and the subscription to activate once it is written.
     async fn call_in(
         &self,
         request: Value,
         ws: Option<&ws::Connection>,
+        transport: TransportKind,
     ) -> (Option<Vec<u8>>, Option<String>) {
         let mut created = None;
-        let reply = self.call_inner(request, ws, &mut created).await;
+        let reply = self.call_inner(request, ws, transport, &mut created).await;
         (reply, created)
     }
 
@@ -554,6 +618,7 @@ impl App {
         &self,
         request: Value,
         ws: Option<&ws::Connection>,
+        transport: TransportKind,
         created: &mut Option<String>,
     ) -> Option<Vec<u8>> {
         let invalid = || Some(encode(&Value::Null, error(-32600, "invalid request")));
@@ -574,55 +639,97 @@ impl App {
         let params = object.get("params").unwrap_or(&Value::Null);
         let outcome = if !matches!(params, Value::Null | Value::Array(_) | Value::Object(_)) {
             error(-32602, "invalid params")
-        } else if let Ok(_permit) = self.permits.try_acquire() {
-            match tokio::time::timeout(Duration::from_millis(self.config.timeout_ms), async {
-                if self.config.mode == "fixture" {
-                    self.fixture(method, params).await
-                } else if let Some(outcome) = self.subscriptions(method, params, ws, created) {
-                    outcome
-                } else if let Some(r) =
-                    match self.filter_api_in(method.split('_').next().unwrap_or_default()) {
-                        Some(api) => api.call(native::eth::alias(method), params).await,
-                        None => None,
-                    }
-                {
-                    match r {
-                        Ok(value) => {
-                            self.native_hits.fetch_add(1, Ordering::Relaxed);
-                            Outcome::Result(value)
-                        }
-                        Err(e) => Outcome::Error(e.to_value()),
-                    }
-                } else if let Some(view) = &self.view {
-                    match native::handle(view.clone(), method, params).await {
-                        Ok(value) => {
-                            self.native_hits.fetch_add(1, Ordering::Relaxed);
-                            Outcome::Result(value)
-                        }
-                        Err(e) => Outcome::Error(e.to_value()),
-                    }
-                } else {
-                    if !is_read_method(method) {
-                        error(-32601, "method not available in read-only gateway")
-                    } else if let Some(value) = self.store.as_ref().and_then(|store| {
-                        store
-                            .snapshot()
-                            .lookup(method, params, self.config.mode == "snapshot")
-                    }) {
-                        self.native_hits.fetch_add(1, Ordering::Relaxed);
-                        Outcome::Encoded(value)
-                    } else if self.config.mode == "snapshot" {
-                        error(-32004, "read unavailable in this frozen snapshot")
-                    } else if let Some(result) = self.canonical_read(method, params).await {
-                        result
-                    } else {
-                        self.gateway(&request, id, method).await
+        } else if self.config.mode == "native" && !self.namespace_allowed(transport, method) {
+            Outcome::Error(native::RpcError::method_not_found(method).to_value())
+        } else if self.config.mode == "native" && method == "rpc_modules" {
+            match native::args::Args::new(params, 0) {
+                Ok(_) => Outcome::Result(self.modules_for_transport(transport)),
+                Err(e) => Outcome::Error(e.to_value()),
+            }
+        } else if let Ok(permit) = self.permits.clone().try_acquire_owned() {
+            let cancel = Arc::new(AtomicBool::new(false));
+            struct CancelOnDrop {
+                flag: Arc<AtomicBool>,
+                armed: bool,
+            }
+            impl Drop for CancelOnDrop {
+                fn drop(&mut self) {
+                    if self.armed {
+                        self.flag.store(true, Ordering::Relaxed);
                     }
                 }
-            })
-            .await
-            {
-                Ok(outcome) => outcome,
+            }
+            let mut cancel_guard = CancelOnDrop {
+                flag: cancel.clone(),
+                armed: true,
+            };
+            let fut = async {
+                if self.config.mode == "fixture" {
+                    let _permit = permit;
+                    self.fixture(method, params).await
+                } else if let Some(outcome) = self.subscriptions(method, params, ws, created) {
+                    let _permit = permit;
+                    outcome
+                } else {
+                    let aliased = native::eth::alias(method);
+                    if native::filters::METHODS.contains(&aliased) {
+                        if let Some(api) =
+                            self.filter_api_in(method.split('_').next().unwrap_or_default())
+                        {
+                            return match api
+                                .call_cancellable(aliased, params, permit, cancel.clone())
+                                .await
+                            {
+                                Ok(value) => {
+                                    self.native_hits.fetch_add(1, Ordering::Relaxed);
+                                    Outcome::Result(value)
+                                }
+                                Err(e) => Outcome::Error(e.to_value()),
+                            };
+                        }
+                    }
+                    if let Some(view) = &self.view {
+                        match native::handle_cancellable(
+                            view.clone(),
+                            method,
+                            params,
+                            permit,
+                            cancel.clone(),
+                        )
+                        .await
+                        {
+                            Ok(value) => {
+                                self.native_hits.fetch_add(1, Ordering::Relaxed);
+                                Outcome::Result(value)
+                            }
+                            Err(e) => Outcome::Error(e.to_value()),
+                        }
+                    } else {
+                        let _permit = permit;
+                        if !is_read_method(method) {
+                            error(-32601, "method not available in read-only gateway")
+                        } else if let Some(value) = self.store.as_ref().and_then(|store| {
+                            store
+                                .snapshot()
+                                .lookup(method, params, self.config.mode == "snapshot")
+                        }) {
+                            self.native_hits.fetch_add(1, Ordering::Relaxed);
+                            Outcome::Encoded(value)
+                        } else if self.config.mode == "snapshot" {
+                            error(-32004, "read unavailable in this frozen snapshot")
+                        } else if let Some(result) = self.canonical_read(method, params).await {
+                            result
+                        } else {
+                            self.gateway(&request, id, method).await
+                        }
+                    }
+                }
+            };
+            match tokio::time::timeout(Duration::from_millis(self.config.timeout_ms), fut).await {
+                Ok(outcome) => {
+                    cancel_guard.armed = false;
+                    outcome
+                }
                 Err(_) => error(-32002, "request timed out"),
             }
         } else {
@@ -636,7 +743,11 @@ impl App {
     }
 
     pub async fn handle(&self, body: &[u8]) -> Option<Vec<u8>> {
-        self.handle_in(body, None).await.0
+        self.handle_in(body, None, TransportKind::Http).await.0
+    }
+
+    pub async fn handle_transport(&self, body: &[u8], transport: TransportKind) -> Option<Vec<u8>> {
+        self.handle_in(body, None, transport).await.0
     }
 
     /// `subscribe` and `unsubscribe` of the native view (rpc/handler.go
@@ -697,6 +808,7 @@ impl App {
         &self,
         body: &[u8],
         ws: Option<&ws::Connection>,
+        transport: TransportKind,
     ) -> (Option<Vec<u8>>, Vec<String>) {
         let value: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
@@ -705,6 +817,35 @@ impl App {
                     Some(encode(&Value::Null, error(-32700, "parse error"))),
                     vec![],
                 )
+            }
+        };
+        self.handle_value_transport(value, ws, transport).await
+    }
+
+    pub(crate) async fn handle_value(
+        &self,
+        value: Value,
+        ws: Option<&ws::Connection>,
+    ) -> (Option<Vec<u8>>, Vec<String>) {
+        let transport = if ws.is_some() {
+            TransportKind::Ws
+        } else {
+            TransportKind::Http
+        };
+        self.handle_value_transport(value, ws, transport).await
+    }
+
+    pub(crate) async fn handle_value_transport(
+        &self,
+        value: Value,
+        ws: Option<&ws::Connection>,
+        transport: TransportKind,
+    ) -> (Option<Vec<u8>>, Vec<String>) {
+        let cancel_created = |created: &[String]| {
+            for api in self.filter_apis() {
+                for sub in created {
+                    api.cancel(sub);
+                }
             }
         };
         let mut created = vec![];
@@ -721,9 +862,12 @@ impl App {
                     vec![],
                 );
             }
-            let mut replies =
-                stream::iter(batch.into_iter().map(|request| self.call_in(request, ws)))
-                    .buffered(self.config.batch_concurrency);
+            let mut replies = stream::iter(
+                batch
+                    .into_iter()
+                    .map(|request| self.call_in(request, ws, transport)),
+            )
+            .buffered(self.config.batch_concurrency);
             let mut out = vec![b'['];
             let mut count = 0;
             let mut too_large = false;
@@ -742,9 +886,10 @@ impl App {
                 }
             }
             if too_large {
+                cancel_created(&created);
                 return (
                     Some(encode(&Value::Null, error(-32005, "response too large"))),
-                    created,
+                    vec![],
                 );
             }
             if count == 0 {
@@ -754,7 +899,7 @@ impl App {
                 Some(out)
             }
         } else {
-            let (reply, sub) = self.call_in(value, ws).await;
+            let (reply, sub) = self.call_in(value, ws, transport).await;
             created.extend(sub);
             reply
         };
@@ -762,9 +907,10 @@ impl App {
             .as_ref()
             .is_some_and(|body| body.len() > self.config.max_response_bytes)
         {
+            cancel_created(&created);
             (
                 Some(encode(&Value::Null, error(-32005, "response too large"))),
-                created,
+                vec![],
             )
         } else {
             (result, created)
@@ -824,7 +970,76 @@ pub fn is_read_method(method: &str) -> bool {
     )
 }
 
+fn vhost_allowed(allowed: &[String], host_header: Option<&str>) -> bool {
+    if allowed.is_empty() || allowed.iter().any(|v| v == "*") {
+        return true;
+    }
+    let Some(raw) = host_header else {
+        return true;
+    };
+    let host = if let Some(rest) = raw.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(raw)
+    } else {
+        raw.split(':').next().unwrap_or(raw)
+    };
+    // Always allow literal IP addresses (go-quai / go-ethereum vhost rule).
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    allowed.iter().any(|v| v.eq_ignore_ascii_case(host))
+}
+
+fn cors_origin_header(allowed: &[String], origin: Option<&str>) -> Option<String> {
+    if allowed.is_empty() {
+        return None;
+    }
+    if allowed.iter().any(|a| a == "*") {
+        return Some("*".into());
+    }
+    let origin = origin?;
+    if allowed.iter().any(|a| a.eq_ignore_ascii_case(origin)) {
+        Some(origin.to_string())
+    } else {
+        None
+    }
+}
+
+fn apply_cors(mut resp: Response, allowed: &[String], headers: &HeaderMap) -> Response {
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    if let Some(val) = cors_origin_header(allowed, origin) {
+        if let Ok(hv) = header::HeaderValue::from_str(&val) {
+            resp.headers_mut()
+                .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, hv);
+            resp.headers_mut().insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                header::HeaderValue::from_static("POST, GET, OPTIONS"),
+            );
+            resp.headers_mut().insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                header::HeaderValue::from_static("Content-Type, Accept"),
+            );
+        }
+    }
+    resp
+}
+
+async fn options_handler(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    if !vhost_allowed(&app.config.vhosts, host) {
+        return (StatusCode::FORBIDDEN, "invalid host specified\n").into_response();
+    }
+    apply_cors(
+        StatusCode::NO_CONTENT.into_response(),
+        &app.config.cors_domains,
+        &headers,
+    )
+}
+
 async fn rpc_handler(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> Response {
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    if !vhost_allowed(&app.config.vhosts, host) {
+        return (StatusCode::FORBIDDEN, "invalid host specified\n").into_response();
+    }
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -838,16 +1053,21 @@ async fn rpc_handler(State(app): State<Arc<App>>, headers: HeaderMap, body: Byte
     ]
     .contains(&content_type)
     {
-        return (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "expected application/json",
-        )
-            .into_response();
+        return apply_cors(
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "expected application/json",
+            )
+                .into_response(),
+            &app.config.cors_domains,
+            &headers,
+        );
     }
-    match app.handle(&body).await {
+    let resp = match app.handle_transport(&body, TransportKind::Http).await {
         Some(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         None => StatusCode::NO_CONTENT.into_response(),
-    }
+    };
+    apply_cors(resp, &app.config.cors_domains, &headers)
 }
 
 async fn health(State(app): State<Arc<App>>) -> Json<Value> {
@@ -904,7 +1124,10 @@ pub async fn serve_until(
 
 pub fn router(app: Arc<App>) -> Router {
     Router::new()
-        .route("/", post(rpc_handler).get(ws::handler))
+        .route(
+            "/",
+            post(rpc_handler).get(ws::handler).options(options_handler),
+        )
         .route("/health", get(health))
         .layer(DefaultBodyLimit::max(app.config.max_body_bytes))
         .with_state(app)

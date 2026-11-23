@@ -58,6 +58,24 @@ pub struct Options {
     /// Keep the block store (needed by the RPC). Off for a long shadow run
     /// with bounded disk: the store grows about 50 KB per zone block.
     pub store: bool,
+    /// Target `[region, zone]` slice (default `[0, 0]`).
+    pub slice: [u8; 2],
+    /// Preserve every historical state version for archive RPC queries.
+    pub archive: bool,
+    /// Maintain workshare, donor, supply analytics, and locked Quai indexes.
+    pub index_address_utxos: bool,
+    /// Prune canonical blocks older than the newest `N` blocks.
+    pub prune_blocks: Option<u64>,
+    /// Serve Circuit Relay v2 for NAT-constrained peers.
+    pub p2p_relay_service: bool,
+    /// Enable GossipSub publishing (also auto-enabled when mining or Stratum is active).
+    pub p2p_publish: bool,
+    /// RPC transport allowlists, CORS, vhosts, and Unix IPC path.
+    pub rpc_security: crate::cli::RpcSecurityOptions,
+    /// Local mining worker configuration.
+    pub miner: crate::cli::MinerOptions,
+    /// Stratum v1 server and HTTP/WS dashboard configuration.
+    pub stratum: crate::stratum::StratumConfig,
     /// The transaction pool (with state only).
     pub txpool: crate::cli::TxpoolOptions,
 }
@@ -97,6 +115,53 @@ pub fn install_signals(
     code
 }
 
+/// Load the persistent libp2p Ed25519 identity key from `<datadir>/node/key`,
+/// generating and saving it (mode 0600 on Unix) on first run so the node keeps
+/// a stable PeerId and peer reputation across restarts.
+fn load_or_create_p2p_key(
+    datadir: &std::path::Path,
+    log: &Log,
+) -> Result<libp2p::identity::Keypair, String> {
+    let dir = datadir.join("node");
+    let path = dir.join("key");
+    if path.is_file() {
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("read p2p key {}: {e}", path.display()))?;
+        return libp2p::identity::Keypair::from_protobuf_encoding(&bytes)
+            .map_err(|e| format!("decode p2p key {}: {e}", path.display()));
+    }
+    let key = libp2p::identity::Keypair::generate_ed25519();
+    let encoded = key
+        .to_protobuf_encoding()
+        .map_err(|e| format!("encode p2p key: {e}"))?;
+    if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| {
+        let tmp = dir.join("key.tmp");
+        std::fs::write(&tmp, &encoded)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+        }
+        std::fs::rename(&tmp, &path)
+    }) {
+        log.warn(&format!(
+            "could not persist p2p key {}: {e}",
+            path.display()
+        ));
+    }
+    Ok(key)
+}
+
+/// Anchor the GossipSub validator's [`Heads`] to the processor's validated
+/// canonical heads so untrusted gossip cannot poison or eclipse the node.
+pub(crate) fn sync_gossip_heads(processor: &mut Processor, node: &PublicNode) {
+    for (ctx, head) in processor.canonical_gossip_heads().into_iter().enumerate() {
+        if let Some(head) = head {
+            node.set_canonical_head(ctx, head);
+        }
+    }
+}
+
 pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     let started = Instant::now();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -107,10 +172,12 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         .map_err(|e| format!("runtime: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let signal = install_signals(&runtime, stop.clone(), *log);
-    let chain = Chain::for_environment(&o.network).map_err(|e| {
+    let chain = Chain::for_environment_and_location(&o.network, o.slice).map_err(|e| {
         format!(
-            "chain spec {}: {}",
+            "chain spec {} [{},{}]: {}",
             o.network,
+            o.slice[0],
+            o.slice[1],
             crate::processor::describe(&e)
         )
     })?;
@@ -149,16 +216,18 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             DialPolicy::Loopback
         };
         // Gossip needs the public profile: listening, go-quai's validators
-        // and relay; publishing stays off.
-        let config = if o.gossip && o.public {
+        // and relay; publishing turns on when requested or when mining/Stratum runs.
+        let mut config = if o.gossip && o.public {
             NetConfig::public(0)
         } else {
             NetConfig::read_only(policy)
         };
-        Arc::new(
-            PublicNode::launch(config, libp2p::identity::Keypair::generate_ed25519())
-                .map_err(|e| format!("p2p: {e}"))?,
-        )
+        config.genesis = chain.genesis_hash();
+        config.slice = o.slice;
+        config.relay_server = o.p2p_relay_service;
+        config.publish = o.p2p_publish || o.miner.enabled || o.stratum.enabled;
+        let key = load_or_create_p2p_key(&o.datadir, log)?;
+        Arc::new(PublicNode::launch(config, key).map_err(|e| format!("p2p: {e}"))?)
     };
     if let Some(trusted) = o.shadow_bootstrap {
         if !o.stateless {
@@ -233,9 +302,13 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         commit_every: o.commit_every,
         store: o.store,
         shadow: o.shadow_bootstrap.is_some(),
+        archive: o.archive,
+        index_address_utxos: o.index_address_utxos,
+        prune_blocks: o.prune_blocks,
     };
     let mut processor = Processor::open(chain.clone(), settings, None, started)?;
     processor.set_stop_flag(stop.clone());
+    sync_gossip_heads(&mut processor, &node);
     let start = processor.start();
     let heads = processor.heads().map(|h| h.unwrap_or_default());
     log.info(&format!(
@@ -274,6 +347,32 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         }
         _ => None,
     };
+    let miner = if let Some((view, _)) = &mut live_view {
+        let mut miner_cfg = o.miner.to_miner_config(Some(&o.stratum.pool_tag));
+        if o.stratum.enabled {
+            miner_cfg.enabled = true;
+        }
+        let m = crate::miner::Miner::new(
+            chain.clone(),
+            Arc::new(view.share()),
+            view.caches().clone(),
+            miner_cfg,
+        );
+        if o.p2p_publish || o.miner.enabled || o.stratum.enabled {
+            let p2p = node.clone();
+            let rt = runtime.handle().clone();
+            m.set_publish_hook(Arc::new(move |topic, payload| {
+                let p2p = p2p.clone();
+                rt.spawn(async move {
+                    let _ = p2p.publish(topic, payload).await;
+                });
+            }));
+        }
+        view.set_miner(m.clone());
+        Some(m)
+    } else {
+        None
+    };
     let live_view = live_view.map(|(view, live)| (Arc::new(view), live));
     // Peers' requests are answered from the block store from now on.
     if let Some((view, _)) = &live_view {
@@ -283,17 +382,95 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             chain.location(),
         )));
     }
-    // net_peerCount and net_peerCountByDirection read the network's counts.
+    // net_peerCount, admin_nodeInfo, admin_peers and eth_syncing read live node state.
     if let Some((_, live)) = &live_view {
-        let node = node.clone();
-        live.node().set_peer_counter(Box::new(move || {
-            let (peers, incoming, outgoing) = node.peer_counts();
-            quai_rpc::view::PeerCounts {
-                peers: peers as u64,
-                incoming: incoming as u64,
-                outgoing: outgoing as u64,
-            }
-        }));
+        {
+            let node = node.clone();
+            live.node().set_peer_counter(Box::new(move || {
+                let (peers, incoming, outgoing) = node.peer_counts();
+                quai_rpc::view::PeerCounts {
+                    peers: peers as u64,
+                    incoming: incoming as u64,
+                    outgoing: outgoing as u64,
+                }
+            }));
+        }
+        {
+            let node = node.clone();
+            let rt = runtime.handle().clone();
+            let env = chain.spec().environment.clone();
+            let chain_id = chain.spec().chain_id;
+            let location = chain.location();
+            let genesis_hex = quai_primitives::encode_hex(&chain.genesis_hash());
+            let metrics_c = metrics.clone();
+            live.node().set_p2p_node_info(Box::new(move || {
+                let info = rt.block_on(node.node_info()).ok();
+                let (peer_id, listen_addrs) = match info {
+                    Some(i) => (i.peer_id, i.listen_addrs),
+                    None => (node.id.to_string(), vec![]),
+                };
+                serde_json::json!({
+                    "id": peer_id,
+                    "name": format!("quai-rust/{}", env!("CARGO_PKG_VERSION")),
+                    "listenAddr": listen_addrs.first().cloned().unwrap_or_default(),
+                    "listenAddrs": listen_addrs,
+                    "protocols": {
+                        "quai": {
+                            "network": env,
+                            "chainId": chain_id,
+                            "location": location,
+                            "genesis": genesis_hex,
+                            "head": metrics_c.head.load(Ordering::Relaxed),
+                        }
+                    }
+                })
+            }));
+        }
+        {
+            let node = node.clone();
+            let rt = runtime.handle().clone();
+            live.node().set_p2p_peers_info(Box::new(move || {
+                let peers = rt.block_on(node.peers_info()).unwrap_or_default();
+                let list: Vec<serde_json::Value> = peers
+                    .into_iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "id": p.id,
+                            "name": p.agent,
+                            "caps": p.protocols,
+                            "network": {
+                                "remoteAddress": p.remote_addr,
+                                "inbound": p.inbound,
+                                "outbound": p.outbound,
+                            },
+                            "protocols": {
+                                "quai": {
+                                    "verified": p.verified,
+                                }
+                            }
+                        })
+                    })
+                    .collect();
+                serde_json::Value::Array(list)
+            }));
+        }
+        {
+            let metrics_c = metrics.clone();
+            let starting = start;
+            live.node().set_syncing(Box::new(move || {
+                let current = metrics_c.head.load(Ordering::Relaxed);
+                let highest = metrics_c.peer_head();
+                if highest > current {
+                    serde_json::json!({
+                        "startingBlock": format!("0x{starting:x}"),
+                        "currentBlock": format!("0x{current:x}"),
+                        "highestBlock": format!("0x{highest:x}"),
+                    })
+                } else {
+                    serde_json::Value::Bool(false)
+                }
+            }));
+        }
     }
     let shutdown = {
         let stop = stop.clone();
@@ -306,24 +483,54 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
             }
         }
     };
-    if let (Some(listen), Some((view, _))) = (&o.rpc_listen, &live_view) {
-        let config = crate::cli::rpc_config(listen.clone());
-        let app = quai_rpc::App::native(config, view.clone())?;
-        let listener = runtime
-            .block_on(tokio::net::TcpListener::bind(listen))
-            .map_err(|e| format!("rpc listen {listen}: {e}"))?;
-        log.info(&format!(
-            "rpc: native JSON-RPC on {}",
-            listener.local_addr().map_err(|e| e.to_string())?
-        ));
-        let rpc_log = *log;
-        let done = shutdown();
-        runtime.spawn(async move {
-            if let Err(e) = quai_rpc::serve_until(app, listener, done).await {
-                rpc_log.error(&format!("rpc: {e}"));
+    if let Some((view, _)) = &live_view {
+        let needs_rpc = o.rpc_listen.is_some() || o.rpc_security.ipc_path.is_some();
+        if needs_rpc {
+            let listen_cfg = o
+                .rpc_listen
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1:8547".into());
+            let config = crate::cli::rpc_config_with(listen_cfg, &o.rpc_security);
+            let app = quai_rpc::App::native(config, view.clone())?;
+            if let Some(listen) = &o.rpc_listen {
+                let listener = runtime
+                    .block_on(tokio::net::TcpListener::bind(listen))
+                    .map_err(|e| format!("rpc listen {listen}: {e}"))?;
+                log.info(&format!(
+                    "rpc: native JSON-RPC on {}",
+                    listener.local_addr().map_err(|e| e.to_string())?
+                ));
+                let rpc_log = *log;
+                let done = shutdown();
+                let http_app = app.clone();
+                runtime.spawn(async move {
+                    if let Err(e) = quai_rpc::serve_until(http_app, listener, done).await {
+                        rpc_log.error(&format!("rpc: {e}"));
+                    }
+                });
             }
-        });
+            #[cfg(unix)]
+            if let Some(ipc_path) = o.rpc_security.ipc_path.clone() {
+                log.info(&format!("rpc: Unix IPC on {}", ipc_path.display()));
+                let ipc_log = *log;
+                let done = shutdown();
+                runtime.spawn(async move {
+                    if let Err(e) = quai_rpc::ipc::serve_ipc(app, ipc_path, done).await {
+                        ipc_log.error(&format!("ipc: {e}"));
+                    }
+                });
+            }
+        }
     }
+    let _stratum_handle = if o.stratum.enabled {
+        let Some(m) = miner.clone() else {
+            return Err("--stratum requires a block store (do not combine with --no-store)".into());
+        };
+        let srv = crate::stratum::StratumServer::new(o.stratum.clone(), m, stop.clone(), *log);
+        Some(runtime.block_on(srv.start())?)
+    } else {
+        None
+    };
     let mut source = PeerSource::start(
         runtime.handle(),
         node.clone(),
@@ -359,6 +566,7 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
     // signal arrives.
     let mut result = processor.run(&mut source, log);
     drop(source);
+    sync_gossip_heads(&mut processor, &node);
     // At the peers' head: follow it through gossip.
     if result.is_ok()
         && o.gossip
@@ -368,15 +576,26 @@ pub fn run(o: &Options, log: &Log) -> Result<i32, String> {
         && !stop.load(Ordering::Relaxed)
     {
         let stats = Arc::new(crate::tip::GossipStats::default());
-        match crate::tip::subscribe(
+        let topic_genesis = chain
+            .topic_genesis()
+            .map_err(|e| format!("topic genesis: {}", crate::processor::describe(&e)))?;
+        match crate::tip::subscribe_slice_with_miner(
             runtime.handle(),
             node.clone(),
+            topic_genesis,
+            o.slice,
             stop.clone(),
             stats.clone(),
             pool.clone(),
+            miner.clone(),
             *log,
         ) {
-            Ok(gossip) => {
+            Ok((local_tx, gossip)) => {
+                if let Some(m) = &miner {
+                    m.set_block_sink(Arc::new(move |raw| {
+                        let _ = local_tx.try_send(crate::tip::Gossip::Block(raw));
+                    }));
+                }
                 let mut detector = crate::divergence::Detector::new(
                     Some(o.datadir.join("node").join("divergences.jsonl")),
                     Some(metrics.clone()),

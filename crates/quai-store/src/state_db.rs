@@ -800,27 +800,62 @@ impl StateDatabase {
         check_payload(&payloads, version.metadata_digest)?;
         let blocks = read.open_table(BLOCKS).map_err(bad)?;
         let source = read.open_table(NODES).map_err(bad)?;
-        let target = Database::builder().create(dest).map_err(bad)?;
-        let mut write = target.begin_write().map_err(bad)?;
-        write.set_durability(Durability::Immediate).map_err(bad)?;
+        let target = Database::builder()
+            .set_cache_size(64 << 20)
+            .create(dest)
+            .map_err(bad)?;
         let mut stats = CopyStats::default();
+        // Phase 1: Copy canonical version ancestry, block mappings and selected
+        // metadata payload, leaving META uncommitted until all nodes are copied
+        // so an interrupted copy is never mistaken for a valid state database.
         {
-            let mut meta = write.open_table(META).map_err(bad)?;
-            meta.insert(b"schema".as_slice(), SCHEMA).map_err(bad)?;
-            meta.insert(b"profile".as_slice(), self.profile.as_slice())
-                .map_err(bad)?;
-            meta.insert(b"head".as_slice(), id.as_slice())
-                .map_err(bad)?;
-            let mut out = write.open_table(VERSIONS).map_err(bad)?;
-            for entry in versions.iter().map_err(bad)? {
-                let (k, v) = entry.map_err(bad)?;
-                out.insert(k.value(), v.value()).map_err(bad)?;
-                stats.versions += 1;
+            let mut write = target.begin_write().map_err(bad)?;
+            write.set_durability(Durability::None).map_err(bad)?;
+            let mut keep_versions = std::collections::HashSet::new();
+            let mut keep_blocks = std::collections::HashSet::new();
+            let mut cursor = Some(version.clone());
+            while let Some(v) = cursor {
+                if !keep_versions.insert(v.id) {
+                    break;
+                }
+                keep_blocks.insert(v.block);
+                cursor = match v.parent {
+                    Some(parent_id) => Some(table_version(&versions, self.profile, parent_id)?),
+                    None => None,
+                };
             }
-            let mut out = write.open_table(BLOCKS).map_err(bad)?;
-            for entry in blocks.iter().map_err(bad)? {
-                let (k, v) = entry.map_err(bad)?;
-                out.insert(k.value(), v.value()).map_err(bad)?;
+            {
+                let mut out = write.open_table(VERSIONS).map_err(bad)?;
+                for entry in versions.iter().map_err(bad)? {
+                    let (k, v) = entry.map_err(bad)?;
+                    let key_ok = k
+                        .value()
+                        .try_into()
+                        .ok()
+                        .is_some_and(|h: Hash| keep_versions.contains(&h));
+                    if key_ok {
+                        out.insert(k.value(), v.value()).map_err(bad)?;
+                        stats.versions += 1;
+                    }
+                }
+            }
+            {
+                let mut out = write.open_table(BLOCKS).map_err(bad)?;
+                for entry in blocks.iter().map_err(bad)? {
+                    let (k, v) = entry.map_err(bad)?;
+                    let keep = k
+                        .value()
+                        .try_into()
+                        .ok()
+                        .is_some_and(|h: Hash| keep_blocks.contains(&h))
+                        && v.value()
+                            .try_into()
+                            .ok()
+                            .is_some_and(|h: Hash| keep_versions.contains(&h));
+                    if keep {
+                        out.insert(k.value(), v.value()).map_err(bad)?;
+                    }
+                }
             }
             let payload = payloads
                 .get(version.metadata_digest.as_slice())
@@ -831,23 +866,37 @@ impl StateDatabase {
                 .map_err(bad)?
                 .insert(version.metadata_digest.as_slice(), payload.value())
                 .map_err(bad)?;
-            let nodes = std::cell::RefCell::new(write.open_table(NODES).map_err(bad)?);
-            let copier = Copier {
-                source: Nodes(&source),
-                target: &nodes,
-                nodes: std::cell::Cell::new(0),
-                bytes: std::cell::Cell::new(0),
-            };
+            write.open_table(NODES).map_err(bad)?;
+            write.commit().map_err(bad)?;
+        }
+        // Phase 2: Stream reachable trie nodes in bounded write batches so large
+        // state compactions do not hold the entire live trie in dirty RAM pages.
+        {
+            let copier = BatchedCopier::new(Nodes(&source), &target);
             for root in version.roots.values().chain(extra_roots) {
-                // Visiting every leaf loads every node of the trie once.
                 Trie::from_root(*root)
                     .visit_leaves(&copier, usize::MAX, usize::MAX, &mut |_, _| Ok(()))
                     .map_err(bad)?;
             }
+            copier.flush().map_err(bad)?;
             stats.nodes = copier.nodes.get();
             stats.bytes = copier.bytes.get();
         }
-        write.commit().map_err(bad)?;
+        // Phase 3: Durable commit of META (`schema`, `profile`, `head`) seals
+        // the compacted database atomically.
+        {
+            let mut write = target.begin_write().map_err(bad)?;
+            write.set_durability(Durability::Immediate).map_err(bad)?;
+            {
+                let mut meta = write.open_table(META).map_err(bad)?;
+                meta.insert(b"schema".as_slice(), SCHEMA).map_err(bad)?;
+                meta.insert(b"profile".as_slice(), self.profile.as_slice())
+                    .map_err(bad)?;
+                meta.insert(b"head".as_slice(), id.as_slice())
+                    .map_err(bad)?;
+            }
+            write.commit().map_err(bad)?;
+        }
         Ok(stats)
     }
 }
@@ -858,26 +907,74 @@ pub struct CopyStats {
     pub nodes: u64,
     pub bytes: u64,
 }
-struct Copier<'r, 'txn, S> {
+const COPY_BATCH_NODES: usize = 16_384;
+struct BatchedCopier<'r, S> {
     source: Nodes<'r, S>,
-    target: &'r std::cell::RefCell<Table<'txn, &'static [u8], &'static [u8]>>,
+    target: &'r Database,
+    pending: std::cell::RefCell<Vec<(Hash, Vec<u8>)>>,
     nodes: std::cell::Cell<u64>,
     bytes: std::cell::Cell<u64>,
 }
-impl<S: ReadableTable<&'static [u8], &'static [u8]>> ReadNodes for Copier<'_, '_, S> {
+impl<'r, S> BatchedCopier<'r, S> {
+    fn new(source: Nodes<'r, S>, target: &'r Database) -> Self {
+        Self {
+            source,
+            target,
+            pending: std::cell::RefCell::new(Vec::with_capacity(COPY_BATCH_NODES.min(1024))),
+            nodes: std::cell::Cell::new(0),
+            bytes: std::cell::Cell::new(0),
+        }
+    }
+    fn flush(&self) -> Result<(), mpt::Error> {
+        let batch = {
+            let mut pending = self
+                .pending
+                .try_borrow_mut()
+                .map_err(|_| mpt::Error::Invalid("node copy reentry"))?;
+            if pending.is_empty() {
+                return Ok(());
+            }
+            std::mem::take(&mut *pending)
+        };
+        let mut write = self
+            .target
+            .begin_write()
+            .map_err(|e| mpt::Error::Backend(e.to_string()))?;
+        write
+            .set_durability(Durability::None)
+            .map_err(|e| mpt::Error::Backend(e.to_string()))?;
+        {
+            let mut table = write
+                .open_table(NODES)
+                .map_err(|e| mpt::Error::Backend(e.to_string()))?;
+            for (hash, raw) in batch {
+                if write_node(&mut table, hash, &raw)? {
+                    self.nodes.set(self.nodes.get() + 1);
+                    self.bytes.set(self.bytes.get() + raw.len() as u64);
+                }
+            }
+        }
+        write
+            .commit()
+            .map_err(|e| mpt::Error::Backend(e.to_string()))
+    }
+}
+impl<S: ReadableTable<&'static [u8], &'static [u8]>> ReadNodes for BatchedCopier<'_, S> {
     fn get_node(&self, hash: &Hash) -> Result<Option<Vec<u8>>, mpt::Error> {
         let raw = self
             .source
             .get_node(hash)?
             .ok_or(mpt::Error::Missing(*hash))?;
-        let mut target = self
-            .target
-            .try_borrow_mut()
-            .map_err(|_| mpt::Error::Invalid("node copy reentry"))?;
-        // write_node checks the node hash before it writes.
-        if write_node(&mut target, *hash, &raw)? {
-            self.nodes.set(self.nodes.get() + 1);
-            self.bytes.set(self.bytes.get() + raw.len() as u64);
+        let should_flush = {
+            let mut pending = self
+                .pending
+                .try_borrow_mut()
+                .map_err(|_| mpt::Error::Invalid("node copy reentry"))?;
+            pending.push((*hash, raw.clone()));
+            pending.len() >= COPY_BATCH_NODES
+        };
+        if should_flush {
+            self.flush()?;
         }
         Ok(Some(raw))
     }

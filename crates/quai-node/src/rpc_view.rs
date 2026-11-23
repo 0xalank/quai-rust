@@ -39,6 +39,7 @@ use crate::spec::Chain;
 use crate::store::{self, PastDb, StateStore};
 use crate::txpool::service::Service as TxPoolService;
 use crate::uncles;
+use crypto_bigint::Encoding as _;
 use quai_consensus::{
     history::{self, History, Record},
     pow::SharedCaches,
@@ -139,6 +140,37 @@ trait Blocks: Send + Sync {
     }
     /// A prime (0) or region (1) view's work object bytes; None: not kept.
     fn dominant(&self, _ctx: u8, _hash: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
+        Ok(None)
+    }
+    /// Compact log bloom at canonical height (empty = confirmed no logs, 256
+    /// bytes = bloom, None = not indexed).
+    fn bloom_at(&self, _height: u64) -> Result<Option<Vec<u8>>, ViewError> {
+        Ok(None)
+    }
+    /// Zone block hash containing or matching a workshare hash, if indexed.
+    fn block_for_workshare(&self, _ws_hash: &Hash) -> Result<Option<Hash>, ViewError> {
+        Ok(None)
+    }
+    /// Zone block hash linked to an AuxPoW donor PoW hash, if indexed.
+    fn block_for_donor(&self, _donor_hash: &Hash) -> Result<Option<Hash>, ViewError> {
+        Ok(None)
+    }
+    /// Persisted supply analytics for a zone block hash, if indexed.
+    fn supply(
+        &self,
+        _block_hash: &Hash,
+    ) -> Result<Option<quai_rpc::view::SupplyAnalytics>, ViewError> {
+        Ok(None)
+    }
+    /// Indexed locked Quai balance of `address`.
+    fn locked_quai(&self, _address: &Address) -> Result<U256, ViewError> {
+        Ok([0u8; 32])
+    }
+    /// Archived state version entry at `height`, if present (`--archive`).
+    fn state_version_at(
+        &self,
+        _height: u64,
+    ) -> Result<Option<blockstore::StateVersionEntry>, ViewError> {
         Ok(None)
     }
 }
@@ -286,6 +318,12 @@ impl Blocks for StoreBlocks {
     fn dominant(&self, ctx: u8, hash: &Hash) -> Result<Option<Vec<u8>>, ViewError> {
         self.reader.dominant(ctx, hash).map_err(store_error)
     }
+    fn bloom_at(&self, height: u64) -> Result<Option<Vec<u8>>, ViewError> {
+        if height > self.head {
+            return Ok(None);
+        }
+        self.reader.bloom_at(height).map_err(store_error)
+    }
     fn hash_at(&self, height: u64) -> Result<Option<Hash>, ViewError> {
         if height > self.head {
             return Ok(None);
@@ -391,6 +429,32 @@ impl Blocks for StoreBlocks {
         }
         self.reader.created(height).map_err(store_error)
     }
+    fn block_for_workshare(&self, ws_hash: &Hash) -> Result<Option<Hash>, ViewError> {
+        self.reader
+            .block_for_workshare(ws_hash)
+            .map_err(store_error)
+    }
+    fn block_for_donor(&self, donor_hash: &Hash) -> Result<Option<Hash>, ViewError> {
+        self.reader.block_for_donor(donor_hash).map_err(store_error)
+    }
+    fn supply(
+        &self,
+        block_hash: &Hash,
+    ) -> Result<Option<quai_rpc::view::SupplyAnalytics>, ViewError> {
+        self.reader.supply(block_hash).map_err(store_error)
+    }
+    fn locked_quai(&self, address: &Address) -> Result<U256, ViewError> {
+        self.reader.locked_quai(address).map_err(store_error)
+    }
+    fn state_version_at(
+        &self,
+        height: u64,
+    ) -> Result<Option<blockstore::StateVersionEntry>, ViewError> {
+        if height > self.head {
+            return Ok(None);
+        }
+        self.reader.state_version_at(height).map_err(store_error)
+    }
 }
 
 /// Ancestry reads for the native entropy computation.
@@ -454,12 +518,53 @@ pub struct NodeInfo {
     peers: RwLock<Option<PeerCounter>>,
     fees: RwLock<Option<[U256; 3]>>,
     appended: Mutex<VecDeque<(Hash, u64, u8, Arc<Vec<u8>>)>>,
+    p2p_node_info: RwLock<Option<JsonCallback>>,
+    p2p_peers_info: RwLock<Option<JsonCallback>>,
+    syncing: RwLock<Option<JsonCallback>>,
 }
 /// The network's peer counts (`net_peerCount`, `net_peerCountByDirection`).
 pub type PeerCounter = Box<dyn Fn() -> PeerCounts + Send + Sync>;
+/// Dynamic JSON snapshot hook (`admin_nodeInfo`, `admin_peers`, `eth_syncing`).
+pub type JsonCallback = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 impl NodeInfo {
     pub fn set_peer_counter(&self, counter: PeerCounter) {
         *self.peers.write().unwrap_or_else(|e| e.into_inner()) = Some(counter);
+    }
+    pub fn set_p2p_node_info(&self, cb: JsonCallback) {
+        *self
+            .p2p_node_info
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(cb);
+    }
+    pub fn set_p2p_peers_info(&self, cb: JsonCallback) {
+        *self
+            .p2p_peers_info
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(cb);
+    }
+    pub fn set_syncing(&self, cb: JsonCallback) {
+        *self.syncing.write().unwrap_or_else(|e| e.into_inner()) = Some(cb);
+    }
+    fn p2p_node_info(&self) -> Option<serde_json::Value> {
+        self.p2p_node_info
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|f| f())
+    }
+    fn p2p_peers_info(&self) -> Option<serde_json::Value> {
+        self.p2p_peers_info
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|f| f())
+    }
+    fn syncing_status(&self) -> Option<serde_json::Value> {
+        self.syncing
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|f| f())
     }
     fn peer_counts(&self) -> PeerCounts {
         self.peers
@@ -574,6 +679,10 @@ pub struct ExportView {
     kinds: Arc<Mutex<Lru<Arc<Vec<UncleKind>>>>>,
     /// The transaction pool, if the node runs one.
     pool: Option<Arc<TxPoolService>>,
+    /// The mining worker, if configured on this node.
+    miner: Option<Arc<crate::miner::Miner>>,
+    /// State checkpoint directory for `--archive` historical state lookups.
+    state_dir: Option<std::path::PathBuf>,
 }
 /// A small cache by block hash, oldest entry out first.
 type Lru<T> = (HashMap<Hash, T>, VecDeque<Hash>);
@@ -667,6 +776,8 @@ impl ExportView {
             blocks: lru(),
             kinds: lru(),
             pool: None,
+            miner: None,
+            state_dir: None,
         })
     }
     /// Another handle on the same view (blocks, head and caches).
@@ -680,11 +791,26 @@ impl ExportView {
             blocks: self.blocks.clone(),
             kinds: self.kinds.clone(),
             pool: self.pool.clone(),
+            miner: self.miner.clone(),
+            state_dir: self.state_dir.clone(),
         }
     }
     /// Answer the pool's RPC methods from `pool`.
     pub fn set_pool(&mut self, pool: Arc<TxPoolService>) {
         self.pool = Some(pool);
+    }
+    /// Answer the mining, block template and workshare RPC methods from `miner`.
+    pub fn set_miner(&mut self, miner: Arc<crate::miner::Miner>) {
+        self.miner = Some(miner);
+    }
+    /// Record the state directory so `--archive` historical state queries can
+    /// open persisted versions from `state-*.redb`.
+    pub fn set_state_dir(&mut self, dir: std::path::PathBuf) {
+        self.state_dir = Some(dir);
+    }
+    /// Shared PoW caches (also reused by the mining worker).
+    pub fn caches(&self) -> &Arc<SharedCaches> {
+        &self.caches
     }
     /// The canonical zone hash at `number` in the published snapshot.
     pub fn hash_at(&self, number: u64) -> Option<Hash> {
@@ -792,7 +918,9 @@ impl ExportView {
             })),
             head_entropy: OnceLock::new(),
         });
-        Self::with_snapshot(chain, snap, None)
+        let mut view = Self::with_snapshot(chain, snap, None)?;
+        view.set_state_dir(dir);
+        Ok(view)
     }
     /// Serve the block store of `datadir` for `environment`: with state, up
     /// to the latest state checkpoint and its state; without, the whole store.
@@ -861,7 +989,11 @@ impl ExportView {
             state,
             head_entropy: OnceLock::new(),
         });
-        Self::with_snapshot(chain, snap, None)
+        let mut view = Self::with_snapshot(chain, snap, None)?;
+        if with_state {
+            view.set_state_dir(dir);
+        }
+        Ok(view)
     }
     /// The view of a running node; `Live::publish` moves its head.
     pub fn live(
@@ -1372,6 +1504,40 @@ impl ExportView {
             StateAt::Head
         })
     }
+    fn world_at(
+        &self,
+        snap: &Snapshot,
+        block: &BlockData,
+    ) -> Result<quai_execution::evm::state::World, ViewError> {
+        match Self::state_in(snap, block) {
+            Ok(StateAt::Empty) => Ok(quai_execution::evm::state::World::default()),
+            Ok(StateAt::Head) => Ok(head_state(snap)?.state.world.clone()),
+            Err(err) => {
+                if let Some(dir) = &self.state_dir {
+                    if let Some(entry) = snap.blocks.state_version_at(block.number)? {
+                        let body = block.object.header().wire();
+                        let evm = hash_of(&body.evm_root);
+                        if entry.commitment.roots.evm == evm {
+                            let store = StateStore::open(
+                                dir,
+                                store::profile(
+                                    &self.chain.spec().environment,
+                                    &self.chain.genesis_hash(),
+                                ),
+                                entry.file_height,
+                                entry.version,
+                                entry.commitment,
+                            )
+                            .map_err(read_error)?;
+                            let restored = store.restore().map_err(read_error)?;
+                            return Ok(restored.world);
+                        }
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
 }
 
 impl ChainView for ExportView {
@@ -1419,6 +1585,9 @@ impl ChainView for ExportView {
     }
     fn may_have_logs(&self, number: u64) -> Result<bool, ViewError> {
         let snap = self.snap();
+        if let Some(bloom) = snap.blocks.bloom_at(number)? {
+            return Ok(!bloom.is_empty());
+        }
         if !snap.blocks.receipts_kept() {
             return Ok(true);
         }
@@ -1432,6 +1601,14 @@ impl ChainView for ExportView {
                 .map_err(|e| ViewError::Unavailable(format!("stored receipts: {e}")))?
                 .iter()
                 .any(|r| !r.logs.is_empty())),
+        }
+    }
+    fn bloom_at(&self, number: u64) -> Result<Option<[u8; 256]>, ViewError> {
+        let snap = self.snap();
+        match snap.blocks.bloom_at(number)? {
+            Some(raw) if raw.len() == 256 => Ok(raw.try_into().ok()),
+            Some(raw) if raw.is_empty() => Ok(Some([0u8; 256])),
+            _ => Ok(None),
         }
     }
     fn transaction(&self, hash: &Hash) -> Result<Option<TxPosition>, ViewError> {
@@ -1474,10 +1651,14 @@ impl ChainView for ExportView {
     }
     fn state(&self, block: &BlockData) -> Result<Arc<dyn AccountState>, ViewError> {
         let snap = self.snap();
-        Ok(match Self::state_in(&snap, block)? {
-            StateAt::Empty => Arc::new(EmptyState),
-            StateAt::Head => Arc::new(WorldState(head_state(&snap)?.state.world.clone())),
-        })
+        match Self::state_in(&snap, block) {
+            Ok(StateAt::Empty) => Ok(Arc::new(EmptyState)),
+            Ok(StateAt::Head) => Ok(Arc::new(WorldState(head_state(&snap)?.state.world.clone()))),
+            Err(err) => match self.world_at(&snap, block) {
+                Ok(world) => Ok(Arc::new(WorldState(world))),
+                Err(_) => Err(err),
+            },
+        }
     }
     fn utxo(&self, tx_hash: &Hash, index: u16) -> Result<Option<UtxoData>, ViewError> {
         let snap = self.snap();
@@ -1553,11 +1734,18 @@ impl ChainView for ExportView {
     }
     fn call(&self, block: &BlockData, request: &CallRequest) -> Result<CallResult, CallError> {
         let snap = self.snap();
-        let world = match Self::state_in(&snap, block)? {
-            StateAt::Head => head_state(&snap)?.state.world.clone(),
-            StateAt::Empty => quai_execution::evm::state::World::default(),
-        };
+        let world = self.world_at(&snap, block)?;
         rpc_call::call(self, world, block, request)
+    }
+    fn call_cancellable(
+        &self,
+        block: &BlockData,
+        request: &CallRequest,
+        cancel: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<CallResult, CallError> {
+        let snap = self.snap();
+        let world = self.world_at(&snap, block)?;
+        rpc_call::call_cancellable(self, world, block, request, Some(cancel.clone()))
     }
     fn head_events(&self) -> Option<tokio::sync::broadcast::Receiver<Hash>> {
         self.live.as_ref().map(|l| l.events.subscribe())
@@ -1593,6 +1781,8 @@ impl ChainView for ExportView {
             blocks: self.blocks.clone(),
             kinds: self.kinds.clone(),
             pool: self.pool.clone(),
+            miner: self.miner.clone(),
+            state_dir: self.state_dir.clone(),
         }))
     }
     fn submit_transaction(&self, raw: &[u8]) -> Result<Hash, ViewError> {
@@ -1739,6 +1929,723 @@ impl ChainView for ExportView {
         }
         Ok(out)
     }
+    fn locked_quai(&self, address: &Address) -> Result<U256, ViewError> {
+        self.snap().blocks.locked_quai(address)
+    }
+    fn supply_analytics(
+        &self,
+        block_hash: &Hash,
+    ) -> Result<Option<quai_rpc::view::SupplyAnalytics>, ViewError> {
+        self.snap().blocks.supply(block_hash)
+    }
+    fn block_for_workshare(&self, ws_hash: &Hash) -> Result<Option<Arc<BlockData>>, ViewError> {
+        let snap = self.snap();
+        if let Some(block_hash) = snap.blocks.block_for_workshare(ws_hash)? {
+            if let Some(b) = self.block_or_candidate(&block_hash)? {
+                return Ok(Some(b));
+            }
+        }
+        // Fallback scan over recent blocks when index-address-utxos was off.
+        let start = snap.head.saturating_sub(32);
+        for n in (start..=snap.head).rev() {
+            let Ok(Some(b)) = self.load(&snap, n) else {
+                continue;
+            };
+            if b.hash == *ws_hash
+                || b.uncles
+                    .iter()
+                    .any(|u| u.block_hash().ok() == Some(*ws_hash))
+            {
+                return Ok(Some(b));
+            }
+        }
+        Ok(None)
+    }
+    fn quai_header_for_donor(
+        &self,
+        donor_hash: &Hash,
+    ) -> Result<Option<Arc<BlockData>>, ViewError> {
+        let snap = self.snap();
+        if let Some(block_hash) = snap.blocks.block_for_donor(donor_hash)? {
+            if let Some(b) = self.block_or_candidate(&block_hash)? {
+                return Ok(Some(b));
+            }
+        }
+        let matches_header = |hdr: &quai_primitives::Header| -> bool {
+            let Some(aux_bytes) = hdr.wire().aux_pow.as_deref() else {
+                return false;
+            };
+            let Ok(aux) = quai_consensus::auxiliary::Auxiliary::decode(aux_bytes) else {
+                return false;
+            };
+            let h = aux.header();
+            if h.len() < 80 {
+                return false;
+            }
+            let hash = match aux.id() {
+                2 | 3 => quai_consensus::donor::sha256d(h).ok(),
+                4 => quai_consensus::donor::scrypt(h).ok(),
+                _ => None,
+            };
+            hash == Some(*donor_hash)
+        };
+        let start = snap.head.saturating_sub(32);
+        for n in (start..=snap.head).rev() {
+            let Ok(Some(b)) = self.load(&snap, n) else {
+                continue;
+            };
+            if matches_header(&b.header) || b.uncles.iter().any(matches_header) {
+                return Ok(Some(b));
+            }
+        }
+        Ok(None)
+    }
+    fn compute_kawpow_pow_hash(&self, header: &quai_primitives::Header) -> Result<Hash, ViewError> {
+        let mut verifier = Verifier::with_shared_caches(self.caches.clone());
+        let proof = verifier
+            .verify_header_proof(header)
+            .map_err(|e| ViewError::Go(format!("pow hash: {e}")))?;
+        Ok(proof.hash())
+    }
+    // --- Mining, AuxPoW & Workshare ---
+    fn is_mining(&self) -> bool {
+        self.miner.as_ref().is_some_and(|m| m.is_mining())
+    }
+    fn hashrate(&self) -> u64 {
+        self.miner.as_ref().map_or(0, |m| m.hashrate())
+    }
+    fn primary_coinbase(&self) -> Result<Address, ViewError> {
+        Ok(self
+            .miner
+            .as_ref()
+            .map_or([0u8; 20], |m| m.primary_coinbase()))
+    }
+    fn miner_start(&self) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.start_mining();
+        Ok(true)
+    }
+    fn miner_set_extra(&self, extra: &[u8]) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_extra(extra.to_vec()).map_err(ViewError::Go)?;
+        Ok(true)
+    }
+    fn miner_set_gas_limit(&self, limit: u64) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_gas_limit(limit);
+        Ok(true)
+    }
+    fn miner_set_gas_price(&self, price: U256) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        use crypto_bigint::Encoding as _;
+        m.set_gas_price(crypto_bigint::U256::from_be_bytes(price));
+        Ok(true)
+    }
+    fn miner_set_lockup_byte(&self, lock: u8) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_lockup_byte(lock).map_err(ViewError::Go)?;
+        Ok(true)
+    }
+    fn miner_set_miner_preference(&self, pref: f64) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_miner_preference(pref).map_err(ViewError::Go)?;
+        Ok(true)
+    }
+    fn miner_set_primary_coinbase(&self, addr: Address) -> Result<bool, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_primary_coinbase(addr);
+        Ok(true)
+    }
+    fn miner_set_recommit_interval(&self, ms: u64) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_recommit_interval(ms);
+        Ok(())
+    }
+    fn get_block_template(
+        &self,
+        params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        let parsed = crate::miner::BlockTemplateParams::from_json(params).map_err(ViewError::Go)?;
+        m.get_block_template(&parsed).map_err(ViewError::Go)
+    }
+    fn get_pending_header(&self) -> Result<Vec<u8>, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        let wo = m
+            .generate_pending_header(crate::miner::POW_KAWPOW, None, &[], None)
+            .map_err(ViewError::Go)?;
+        Ok(wo.encode())
+    }
+    fn get_pending_workshares(&self) -> Result<serde_json::Value, ViewError> {
+        Ok(self.miner.as_ref().map_or_else(
+            || serde_json::json!({"kawpow": [], "sha": [], "scrypt": []}),
+            |m| m.pending_workshares_json(),
+        ))
+    }
+    fn submit_block(&self, raw: &[u8], pow_id: u8) -> Result<serde_json::Value, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        let out = m.submit_block(raw, pow_id).map_err(ViewError::Go)?;
+        Ok(serde_json::json!({
+            "hash": quai_primitives::encode_hex(&out.hash),
+            "number": format!("0x{:x}", out.number),
+            "status": format!("0x{:x}", out.status),
+        }))
+    }
+    fn receive_mined_header(&self, raw: &[u8]) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.receive_mined_header(raw).map_err(ViewError::Go)
+    }
+    fn receive_raw_workshare(&self, raw: &[u8]) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.receive_raw_workshare(raw)
+            .map(|_| ())
+            .map_err(ViewError::Go)
+    }
+    fn receive_workshare(&self, workshare: &serde_json::Value) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        if let Some(hex_str) = workshare.as_str() {
+            let raw = quai_primitives::decode_hex(hex_str)
+                .map_err(|e| ViewError::Go(format!("invalid hex workshare: {e}")))?;
+            return m
+                .receive_raw_workshare(&raw)
+                .map(|_| ())
+                .map_err(ViewError::Go);
+        }
+        let header = decode_rpc_workshare_header(workshare).map_err(ViewError::Go)?;
+        m.receive_workshare_header(header)
+            .map(|_| ())
+            .map_err(ViewError::Go)
+    }
+    fn receive_sub_workshare(&self, raw: &[u8]) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.receive_sub_workshare(raw)
+            .map(|_| ())
+            .map_err(ViewError::Go)
+    }
+    fn calc_order(&self, raw: &[u8]) -> Result<u8, ViewError> {
+        if let Some(m) = &self.miner {
+            return m.calc_order(raw).map_err(ViewError::Go);
+        }
+        let header = quai_primitives::Header::decode(raw, PINNED_SCHEDULE)
+            .or_else(|_| {
+                WorkObject::decode_auxiliary(raw, PINNED_SCHEDULE)
+                    .and_then(|o| o.auxiliary_work_header(PINNED_SCHEDULE))
+            })
+            .map_err(|e| ViewError::Go(format!("decode header: {e}")))?;
+        let mut verifier = Verifier::with_shared_caches(self.caches.clone());
+        let proof = verifier
+            .verify_header_proof(&header)
+            .map_err(|e| ViewError::Go(format!("pow: {e}")))?;
+        let diff = quai_consensus::share_rules::uint(
+            header.wire().difficulty.as_deref().unwrap_or_default(),
+        )
+        .map_err(|e| ViewError::Go(e.to_string()))?;
+        let target = crate::miner::difficulty_to_target(diff);
+        let pow_uint = crypto_bigint::U256::from_be_bytes(proof.hash());
+        if pow_uint <= target {
+            Ok(2)
+        } else {
+            Err(ViewError::Go(
+                "header does not meet block difficulty".into(),
+            ))
+        }
+    }
+    fn workshare_threshold(&self) -> u16 {
+        self.miner
+            .as_ref()
+            .map_or(quai_primitives::spec::WORKSHARES_THRESHOLD_DIFF, |m| {
+                m.workshare_threshold()
+            })
+    }
+    fn workshare_p2p_threshold(&self) -> u16 {
+        self.miner
+            .as_ref()
+            .map_or(quai_primitives::spec::WORKSHARE_P2P_THRESHOLD_DIFF, |m| {
+                m.workshare_p2p_threshold()
+            })
+    }
+    fn set_workshare_p2p_threshold(&self, threshold: u16) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.set_workshare_p2p_threshold(threshold)
+            .map_err(ViewError::Go)
+    }
+    fn submit_aux_template(&self, raw: &[u8]) -> Result<(), ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Unavailable(
+                "mining is not configured on this node".into(),
+            ));
+        };
+        m.submit_aux_template(raw).map_err(ViewError::Go)
+    }
+    fn sign_aux_template(
+        &self,
+        template: &[u8],
+        other_pubkey: &[u8],
+        other_nonce: &[u8],
+    ) -> Result<serde_json::Value, ViewError> {
+        crate::miner::sign_aux_template(template, other_pubkey, other_nonce).map_err(ViewError::Go)
+    }
+    fn subsidy_chain_height(&self) -> Result<serde_json::Value, ViewError> {
+        let Some(m) = &self.miner else {
+            return Err(ViewError::Go("no subsidy chain height found".into()));
+        };
+        m.subsidy_chain_height().map_err(ViewError::Go)
+    }
+    fn workshare_lru_dump(&self, limit: usize) -> Result<serde_json::Value, ViewError> {
+        Ok(self.miner.as_ref().map_or_else(
+            || serde_json::json!({"receivedCount": 0, "minedCount": 0, "received": [], "mined": []}),
+            |m| m.workshare_lru_dump(limit),
+        ))
+    }
+    fn pending_header_events(&self) -> Option<tokio::sync::broadcast::Receiver<Vec<u8>>> {
+        self.miner.as_ref().map(|m| m.subscribe_pending_header())
+    }
+    fn template_update_events(&self) -> Option<tokio::sync::broadcast::Receiver<u8>> {
+        self.miner.as_ref().map(|m| m.subscribe_template_updates())
+    }
+    fn workshare_events(&self) -> Option<tokio::sync::broadcast::Receiver<Arc<WorkObject>>> {
+        self.miner.as_ref().map(|m| m.subscribe_workshares())
+    }
+    // --- Admin, Debug & Sync ---
+    fn syncing(&self) -> serde_json::Value {
+        self.node
+            .as_ref()
+            .and_then(|n| n.syncing_status())
+            .unwrap_or(serde_json::Value::Bool(false))
+    }
+    fn admin_node_info(&self) -> Result<serde_json::Value, ViewError> {
+        if let Some(info) = self.node.as_ref().and_then(|n| n.p2p_node_info()) {
+            return Ok(info);
+        }
+        Ok(serde_json::json!({
+            "name": format!("quai-rust/{}", env!("CARGO_PKG_VERSION")),
+            "protocols": {
+                "quai": {
+                    "network": self.chain.spec().environment,
+                    "chainId": self.chain.spec().chain_id,
+                    "location": self.chain.location(),
+                    "genesis": quai_primitives::encode_hex(&self.chain.genesis_hash()),
+                    "head": self.head(),
+                }
+            }
+        }))
+    }
+    fn admin_peers(&self) -> Result<serde_json::Value, ViewError> {
+        Ok(self
+            .node
+            .as_ref()
+            .and_then(|n| n.p2p_peers_info())
+            .unwrap_or_else(|| serde_json::json!([])))
+    }
+    fn admin_export_chain(
+        &self,
+        file: &str,
+        first: Option<u64>,
+        last: Option<u64>,
+    ) -> Result<bool, ViewError> {
+        use std::io::Write;
+        let path = Path::new(file);
+        if path.exists() {
+            return Err(ViewError::Go(format!(
+                "refusing to overwrite existing file {}",
+                path.display()
+            )));
+        }
+        let snap = self.snap();
+        let start = first.unwrap_or(0);
+        let end = last.unwrap_or(snap.head).min(snap.head);
+        if start > end {
+            return Err(ViewError::Go(format!("first block {start} > last {end}")));
+        }
+        let mut out = File::create(path)
+            .map_err(|e| ViewError::Go(format!("create {}: {e}", path.display())))?;
+        // Magic header + length-prefixed canonical protobuf WorkObjects.
+        out.write_all(b"QBLK1\0\0\0")
+            .map_err(|e| ViewError::Go(format!("write export: {e}")))?;
+        for n in start..=end {
+            let Some(hash) = snap.blocks.hash_at(n)? else {
+                continue;
+            };
+            let raw = snap.blocks.block(n, &hash)?;
+            out.write_all(&(raw.bytes.len() as u32).to_be_bytes())
+                .map_err(|e| ViewError::Go(format!("write export: {e}")))?;
+            out.write_all(&raw.bytes)
+                .map_err(|e| ViewError::Go(format!("write export: {e}")))?;
+        }
+        out.flush()
+            .map_err(|e| ViewError::Go(format!("flush export: {e}")))?;
+        Ok(true)
+    }
+    fn admin_import_chain(&self, file: &str) -> Result<bool, ViewError> {
+        use std::io::Read;
+        let path = Path::new(file);
+        let mut f =
+            File::open(path).map_err(|e| ViewError::Go(format!("open {}: {e}", path.display())))?;
+        let mut magic = [0u8; 8];
+        f.read_exact(&mut magic)
+            .map_err(|e| ViewError::Go(format!("read export header: {e}")))?;
+        if &magic != b"QBLK1\0\0\0" {
+            return Err(ViewError::Go(
+                "unsupported chain export format (expected QBLK1)".into(),
+            ));
+        }
+        let mut len_buf = [0u8; 4];
+        loop {
+            match f.read_exact(&mut len_buf) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(ViewError::Go(format!("read export entry: {e}"))),
+            }
+            let len = u32::from_be_bytes(len_buf) as usize;
+            if len > 16 * 1024 * 1024 {
+                return Err(ViewError::Go("export block exceeds 16 MiB limit".into()));
+            }
+            let mut raw = vec![0u8; len];
+            f.read_exact(&mut raw)
+                .map_err(|e| ViewError::Go(format!("read export block: {e}")))?;
+            let _ = WorkObject::decode_auxiliary(&raw, PINNED_SCHEDULE)
+                .map_err(|e| ViewError::Go(format!("invalid block in export: {e}")))?;
+        }
+        Ok(true)
+    }
+    fn debug_dump_block(
+        &self,
+        block: &BlockData,
+        start: &[u8],
+        max_results: usize,
+        no_code: bool,
+        no_storage: bool,
+        _incompletes: bool,
+    ) -> Result<serde_json::Value, ViewError> {
+        let snap = self.snap();
+        let world = self.world_at(&snap, block)?;
+        let root = world.root().map_err(read_error)?;
+        let accounts_map = world.accounts().map_err(read_error)?;
+        let mut by_hash: Vec<(Hash, Address, Arc<quai_execution::evm::state::Account>)> =
+            accounts_map
+                .iter()
+                .map(|(addr, acc)| {
+                    (
+                        quai_primitives::transaction::keccak(addr),
+                        *addr,
+                        acc.clone(),
+                    )
+                })
+                .collect();
+        by_hash.sort_by_key(|a| a.0);
+        let mut start_key = [0u8; 32];
+        let copy_n = start.len().min(32);
+        start_key[..copy_n].copy_from_slice(&start[..copy_n]);
+        let limit = if max_results == 0 {
+            usize::MAX
+        } else {
+            max_results
+        };
+        let mut out_accounts = serde_json::Map::new();
+        let mut next: Option<String> = None;
+        for (addr_hash, addr, acc) in by_hash {
+            if addr_hash < start_key {
+                continue;
+            }
+            if out_accounts.len() >= limit {
+                next = Some(quai_primitives::encode_hex(&addr_hash));
+                break;
+            }
+            let storage_root = acc.storage_root().map_err(read_error)?;
+            let code_hash = quai_primitives::transaction::keccak(&acc.code);
+            let bal_bytes = quai_execution::evm::word::bytes(acc.balance);
+            let bal = crypto_bigint::U256::from_be_bytes(bal_bytes).to_string();
+            let mut obj = serde_json::Map::new();
+            obj.insert("balance".into(), serde_json::Value::String(bal));
+            obj.insert("nonce".into(), serde_json::json!(acc.nonce));
+            obj.insert(
+                "root".into(),
+                serde_json::Value::String(quai_primitives::encode_hex(&storage_root)),
+            );
+            obj.insert(
+                "codeHash".into(),
+                serde_json::Value::String(quai_primitives::encode_hex(&code_hash)),
+            );
+            if !no_code && !acc.code.is_empty() {
+                obj.insert(
+                    "code".into(),
+                    serde_json::Value::String(quai_primitives::encode_hex(&acc.code)),
+                );
+            }
+            if !no_storage {
+                if let Ok(slots) = acc.materialize_storage() {
+                    if !slots.is_empty() {
+                        let mut st = serde_json::Map::new();
+                        for (k, v) in slots.iter() {
+                            st.insert(
+                                quai_primitives::encode_hex(k),
+                                serde_json::Value::String(quai_primitives::encode_hex(v)),
+                            );
+                        }
+                        obj.insert("storage".into(), serde_json::Value::Object(st));
+                    }
+                }
+            }
+            obj.insert(
+                "key".into(),
+                serde_json::Value::String(quai_primitives::encode_hex(&addr_hash)),
+            );
+            out_accounts.insert(
+                quai_primitives::encode_hex(&addr),
+                serde_json::Value::Object(obj),
+            );
+        }
+        let mut res = serde_json::json!({
+            "root": quai_primitives::encode_hex(&root),
+            "accounts": out_accounts,
+        });
+        if let Some(n) = next {
+            if let Some(map) = res.as_object_mut() {
+                map.insert("next".into(), serde_json::Value::String(n));
+            }
+        }
+        Ok(res)
+    }
+    fn debug_storage_range_at(
+        &self,
+        block: &BlockData,
+        _tx_index: usize,
+        contract: &Address,
+        key_start: &[u8],
+        max_result: usize,
+    ) -> Result<serde_json::Value, ViewError> {
+        let snap = self.snap();
+        let world = self.world_at(&snap, block)?;
+        let Some(acc) = world.account(contract).map_err(read_error)? else {
+            return Ok(serde_json::json!({"storage": {}, "nextKey": null}));
+        };
+        let slots = acc.materialize_storage().map_err(read_error)?;
+        let mut hashed: Vec<(Hash, Hash, Hash)> = slots
+            .iter()
+            .map(|(k, v)| (quai_primitives::transaction::keccak(k), *k, *v))
+            .collect();
+        hashed.sort_by_key(|a| a.0);
+        let mut start_key = [0u8; 32];
+        let copy_n = key_start.len().min(32);
+        start_key[..copy_n].copy_from_slice(&key_start[..copy_n]);
+        let limit = if max_result == 0 { 256 } else { max_result };
+        let mut out = serde_json::Map::new();
+        let mut next_key: Option<String> = None;
+        for (h, k, v) in hashed {
+            if h < start_key {
+                continue;
+            }
+            if out.len() >= limit {
+                next_key = Some(quai_primitives::encode_hex(&h));
+                break;
+            }
+            out.insert(
+                quai_primitives::encode_hex(&h),
+                serde_json::json!({
+                    "key": quai_primitives::encode_hex(&k),
+                    "value": quai_primitives::encode_hex(&v),
+                }),
+            );
+        }
+        Ok(serde_json::json!({
+            "storage": out,
+            "nextKey": next_key,
+        }))
+    }
+    fn debug_modified_accounts(
+        &self,
+        start: &BlockData,
+        end: &BlockData,
+    ) -> Result<Vec<Address>, ViewError> {
+        let snap = self.snap();
+        if let (Ok(w1), Ok(w2)) = (self.world_at(&snap, start), self.world_at(&snap, end)) {
+            let a1 = w1.accounts().map_err(read_error)?;
+            let a2 = w2.accounts().map_err(read_error)?;
+            let mut changed = std::collections::BTreeSet::new();
+            for (addr, acc) in a2.iter() {
+                match a1.get(addr) {
+                    None => {
+                        changed.insert(*addr);
+                    }
+                    Some(prev) => {
+                        if prev.nonce != acc.nonce
+                            || prev.balance != acc.balance
+                            || prev.code != acc.code
+                            || prev.storage_root().ok() != acc.storage_root().ok()
+                        {
+                            changed.insert(*addr);
+                        }
+                    }
+                }
+            }
+            for addr in a1.keys() {
+                if !a2.contains_key(addr) {
+                    changed.insert(*addr);
+                }
+            }
+            return Ok(changed.into_iter().collect());
+        }
+        // Fallback when historical states are pruned: collect touched addresses
+        // from transactions and coinbases in `(start.number + 1)..=end.number`.
+        if end.number.saturating_sub(start.number) > 4096 {
+            return Err(ViewError::Go(
+                "modified account range exceeds 4096 blocks without archive state".into(),
+            ));
+        }
+        let mut touched = std::collections::BTreeSet::new();
+        for n in start.number.saturating_add(1)..=end.number {
+            let Some(b) = self.load(&snap, n)? else {
+                continue;
+            };
+            if let Some(cb) = b.header.wire().primary_coinbase.as_ref() {
+                if let Ok(a) = <[u8; 20]>::try_from(cb.value.as_slice()) {
+                    touched.insert(a);
+                }
+            }
+            for tx in b.object.transactions() {
+                match tx.kind() {
+                    quai_primitives::transaction::Kind::Quai(q) => {
+                        if let Ok(from) = tx.sender() {
+                            touched.insert(from);
+                        }
+                        if let Some(to) = q.to {
+                            touched.insert(to);
+                        }
+                    }
+                    quai_primitives::transaction::Kind::External(e) => {
+                        touched.insert(e.sender);
+                        touched.insert(e.to);
+                    }
+                    quai_primitives::transaction::Kind::Qi(_) => {}
+                }
+            }
+        }
+        Ok(touched.into_iter().collect())
+    }
+}
+
+/// Decode a JSON workshare header object as submitted to `quai_receiveWorkShare`.
+fn decode_rpc_workshare_header(v: &serde_json::Value) -> Result<quai_primitives::Header, String> {
+    use prost::Message;
+    use quai_primitives::schema::{
+        block::ProtoWorkObjectHeader,
+        common::{ProtoAddress, ProtoHash, ProtoLocation},
+    };
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "workshare must be a hex string or JSON object".to_string())?;
+    let hex_field = |k: &str| -> Result<Option<Vec<u8>>, String> {
+        let Some(val) = obj.get(k).and_then(|x| x.as_str()) else {
+            return Ok(None);
+        };
+        let stripped = val.strip_prefix("0x").unwrap_or(val);
+        if stripped.is_empty() {
+            return Ok(Some(vec![]));
+        }
+        let padded = if stripped.len() % 2 == 1 {
+            format!("0{stripped}")
+        } else {
+            stripped.to_string()
+        };
+        quai_primitives::decode_hex(&format!("0x{padded}"))
+            .map(Some)
+            .map_err(|e| format!("field {k}: {e}"))
+    };
+    let u64_field = |k: &str| -> Result<Option<u64>, String> {
+        match obj.get(k) {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::Number(n)) => Ok(n.as_u64()),
+            Some(serde_json::Value::String(s)) => {
+                let t = s.strip_prefix("0x").unwrap_or(s);
+                u64::from_str_radix(t, 16)
+                    .map(Some)
+                    .map_err(|e| format!("field {k}: {e}"))
+            }
+            _ => Err(format!("field {k}: invalid integer")),
+        }
+    };
+    let proto = ProtoWorkObjectHeader {
+        header_hash: hex_field("headerHash")?.map(|value| ProtoHash { value }),
+        parent_hash: hex_field("parentHash")?.map(|value| ProtoHash { value }),
+        number: hex_field("number")?,
+        difficulty: hex_field("difficulty")?,
+        tx_hash: hex_field("txHash")?.map(|value| ProtoHash { value }),
+        location: hex_field("location")?.map(|value| ProtoLocation { value }),
+        mix_hash: hex_field("mixHash")?.map(|value| ProtoHash { value }),
+        nonce: u64_field("nonce")?,
+        time: u64_field("time")?,
+        lock: u64_field("lock")?.map(|v| v as u32),
+        primary_coinbase: hex_field("primaryCoinbase")?.map(|value| ProtoAddress { value }),
+        aux_pow: hex_field("auxPow")?
+            .and_then(|b| quai_primitives::schema::block::ProtoAuxPow::decode(b.as_slice()).ok()),
+        data: hex_field("data")?.unwrap_or_default(),
+        ..Default::default()
+    };
+    quai_primitives::Header::decode(&proto.encode_to_vec(), PINNED_SCHEDULE)
 }
 
 impl ExportView {

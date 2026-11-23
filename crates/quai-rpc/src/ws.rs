@@ -29,6 +29,8 @@ use tokio::sync::mpsc;
 const MESSAGE_LIMIT: usize = 32 * 1024 * 1024;
 /// go-quai's `wsPingInterval`.
 const PING_INTERVAL: Duration = Duration::from_secs(30);
+/// Maximum concurrent in-flight requests per WebSocket connection.
+const MAX_WS_CONCURRENT: usize = 32;
 
 /// One WebSocket connection, as the request handlers see it.
 pub(crate) struct Connection {
@@ -80,6 +82,7 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
         }
     });
     let conn = Arc::new(Connection { id, out: tx });
+    let inflight = Arc::new(tokio::sync::Semaphore::new(MAX_WS_CONCURRENT));
     while let Some(Ok(message)) = stream.next().await {
         let body = match message {
             Message::Text(t) => t.as_bytes().to_vec(),
@@ -87,21 +90,28 @@ async fn serve(app: Arc<App>, socket: WebSocket) {
             Message::Close(_) => break,
             Message::Ping(_) | Message::Pong(_) => continue,
         };
-        if serde_json::from_slice::<serde_json::Value>(&body).is_err() {
-            // go-quai answers a syntax error and closes the connection.
-            let _ = conn
-                .out
-                .send(
-                    "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}\n"
-                        .into(),
-                )
-                .await;
+        let value = match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                // go-quai answers a syntax error and closes the connection.
+                let _ = conn
+                    .out
+                    .send(
+                        "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}\n"
+                            .into(),
+                    )
+                    .await;
+                break;
+            }
+        };
+        let Ok(permit) = inflight.clone().acquire_owned().await else {
             break;
-        }
+        };
         let app = app.clone();
         let conn = conn.clone();
         tokio::spawn(async move {
-            let (reply, created) = app.handle_in(&body, Some(&*conn)).await;
+            let _permit = permit;
+            let (reply, created) = app.handle_value(value, Some(&*conn)).await;
             if let Some(reply) = reply {
                 let mut text = String::from_utf8_lossy(&reply).into_owned();
                 text.push('\n');
@@ -144,9 +154,13 @@ pub(crate) fn origin_allowed(allowed: &[String], origin: Option<&str>) -> bool {
             rules.push(format!("http://{host}"));
         }
     }
-    let browser = parse_origin(&origin.to_lowercase());
+    let Some(browser) = parse_origin(&origin.to_lowercase()) else {
+        return false;
+    };
     rules.iter().any(|rule| {
-        let allowed = parse_origin(&rule.to_lowercase());
+        let Some(allowed) = parse_origin(&rule.to_lowercase()) else {
+            return false;
+        };
         (allowed.0.is_empty() || allowed.0 == browser.0)
             && (allowed.1.is_empty() || allowed.1 == browser.1)
             && (allowed.2.is_empty() || allowed.2 == browser.2)
@@ -154,8 +168,10 @@ pub(crate) fn origin_allowed(allowed: &[String], origin: Option<&str>) -> bool {
 }
 
 /// `parseOriginURL`: scheme, host name and port of an origin rule or
-/// header ("host:port" without a scheme is a host and a port).
-fn parse_origin(origin: &str) -> (String, String, String) {
+/// header ("host:port" without a scheme is a host and a port). Rejects
+/// authorities carrying userinfo (`user@host`), which could otherwise spoof
+/// allowed hosts.
+fn parse_origin(origin: &str) -> Option<(String, String, String)> {
     let split_port = |authority: &str| -> (String, String) {
         if let Some(rest) = authority.strip_prefix('[') {
             if let Some((host, port)) = rest.split_once(']') {
@@ -169,14 +185,19 @@ fn parse_origin(origin: &str) -> (String, String, String) {
     };
     if let Some((scheme, rest)) = origin.split_once("://") {
         let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-        let authority = authority.rsplit('@').next().unwrap_or_default();
+        if authority.contains('@') {
+            return None;
+        }
         let (host, port) = split_port(authority);
-        return (scheme.to_string(), host, port);
+        return Some((scheme.to_string(), host, port));
     }
-    match origin.split_once(':') {
+    if origin.contains('@') {
+        return None;
+    }
+    Some(match origin.split_once(':') {
         Some((host, port)) => (String::new(), host.to_string(), port.to_string()),
         None => (String::new(), origin.to_string(), String::new()),
-    }
+    })
 }
 
 /// `os.Hostname()`, read once from the `hostname` program.

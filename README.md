@@ -1,134 +1,241 @@
 # quai-rust
 
-A native Rust Quai client project. The default build and distribution use Rust
-binaries with no Go toolchain, Go checkout, Go node, or upstream gateway.
-Go remains an explicit offline compatibility oracle in a separate test profile.
-The pinned reference is go-quai **v0.57.0**
-(`33db82f2891b267ba898ca38bd2dd8bf75cbb072`).
+A native Rust full-node client for the [Quai Network](https://qu.ai/), written for consensus, networking, JSON-RPC, mining, and Stratum compatibility with `go-quai` **v0.57.0+** (`33db82f2891b267ba898ca38bd2dd8bf75cbb072`, including the `a60f36fb1` Quai-time AuxPoW liveness rules and `state_repair` fork).
 
-The shipping RPC executable serves a frozen imported read-only view. It is not
-a validating or synchronizing node.
+The default build and runtime have **zero Go toolchain or Go runtime dependency**, **zero `unsafe` code**, and **zero `.unwrap()` calls in non-test production source**. Go is used only as an optional offline compatibility oracle for differential vector generation and benchmarks.
 
-## Status and plan
+---
 
-[ROADMAP.md](ROADMAP.md) is the single plan and status file. Other files:
+## Highlights
 
-- [NETWORK_READINESS.md](NETWORK_READINESS.md): gate definitions.
-- [PORTING_MAP.md](PORTING_MAP.md): Go-to-Rust coverage map, generated.
-- [PERFORMANCE_LEDGER.md](PERFORMANCE_LEDGER.md): measured gains and regressions.
-- [AGENTS.md](AGENTS.md): working rules.
-- [docs/history/](docs/history/): per-step reports from earlier work, kept for
-  reference only.
+- **Consensus & Execution Parity**: Full PoEM fork choice, ProgPoW / KAWPOW, SHA-256d and Scrypt AuxPoW with MuSig2 2-of-3 quorum verification & signing, EVM execution, Qi UTXO ledger, ETX hierarchy rollups, and prime controllers. Verified on mainnet (`colosseum`) replay through **zone 7,580,880+** with matching state, ETX, UTXO, and receipt roots.
+- **Performance**: On Genesis mainnet replay benchmarks with full proof-of-work verification (`scripts/benchmark_replay.py`), `quai-rust` runs **~7.8x lower CPU** (`26.7 s` vs `207 s` per 1,000 blocks), **~3x lower peak RSS** (`131–173 MiB` vs `419 MiB`), and **~3x fewer bytes written** than `go-quai`.
+- **Networks & Multi-Slice Support**: Supports `colosseum` (mainnet), `garden`, `orchard`, `lighthouse`, and `local` environments, with `--slice <R-Z>` multi-slice selection and `ExpandedNodeSet` hierarchy tracking.
+- **Public libp2p Networking**: Kademlia DHT (`/quai/kad/1.0.0`), GossipSub with conservative peer/topic scoring and protocol validators, AutoNAT, DCUtR hole punching, relay client + optional circuit relay server (`--p2p-relay-service`), full `handleRequest` peer serving across prime/region/zone views, and optional block/workshare publishing (`--p2p-publish`).
+- **Storage Modes**:
+  - Default pruned state with crash-safe atomic checkpoints and batched `redb` compaction.
+  - `--archive`: per-height state version persistence for historical RPC queries.
+  - `--index-address-utxos`: workshare, donor, supply analytics, and locked-Quai indexes.
+  - `--prune-blocks <N>`: bounded block history retention.
+- **100% `go-quai` JSON-RPC Parity**: Serves all **175 / 175** `go-quai` zone RPC methods and WebSocket subscriptions (plus 21 standard wallet/admin/utility methods) across HTTP, WebSocket, and Unix Domain Socket IPC (`--ipc-path`, mode `0600`), with per-transport namespace allowlists, CORS, and `Host` vhost enforcement. See [docs/rpc-parity.md](docs/rpc-parity.md).
+- **Transaction Pool**: Full Quai + Qi transaction pool matching `go-quai` (363/363 differential oracle steps), local transaction journaling, and `http://` + `ws://` txpool sharing clients.
+- **Built-In Mining & Stratum v1 Pool Server**:
+  - Pending header builder, AuxPoW template & coinbase assembly, `getBlockTemplate` / `submitBlock` (SHA-256d, Scrypt, KAWPOW), workshare pool, and live `pendingHeader` / `blockTemplateUpdates` / `newWorkshares` WebSocket streams.
+  - Native async Stratum v1 server (`--stratum`) supporting SHA-256d (with BIP 310 ASICBoost version rolling), Scrypt, and KAWPOW, VarDiff, worker password directives (`d=`, `frequency=`, `skip=`, `lock=`, `parentupdate=`), PROXY protocol v1/v2, duplicate share detection, and an HTTP + WebSocket pool dashboard API.
 
-## Crate layout
+---
 
-| Crate | Role |
+## Crate Architecture
+
+| Crate | Responsibility |
 |---|---|
-| `quai-primitives` | Work headers, transactions, Protobuf/RLP codecs, commitments, signatures |
-| `quai-execution` | Intrinsic gas, Qi input checks, ETX queue roots, EVM frames and settlement |
-| `quai-consensus` | ProgPoW/KAWPOW, auxiliary proofs, difficulty and PoEM rules |
-| `quai-network` | Application framing, topics, optional private libp2p transport and a read-only public mode (`examples/mainnet-probe.rs`) |
-| `quai-store` | Versioned materialized reads and the imported frozen view |
-| `quai-rpc` | Frozen-view JSON-RPC service and profiling example |
-| `quai-node` | Node binary; `quai-node replay` checks and executes mainnet blocks from a QEX1 export (see `ROADMAP.md`) |
+| `quai-primitives` | Chain specs (`colosseum`, `garden`, `orchard`, `lighthouse`, `local`), fork schedule, work headers, transactions, Protobuf/RLP codecs, MPT commitments, secp256k1/Schnorr/MuSig2 cryptography |
+| `quai-execution` | Intrinsic gas, EVM interpreter & precompiles, Qi UTXO validation & settlement, ETX queue roots, lockup precompile |
+| `quai-consensus` | ProgPoW & KAWPOW verification (light batched & optional full DAG), SHA-256d/Scrypt AuxPoW, difficulty/share controllers, PoEM ordering, prime controllers |
+| `quai-network` | Wire framing, GossipSub topics & peer/topic scoring, Kademlia DHT, AutoNAT/DCUtR/relay libp2p host, peer request serving |
+| `quai-store` | Versioned `redb` state store, batched compaction, journal, log index |
+| `quai-rpc` | Native JSON-RPC server over HTTP, WebSocket, and Unix IPC (`quai_*`, `eth_*`, `txpool_*`, `net_*`, `web3_*`, `miner_*`, `admin_*`, `debug_*`), filters, subscriptions, CORS/vhost/namespace controls |
+| `quai-node` | Full node binary (`run`, `replay`, `rpc`, `observe`), block store, fork choice, txpool, mining worker, Stratum v1 server & dashboard, Prometheus metrics |
 
-See [the protocol notice](crates/quai-primitives/NOTICE.md) for attribution.
+---
 
-## Build and test
+## Quick Start
+
+### Build
+
+Requires Rust (stable toolchain; edition 2021).
 
 ```sh
 cargo build --release --locked --workspace
-cargo test --locked --workspace
 ```
 
-Python helpers build the distribution and run the per-area checks:
+The main node binary is `target/release/quai-node`.
+
+### Run a Syncing Node (Mainnet / Testnet)
 
 ```sh
-python3 scripts/build.py
-python3 scripts/verify_rust.py
-python3 scripts/verify_vm.py
-python3 scripts/verify_stateful.py
-python3 scripts/verify_zone_execution.py
-python3 scripts/verify_private_branches.py
-python3 scripts/verify_admission.py
-python3 scripts/verify_confirmation.py
-python3 scripts/verify_uncles.py
-python3 scripts/verify_weakshares.py
-python3 scripts/verify_canonical.py --peer
-python3 scripts/verify_private_processes.py
-python3 scripts/build_private_node.py
-python3 scripts/verify_consensus.py
-python3 scripts/verify_auxiliary.py
-./bin/quai-protocol-check fixtures/protocol/work-headers.json
-./bin/quai-protocol-check fixtures/protocol/transactions.json
-./bin/quai-protocol-check fixtures/protocol/foundation.json
+# Sync Colosseum mainnet slice 0-0 with RPC (127.0.0.1:8547) and metrics (127.0.0.1:9101)
+./target/release/quai-node run --datadir ~/.quai-node --network colosseum --slice 0-0
+
+# Sync Orchard testnet with archive state and address/supply indexes
+./target/release/quai-node run \
+  --datadir ~/.quai-orchard \
+  --network orchard \
+  --archive \
+  --index-address-utxos \
+  --ipc-path ~/.quai-orchard/quai.ipc
 ```
 
-## Distribution and frozen RPC service
+Supported `--network` values: `colosseum` (default), `garden`, `orchard`, `lighthouse`, `local`.
 
-`dist/standalone/` contains the two Rust executables, capability metadata,
-checksums and protocol attribution/license files. Previous mixed-profile
-binaries are moved to `reference-artifacts/` when the build helper is first run;
-they are excluded from the standalone distribution.
-
-Run the frozen-view service with an explicit imported file:
+### Run with Mining & Stratum v1 Server
 
 ```sh
-./dist/standalone/quai-rpc --snapshot fixtures/native/scenario-a.json
+./target/release/quai-node run \
+  --datadir ~/.quai-node \
+  --network colosseum \
+  --p2p-publish \
+  --mine \
+  --coinbase 0x0000000000000000000000000000000000000001 \
+  --miner-extra "quai-rust" \
+  --stratum \
+  --stratum-sha-addr 0.0.0.0:3333 \
+  --stratum-scrypt-addr 0.0.0.0:3334 \
+  --stratum-kawpow-addr 0.0.0.0:3335 \
+  --stratum-api-addr 0.0.0.0:3336
 ```
 
-This view is local and fixed. `/health` reports `standalone-rust`, zero Go runtime
-dependency, and `chain_verified: false`. Unsupported state/simulation requests
-return an availability error. Gateway/follower/native-probe flags are rejected
-by the shipping binary. The product does not silently fall back to Go.
+Default Stratum ports when `--stratum` is enabled:
+- **SHA-256d (BIP 310 ASICBoost)**: `0.0.0.0:3333`
+- **Scrypt**: `0.0.0.0:3334`
+- **KAWPOW**: `0.0.0.0:3335`
+- **Pool Dashboard HTTP / WebSocket API**: `0.0.0.0:3336` (`/health`, `/api/stats`, `/api/miners`, `/api/blocks`, `/api/payments`, `/api/pool/{stats,blocks,shares,workers}`, `/api/miner/{address}/{stats,workers}`, `/api/node/info`, `WS /api/ws`)
 
-## SDK acceptance
+Set any `--stratum-*-addr off` to disable an individual listener.
 
-Install the locked test dependencies and opt into the client test. Node/npm are
-test tools, not runtime dependencies:
+### RPC Transport Security & IPC
+
+By default, HTTP and WebSocket expose only safe public namespaces (`quai`, `eth`, `net`, `web3`, `txpool` on HTTP; plus `miner` read/sub on WS), while Unix IPC (`--ipc-path`) exposes all namespaces (`admin`, `debug`, `miner`, etc.) on a `0600`-permissioned socket.
+
+```sh
+./target/release/quai-node rpc \
+  --datadir ~/.quai-node \
+  --listen 127.0.0.1:8547 \
+  --ipc-path ~/.quai-node/quai.ipc \
+  --rpc-http-api quai,eth,net,web3,txpool \
+  --rpc-cors-domain http://localhost:3000 \
+  --rpc-vhosts localhost,127.0.0.1
+```
+
+### Replay a QEX1 Export
+
+```sh
+./target/release/quai-node replay \
+  --datadir ~/.quai-node \
+  --export /path/to/qex1-export \
+  --state \
+  --store \
+  --pow-dag light
+```
+
+Use `--pow-dag auto` or `--pow-dag full` to build the in-memory PoW dataset when sufficient RAM is available.
+
+### Configuration File (`--config`)
+
+All `run` options can be supplied via a TOML configuration file (CLI flags override file values):
+
+```toml
+datadir = "/var/lib/quai-node"
+network = "colosseum"
+slice = "0-0"
+log_level = "info"
+
+[rpc]
+listen = "127.0.0.1:8547"
+ipc_path = "/var/lib/quai-node/quai.ipc"
+http_api = ["quai", "eth", "net", "web3", "txpool"]
+ws_api = ["quai", "eth", "net", "web3", "txpool", "miner"]
+cors_domain = ["http://localhost:3000"]
+vhosts = ["localhost", "127.0.0.1"]
+
+[metrics]
+listen = "127.0.0.1:9101"
+
+[sync]
+stateless = false
+jobs = 4
+margin = 64
+max_peers = 8
+public = true
+archive = false
+index_address_utxos = false
+checkpoint_every = 10000
+commit_every = 1000
+
+[p2p]
+relay_service = false
+publish = false
+
+[txpool]
+enabled = true
+sharing_clients = ["http://127.0.0.1:9201"]
+sync_tx_with_return = true
+
+[miner]
+enabled = false
+coinbase = "0x0000000000000000000000000000000000000001"
+extra = "quai-rust"
+lockup_byte = 0
+preference = "0.5"
+
+[stratum]
+enabled = false
+sha_addr = "0.0.0.0:3333"
+scrypt_addr = "0.0.0.0:3334"
+kawpow_addr = "0.0.0.0:3335"
+api_addr = "0.0.0.0:3336"
+name = "quai-rust Stratum"
+pool_tag = "quai-rust"
+no_vardiff = false
+proxy_protocol = false
+```
+
+Run `./target/release/quai-node help` for the complete CLI reference.
+
+---
+
+## Testing & Verification
+
+```sh
+# Full workspace test suite
+cargo test --release --locked --workspace
+
+# Public/private libp2p transport tests
+cargo test --locked -p quai-network --features native-transport
+
+# End-to-end mining, Stratum v1, dashboard, IPC, and RPC security test
+cargo test --locked -p quai-node --test stratum_mining
+
+# Verify 175/175 go-quai RPC parity table consistency
+python3 scripts/render_rpc_parity.py --check
+
+# Verify 0 .unwrap() and 0 unsafe in production source
+python3 scripts/count_panics.py crates/*/src
+! grep -rn "unsafe" crates/*/src/
+```
+
+### Quais.js SDK Acceptance
+
+Node/npm are used only as offline test tools against recorded vectors and local `quai-node` instances:
 
 ```sh
 npm ci --prefix sdk --ignore-scripts --no-audit --no-fund
 python3 scripts/verify_rust.py --sdk
 ```
 
-The expected SDK values are previously recorded direct-Go outputs. No Go server
-is started by these standalone tests.
+### Offline Go Reference Oracle (Optional)
 
-## Profiling
-
-Build the Rust-only development profiler and compare preserved binaries:
-
-    cargo build --release --locked -p quai-rpc --example profile-rpc
-    python3 scripts/profile_rpc.py --baseline /path/to/baseline/profile-rpc --candidate /path/to/candidate/profile-rpc
-
-Every response is validated. This measures the handler without HTTP or
-external client work. Allocation sampling runs separately and measures gross
-requested bytes, not live memory. The example is excluded from distribution.
-
-## Isolated reference lab
-
-The Go-backed prototypes remain development tools behind the explicit
-`quai-rpc/reference-gateway` Cargo feature. Build them into a separate source
-copy; this does not overwrite the standalone binaries:
+Differential vector generation and replay benchmarks against a local `go-quai` checkout are strictly opt-in developer tooling and never invoked by default Cargo builds:
 
 ```sh
-python3 scripts/build_reference.py --go-quai ../go-quai
-cd reference-build
-python3 scripts/verify_chain.py
-python3 scripts/verify_next.py
+python3 scripts/gen_protocol_vectors.py --go-quai ../go-quai --check
+python3 scripts/benchmark_replay.py --help
 ```
 
-Regenerating protocol vectors is also an explicit oracle task, never a build
-step: `python3 scripts/gen_protocol_vectors.py --go-quai ../go-quai`.
+---
 
-Offline development helpers are explicit and excluded from the shipping bundle:
+## Documentation
 
-    python3 scripts/verify_foundation.py
-    python3 scripts/verify_foundation.py --interop --go-quai ../go-quai
+- [ROADMAP.md](ROADMAP.md) — development status, mainnet replay milestones, and execution log
+- [docs/rpc-parity.md](docs/rpc-parity.md) — complete 175-method `go-quai` JSON-RPC compatibility matrix
+- [NETWORK_READINESS.md](NETWORK_READINESS.md) — release gate definitions
+- [PERFORMANCE_LEDGER.md](PERFORMANCE_LEDGER.md) — measured performance benchmarks
+- [PORTING_MAP.md](PORTING_MAP.md) — Go-to-Rust module coverage map
+- [docs/mainnet-export-format.md](docs/mainnet-export-format.md) — QEX1 export format specification
 
-The second command starts only IPv4-loopback application-wire peers. It does
-not connect to a public network or perform libp2p negotiation. Schema/vector
-regeneration is also explicit: `scripts/gen_schema.py` and
-`scripts/gen_foundation_vectors.py`, each with `--go-quai ../go-quai --check`
-or `--write`. Default Cargo builds invoke neither Go nor protoc.
+---
+
+## License & Attribution
+
+`quai-rust` is licensed under **GPL-3.0-only** — see [LICENSE](LICENSE).
+Upstream protocol and cryptographic attributions are preserved in [crates/quai-primitives/NOTICE.md](crates/quai-primitives/NOTICE.md) and [THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

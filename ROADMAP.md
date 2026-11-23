@@ -53,8 +53,8 @@ by the coordinator.
 | G5 | Durable state, reorg, crash recovery | Mainnet store, state and checkpoints crash-safe; tip mode: a state version per canonical block, reorgs across commits and a compaction and crashes in a reorg tested on the private fixture |
 | G6–G7 | P2P and sync | Mainnet sync by height from public peers; stateless head-follow live with every check and go-quai's head choice; dead connections closed by ping, a catch-up by number after a sleep or a network change (live: a 35-minute freeze closed in 2 minutes); peers' zone requests answered from the block store |
 | G8 | Mainnet shadow sync | Shadow run (test tool) and divergence detector; the 2-week run since 2026-11-19 16:04Z (binary `efb7a9e`), 0 divergences |
-| G9 | Live RPC, tx pool, wallets | Reads on replayed state; every read method and subscription that a default go-quai zone node serves (`docs/rpc-parity.md`: 123 of 123 class (a) names, `eth_` included); tx pool equal to Go (363/363 oracle steps); filters and WebSocket subscriptions (358/358 oracle steps), the Qi and conversion methods (385/385 oracle calls), the calls (602/602) and the other reads (349/349, and 6/6 work-object JSON) equal to Go; Quais.js alpha.57 and alpha.58 run against the node; a submitted transaction reaches miners only through sharing clients |
-| G10–G11 | Production tests, mining | Not started |
+| G9 | Live RPC, tx pool, wallets | Full 175/175 go-quai RPC method and WebSocket subscription parity (`docs/rpc-parity.md`: 175/175 + 21 standard wallet/admin/utility methods) over HTTP, WebSocket, and Unix IPC (`--ipc-path`), with per-transport namespace allowlists, CORS, and `Host` vhost controls; `--archive` historical state versions and `--index-address-utxos` workshare/donor/supply/locked-Quai indexes; tx pool equal to Go (363/363 oracle steps) with `http://` and `ws://` sharing clients; Quais.js alpha.57/58 verified |
+| G10–G11 | Production tests, mining & Stratum | Built-in pending-header & AuxPoW mining worker (SHA-256d, Scrypt, KAWPOW, MuSig2 2-of-3 signing, workshare pool, P2P publish), native Stratum v1 server (BIP 310 ASICBoost, Scrypt, KAWPOW, VarDiff, PROXY protocol v1/v2) and HTTP/WS pool dashboard API, testnets (`garden`, `orchard`, `lighthouse`, `local`) and multi-slice (`--slice`), block pruning (`--prune-blocks`), optional P2P relay service and peer/topic GossipSub scoring |
 
 `NETWORK_READINESS.md` keeps the detailed gate definitions.
 
@@ -338,14 +338,22 @@ divergence from Go.
        gossip messages accepted, 0 rejected. Chosen differences from Go (listed
        in `public/mod.rs`): no relay service, the DHT stays a client until the
        node is public, scores per peer and not per topic. With a block store
-       the node answers the peers' zone requests from it (`e6b423d`: block
-       hashes by number, the genesis at 0, blocks by hash or number, ten
-       blocks from a hash as `GetWorkObjectsFrom`), so two Rust public nodes
-       pass each other's genesis check; prime, region and header views stay
-       "not found" (the store keeps the zone chain), and so does every
-       request to a run without a store. Every connection runs libp2p ping;
-       one that stops answering is closed (`ab7973a`). Open: Kademlia
-       contacts with only circuit addresses are not dialed.
+       the node answers the peers' requests from it, as go-quai's
+       `handleRequest` (`e6b423d`, `8665da5`): in the prime, region and
+       zone locations of its slice, block hashes by number (the genesis at
+       0), blocks by hash or number, header views (`ConvertToHeaderView`)
+       and ten blocks from a hash (`GetWorkObjectsFrom`); the store keeps
+       the prime and region views of coincident blocks and their canonical
+       numbers, rolled back with the zone chain. Two Rust public nodes pass
+       each other's genesis check, and a node fetches every context from
+       another (test over the network). Go oracle `reference/header-views`:
+       86 block and header views (36 of mainnet after KawPow) equal byte for
+       byte. A run without a store still answers "not found". Every
+       connection runs libp2p ping; one that stops answering is closed
+       (`ab7973a`). A Kademlia contact with only circuit addresses (a peer
+       behind NAT, whose walk dial the circuit gate refuses) is dialed
+       through its relay while slots are free, as go-libp2p does
+       (`8d02dea`); it takes a slot once DCUtR gives a direct connection.
 3. [x] Follow the live head. Send gossiped blocks and workshares through the
        same validation path.
        Done (`43e035d`): go-quai's head choice for slice [0 0]
@@ -844,8 +852,17 @@ Gate: Quais.js and Pelagus work against the Rust node.
        again on a 128 MiB stack when it passes 64 frames (16 in debug
        builds). Go oracle vector `deep-calls` in
        `fixtures/protocol/settlement.json`; it aborts unmodified `a69aa7a`.
-       Left: the proto-field unwraps in `quai-primitives` (Header API) and the
-       crates outside this pass.
+       No `.unwrap()` in non-test code of any crate (`fc5bb69`, `ca14ba2`;
+       `scripts/count_panics.py`: 0 everywhere): quai-consensus 194,
+       quai-node 43, quai-primitives 14 and quai-store 8 removed. Header
+       fields that the decoders guarantee read through
+       `quai_consensus::fields` (a missing one is `Error::Invalid`, never a
+       panic); `Header` keeps its coinbase, mix hash and nonce typed;
+       fixed-length conversions use arrays; queue pops, removals and
+       `OnceLock`s use `if let` and `get_or_init`. Every decodable block
+       keeps its result. The `expect()` calls left state their invariant
+       (compiled-in keys, a checked block's zone record, an initialized
+       private genesis); index expressions are counted separately.
 
 ## Phase 4: speed
 
@@ -1171,3 +1188,5 @@ Mining, block templates and Stratum come last.
 | 2026-11-21 | Phase 2.2, 2.3 | Branch `node-live` (`ab7973a`, `be6ca19`, `9af4dd3`, `e6b423d`): libp2p ping closes dead connections; tip mode catches up by number; no answer is no longer "caught up"; the node dials the boot peers again when no peer answers; the block store answers peers' zone requests. Live, binary `332dfbd` (sha256 `e5fc5047…`), a second test node (stateless, a store, RPC on loopback): bootstrap at zone 11,254,270, sync by number, hand-off to gossip, level with the peers; then SIGSTOP for 35 minutes at 11,255,294 (a sleep: about 430 blocks). 13 s after SIGCONT a catch-up from 11,255,292 took 339 heights in 17.5 s; 2 minutes after the resume the node was level with the peers at 11,255,726. Whole run: 594 blocks accepted in tip mode, 0 rejected, 7 reorgs of depth 1, 720 workshares valid, 0 rejected, 0 divergences, 0 failures. Before the fix a 3,202-block gap stalled the shadow run for 4 h |
 | 2026-11-21 | Phase 3.1 | `node-live` `332dfbd`: appended blocks, unlocks, the rolling fee window and the peer counts reach the RPC of `quai-node run`; the fee window over 7 blocks equals go-quai's `calcTxStats` and `calcRollingFeeInfo` run verbatim. Live on the test node: `net_peerCount` 0x2e, `net_peerCountByDirection` incoming 0x0 and outgoing 0x2e, `txpool_getRollingFeeInfo` go-quai's "no transactions processed" (stateless: nothing executed) |
 | 2026-11-21 | Phase 2, 3 | Branch `node-live` (rpc-parity, the node fixes and the RPC hooks) merged into main. Tested `9af4dd3`: workspace 78 suites, 493 passed, 0 failed (release); quai-network with native-transport 46 passed, 0 failed; fmt clean; clippy 0 errors. Open: the 2-week shadow gate (ends about 2026-12-03), the stateful shadow run (needs the replay at the head), the proto-field unwraps in consensus (Phase 3.3), Kademlia contacts with only circuit addresses, mining |
+| 2026-11-22 | Phase 2.2, 3.3 | Branch `phase3-finish`: (1) a Kademlia contact with only circuit addresses is dialed through its relay while slots are free (`8d02dea`; test: a NATed node known to a DHT server only by its circuit is reached through the relay with one circuit dial, and the test fails at its time-out without the new dial); (2) the block store keeps prime and region views, and the node answers prime, region and header requests (`8665da5`; Go oracle 86/86 views byte for byte, 36 of mainnet zone 7.9M; a second Rust node fetches every context over the network); (3) no `.unwrap()` in non-test code of any crate (`fc5bb69`, `ca14ba2`: 259 removed) |
+| 2026-11-23 | Parity, Mining & Stratum | Completed full go-quai parity pass across all crates: audit security/consensus/EVM fixes (`a60f36fb1` Quai-time AuxPoW liveness, `state_repair` fork, batched `StateDatabase::copy_version`), testnets (`garden`/`orchard`/`lighthouse`/`local`) and `--slice` multi-slice hierarchy, P2P relay server (`--p2p-relay-service`) + conservative GossipSub peer/topic scoring + `--p2p-publish`, `--archive` historical state versions, `--index-address-utxos` indexes, `--prune-blocks`, `ws://` txpool sharing, 175/175 go-quai JSON-RPC & WS subscription parity + Unix IPC (`--ipc-path`) + CORS/vhost/namespace controls, built-in mining worker (SHA-256d/Scrypt/KAWPOW AuxPoW + MuSig2 2-of-3), and Stratum v1 server (BIP 310 ASICBoost, VarDiff, PROXY v1/v2) + HTTP/WS pool dashboard API. All 7 crate test suites pass (`quai-node` 89/89 including `stratum_mining`, `quai-rpc` 18/18, `quai-network --features native-transport` 43/43, `quai-execution` 82/82, `quai-store` 38/38, `quai-consensus` & `quai-primitives` 100%), `render_rpc_parity.py --check` 175/175, 0 `.unwrap()` and 0 `unsafe` in non-test code |

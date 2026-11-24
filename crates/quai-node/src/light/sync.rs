@@ -224,67 +224,73 @@ pub async fn run_header_sync(
                 let Ok(ev) = ev else {
                     break;
                 };
-                if let Event::Gossip { topic, data, .. } = ev {
-                    if blocks_topic.as_deref() == Some(topic.as_str()) {
-                        metrics.gossip_blocks.fetch_add(1, Ordering::Relaxed);
-                        let raw = ProtoWorkObjectBlockView::decode(data.as_slice())
-                            .ok()
-                            .and_then(|v| v.work_object)
-                            .map(|wo| wo.encode_to_vec())
-                            .or_else(|| {
-                                ProtoWorkObjectHeaderView::decode(data.as_slice())
-                                    .ok()
-                                    .and_then(|v| v.work_object)
-                                    .map(|wo| wo.encode_to_vec())
-                            });
-                        if let Some(wo_bytes) = raw {
-                            // If parent is missing, walk back a few headers by hash so PoEM links cleanly.
-                            if let Ok((b, rec)) = store.decode_block_data(&wo_bytes, 2) {
-                                peer_head.fetch_max(b.number, Ordering::Relaxed);
-                                if let Ok(parent_h) = rec.parent(2) {
-                                    if store.block_by_hash(&parent_h).is_none() && b.number > 0 {
-                                        if let Some(p_raw) = fetch_header_by_hash(&node, location, parent_h).await {
-                                            let _ = validate_and_insert_header(&store, &caches, &p_raw);
+                match ev {
+                    Event::Connected { peer, .. } => {
+                        log.info(&format!("light p2p: connected peer {peer}"));
+                    }
+                    Event::Gossip { topic, data, .. } => {
+                        if blocks_topic.as_deref() == Some(topic.as_str()) {
+                            metrics.gossip_blocks.fetch_add(1, Ordering::Relaxed);
+                            let raw = ProtoWorkObjectBlockView::decode(data.as_slice())
+                                .ok()
+                                .and_then(|v| v.work_object)
+                                .map(|wo| wo.encode_to_vec())
+                                .or_else(|| {
+                                    ProtoWorkObjectHeaderView::decode(data.as_slice())
+                                        .ok()
+                                        .and_then(|v| v.work_object)
+                                        .map(|wo| wo.encode_to_vec())
+                                });
+                            if let Some(wo_bytes) = raw {
+                                // If parent is missing, walk back a few headers by hash so PoEM links cleanly.
+                                if let Ok((b, rec)) = store.decode_block_data(&wo_bytes, 2) {
+                                    peer_head.fetch_max(b.number, Ordering::Relaxed);
+                                    if let Ok(parent_h) = rec.parent(2) {
+                                        if store.block_by_hash(&parent_h).is_none() && b.number > 0 {
+                                            if let Some(p_raw) = fetch_header_by_hash(&node, location, parent_h).await {
+                                                let _ = validate_and_insert_header(&store, &caches, &p_raw);
+                                            }
+                                        }
+                                    }
+                                }
+                                match validate_and_insert_header(&store, &caches, &wo_bytes) {
+                                    Ok(is_head) => {
+                                        metrics.blocks.fetch_add(1, Ordering::Relaxed);
+                                        metrics.head.store(store.head().0, Ordering::Relaxed);
+                                        metrics.sample_now();
+                                        if is_head {
+                                            if let Some(m) = &miner {
+                                                m.notify_new_head();
+                                            }
+                                        }
+                                    }
+                                    Err(e) => log.debug(&format!("light gossip block ignored: {e}")),
+                                }
+                            }
+                        } else if ws_topic.as_deref() == Some(topic.as_str()) {
+                            metrics.gossip_workshares.fetch_add(1, Ordering::Relaxed);
+                            metrics.workshares_valid.fetch_add(1, Ordering::Relaxed);
+                            if let Some(m) = &miner {
+                                if let Ok(view) = ProtoWorkObjectShareView::decode(data.as_slice()) {
+                                    if let Some(wo) = view.work_object {
+                                        if let Some(hdr) = wo.wo_header {
+                                            if let Ok(h) = quai_primitives::Header::decode_auxiliary(
+                                                &hdr.encode_to_vec(),
+                                                PINNED_SCHEDULE,
+                                            ) {
+                                                let _ = m.receive_workshare_header(h);
+                                            }
                                         }
                                     }
                                 }
                             }
-                            match validate_and_insert_header(&store, &caches, &wo_bytes) {
-                                Ok(is_head) => {
-                                    metrics.blocks.fetch_add(1, Ordering::Relaxed);
-                                    metrics.head.store(store.head().0, Ordering::Relaxed);
-                                    metrics.sample_now();
-                                    if is_head {
-                                        if let Some(m) = &miner {
-                                            m.notify_new_head();
-                                        }
-                                    }
-                                }
-                                Err(e) => log.debug(&format!("light gossip block ignored: {e}")),
+                        } else if aux_topic.as_deref() == Some(topic.as_str()) {
+                            if let Some(m) = &miner {
+                                let _ = m.submit_aux_template(&data);
                             }
-                        }
-                    } else if ws_topic.as_deref() == Some(topic.as_str()) {
-                        metrics.gossip_workshares.fetch_add(1, Ordering::Relaxed);
-                        metrics.workshares_valid.fetch_add(1, Ordering::Relaxed);
-                        if let Some(m) = &miner {
-                            if let Ok(view) = ProtoWorkObjectShareView::decode(data.as_slice()) {
-                                if let Some(wo) = view.work_object {
-                                    if let Some(hdr) = wo.wo_header {
-                                        if let Ok(h) = quai_primitives::Header::decode_auxiliary(
-                                            &hdr.encode_to_vec(),
-                                            PINNED_SCHEDULE,
-                                        ) {
-                                            let _ = m.receive_workshare_header(h);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if aux_topic.as_deref() == Some(topic.as_str()) {
-                        if let Some(m) = &miner {
-                            let _ = m.submit_aux_template(&data);
                         }
                     }
+                    _ => {}
                 }
             }
         }

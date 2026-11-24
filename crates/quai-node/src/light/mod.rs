@@ -119,6 +119,61 @@ pub fn run_light(o: &LightOptions, log: &Log) -> Result<i32, String> {
             let _ = n.dial(a).await;
         });
     }
+    if o.public {
+        let boot_addrs: Vec<Multiaddr> =
+            quai_network::public::bootnodes_for(&chain.spec().environment)
+                .iter()
+                .filter_map(|s| s.parse::<Multiaddr>().ok())
+                .collect();
+        let n = node.clone();
+        let boot_stop = stop.clone();
+        let boot_log = *log;
+        runtime.spawn(async move {
+            boot_log.info(&format!(
+                "light p2p: dialing {} bootnode(s) for peer discovery",
+                boot_addrs.len()
+            ));
+            let mut handles = Vec::with_capacity(boot_addrs.len());
+            for addr in boot_addrs {
+                let n = n.clone();
+                handles.push(tokio::spawn(async move {
+                    if n.dial(addr.clone()).await.is_ok() {
+                        let peer = addr.iter().find_map(|p| match p {
+                            libp2p::multiaddr::Protocol::P2p(id) => Some(id),
+                            _ => None,
+                        });
+                        if let Some(peer) = peer {
+                            for _ in 0..30 {
+                                if n.is_connected(&peer) {
+                                    let bare: Multiaddr = addr
+                                        .iter()
+                                        .filter(|p| {
+                                            !matches!(p, libp2p::multiaddr::Protocol::P2p(_))
+                                        })
+                                        .collect();
+                                    let _ = n.kad_add(peer, bare).await;
+                                    break;
+                                }
+                                tokio::time::sleep(Duration::from_millis(250)).await;
+                            }
+                        }
+                    }
+                }));
+            }
+            for h in handles {
+                let _ = h.await;
+            }
+            let _ = n.closest_peers(n.id.to_bytes()).await;
+            let mut tick = tokio::time::interval(Duration::from_secs(30));
+            tick.tick().await;
+            while !boot_stop.load(Ordering::Relaxed) {
+                tick.tick().await;
+                if n.peer_counts().0 < 12 {
+                    let _ = n.closest_peers(n.id.to_bytes()).await;
+                }
+            }
+        });
+    }
 
     // Configure mining worker (WorksharesOnly or BuilderRelay) on the light node.
     let mining_active =

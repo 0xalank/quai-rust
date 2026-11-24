@@ -114,6 +114,7 @@ fn settings(data: &Path, resume: bool, shadow: bool) -> Settings {
         archive: false,
         index_address_utxos: false,
         prune_blocks: None,
+        keep_checkpoints: 2,
     }
 }
 fn open(data: &Path, resume: bool, shadow: bool) -> Result<Processor, String> {
@@ -279,6 +280,7 @@ fn run_refuses_a_shadow_checkpoint_without_the_test_flag() {
         archive: false,
         index_address_utxos: false,
         prune_blocks: None,
+        keep_checkpoints: 2,
         p2p_relay_service: false,
         p2p_publish: false,
         rpc_security: quai_node::cli::RpcSecurityOptions::default(),

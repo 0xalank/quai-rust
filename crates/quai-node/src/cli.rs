@@ -98,9 +98,14 @@ Run options:
   --no-store            Keep no block store (about 50 KB per zone block);
                         needs --rpc-listen off. For a long shadow run
   --archive             Persist per-height state versions for historical RPC reads
+  --compact             Low-storage full node preset: keeps live state tries, UTXO
+                        set, compact scheduled lookbacks, single compacted checkpoint,
+                        and the last 1,000 canonical blocks (~3-5 GB flat forever)
   --compact-miner       Low-storage full-block mining preset: keeps only the active
-                        live state tries (compacted) and the last 256 canonical
-                        blocks (~13 MB), enables stateful mining & P2P publishing
+                        live state tries (compacted, 1 checkpoint) and recent canonical
+                        blocks (default 256), enables stateful mining & P2P publishing
+  --keep-checkpoints <N>  Number of latest checkpoints/state files to retain (default: 2;
+                        1 for --compact / --compact-miner)
   --index-address-utxos Index workshares, donors, supply analytics and locked Quai
   --prune-blocks <N>    Retain at most N recent canonical blocks in the block store
   --mine                Enable the pending-header and AuxPoW block template miner
@@ -401,7 +406,9 @@ struct Flags {
     sync_tx_with_return: Option<bool>,
     // Storage & P2P extensions
     archive: bool,
+    compact: bool,
     compact_miner: bool,
+    keep_checkpoints: Option<usize>,
     index_address_utxos: bool,
     prune_blocks: Option<u64>,
     p2p_relay_service: bool,
@@ -449,7 +456,9 @@ const RUN_ONLY: &[&str] = &[
     "--shadow-bootstrap-quorum",
     "--shadow-bootstrap-depth",
     "--archive",
+    "--compact",
     "--compact-miner",
+    "--keep-checkpoints",
     "--index-address-utxos",
     "--prune-blocks",
     "--p2p-relay-service",
@@ -540,6 +549,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--txpool-sharing-clients"
                 | "--txpool-sync-tx-with-return"
                 | "--slice"
+                | "--keep-checkpoints"
                 | "--prune-blocks"
                 | "--ipc-path"
                 | "--rpc-http-api"
@@ -673,7 +683,15 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--slice" => f.slice = Some(parse_slice("--slice", &v)?),
             "--archive" => f.archive = true,
+            "--compact" => f.compact = true,
             "--compact-miner" => f.compact_miner = true,
+            "--keep-checkpoints" => {
+                let n: usize = number("--keep-checkpoints", &v)?;
+                if n == 0 {
+                    return Err("--keep-checkpoints must be at least 1".into());
+                }
+                f.keep_checkpoints = Some(n);
+            }
             "--index-address-utxos" => f.index_address_utxos = true,
             "--prune-blocks" => f.prune_blocks = Some(number("--prune-blocks", &v)?),
             "--p2p-relay-service" => f.p2p_relay_service = true,
@@ -874,6 +892,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             };
             let compact_miner =
                 f.compact_miner || config.flag("sync.compact_miner")?.unwrap_or(false);
+            let compact =
+                compact_miner || f.compact || config.flag("sync.compact")?.unwrap_or(false);
             let miner = MinerOptions {
                 enabled: f.mine || compact_miner || config.flag("miner.enabled")?.unwrap_or(false),
                 workshares_only: f.mine_workshares
@@ -977,27 +997,46 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     Some(n) => n,
                     None => config
                         .number("sync.checkpoint_every")?
-                        .unwrap_or(if compact_miner { 2_000 } else { 10_000 }),
+                        .unwrap_or(if compact { 2_000 } else { 10_000 }),
                 },
                 commit_every: match f.commit_every {
                     Some(n) => n,
-                    None => config
-                        .number("sync.commit_every")?
-                        .unwrap_or(if compact_miner { 500 } else { 1_000 }),
+                    None => config.number("sync.commit_every")?.unwrap_or(if compact {
+                        500
+                    } else {
+                        1_000
+                    }),
                 },
                 gossip: !f.no_gossip,
                 shadow_bootstrap: f.shadow_bootstrap,
                 bootstrap_quorum: f.bootstrap_quorum.unwrap_or(crate::bootstrap::QUORUM),
                 bootstrap_depth: f.bootstrap_depth.unwrap_or(crate::bootstrap::DEPTH),
                 store: !f.no_store,
-                archive: (f.archive || config.flag("sync.archive")?.unwrap_or(false))
-                    && !compact_miner,
+                archive: (f.archive || config.flag("sync.archive")?.unwrap_or(false)) && !compact,
                 index_address_utxos: f.index_address_utxos
                     || config.flag("sync.index_address_utxos")?.unwrap_or(false),
-                prune_blocks: f
-                    .prune_blocks
-                    .or(config.number("sync.prune_blocks")?)
-                    .or(if compact_miner { Some(256) } else { None }),
+                prune_blocks: f.prune_blocks.or(config.number("sync.prune_blocks")?).or(
+                    if compact_miner {
+                        Some(256)
+                    } else if compact {
+                        Some(1_000)
+                    } else {
+                        None
+                    },
+                ),
+                keep_checkpoints: match f.keep_checkpoints {
+                    Some(n) => n.max(1),
+                    None => match config.number("sync.keep_checkpoints")? {
+                        Some(n) => (n as usize).max(1),
+                        None => {
+                            if compact {
+                                1
+                            } else {
+                                2
+                            }
+                        }
+                    },
+                },
                 p2p_relay_service: f.p2p_relay_service
                     || config.flag("p2p.relay_service")?.unwrap_or(false),
                 p2p_publish: f.p2p_publish

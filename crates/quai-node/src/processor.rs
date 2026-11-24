@@ -1497,15 +1497,21 @@ fn load_checkpoint(
         rollups,
     }))
 }
-/// Keep the two latest checkpoints, their state files and the history that
-/// a replay from the older one still reads.
-fn prune(dir: &Path, state: Option<&mut StateReplay>) -> Result<(), String> {
+/// Keep the `keep_checkpoints` latest checkpoints (at least 1), their state
+/// files, and the lookback history that a replay from the oldest kept
+/// checkpoint still reads.
+fn prune(
+    dir: &Path,
+    state: Option<&mut StateReplay>,
+    keep_checkpoints: usize,
+) -> Result<(), String> {
+    let keep_n = keep_checkpoints.max(1);
     let list = checkpoint::list(dir).map_err(io_err("checkpoint directory"))?;
-    let keep: Vec<u64> = list.iter().take(2).map(|c| c.0).collect();
+    let keep: Vec<u64> = list.iter().take(keep_n).map(|c| c.0).collect();
     let Some(&floor) = keep.last() else {
         return Ok(());
     };
-    for (_, path) in list.iter().skip(2) {
+    for (_, path) in list.iter().skip(keep_n) {
         std::fs::remove_file(path).map_err(io_err("old checkpoint"))?;
     }
     for entry in std::fs::read_dir(dir).map_err(io_err("checkpoint directory"))? {
@@ -1523,10 +1529,7 @@ fn prune(dir: &Path, state: Option<&mut StateReplay>) -> Result<(), String> {
     }
     if let Some(st) = state {
         st.past
-            .prune(
-                (floor + 1).saturating_sub(store::incoming_depth()),
-                (floor + 1).saturating_sub(store::TRIM_DEPTH),
-            )
+            .prune_to_checkpoint(floor)
             .map_err(io_err("past.redb"))?;
     }
     Ok(())
@@ -1563,6 +1566,9 @@ pub struct Settings {
     pub index_address_utxos: bool,
     /// Keep only the newest N canonical blocks in `blocks.redb` (None keeps all).
     pub prune_blocks: Option<u64>,
+    /// Number of latest checkpoints and compacted state files to retain (default 2;
+    /// `--compact` / `--compact-miner` uses 1 after atomic write+rename).
+    pub keep_checkpoints: usize,
 }
 /// Staged blocks the store writes in one non-durable transaction.
 const STORE_BATCH: usize = 256;
@@ -2131,7 +2137,7 @@ impl Processor {
         let path = checkpoint::write(&dir, &cp).map_err(io_err("checkpoint write"))?;
         store::fault(&dir, "checkpoint-written", height).map_err(io_err("checkpoint write"))?;
         if !archive {
-            prune(&dir, checker.state.as_mut())?;
+            prune(&dir, checker.state.as_mut(), self.settings.keep_checkpoints)?;
         }
         if let (Some(keep), Some(store)) = (self.settings.prune_blocks, self.store.as_mut()) {
             let _ = store
@@ -3189,7 +3195,11 @@ impl Processor {
         let again = if archive {
             0
         } else {
-            prune(&dir, self.checker.state.as_mut())?;
+            prune(
+                &dir,
+                self.checker.state.as_mut(),
+                self.settings.keep_checkpoints,
+            )?;
             if self.checker.state.is_some() {
                 self.reexecute_tip()?
             } else {

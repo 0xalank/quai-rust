@@ -124,6 +124,7 @@ async fn miner_workers(State(st): State<ApiState>, Path(address): Path<String>) 
 async fn node_info(State(st): State<ApiState>) -> Json<Value> {
     let view = st.miner.view();
     let counts = view.peer_counts();
+    let admin_info = view.admin_node_info().unwrap_or(Value::Null);
     Json(json!({
         "clientVersion": format!("quai-rust/{}", env!("CARGO_PKG_VERSION")),
         "network": st.miner.chain().spec().environment,
@@ -131,8 +132,16 @@ async fn node_info(State(st): State<ApiState>) -> Json<Value> {
         "location": view.location(),
         "blockHeight": view.head(),
         "peerCount": counts.peers,
+        "peerCounts": {
+            "total": counts.peers,
+            "inbound": counts.incoming,
+            "outbound": counts.outgoing,
+        },
         "mining": st.miner.is_mining(),
         "poolName": st.stats.pool_name(),
+        "mode": admin_info.get("mode").cloned().unwrap_or(Value::Null),
+        "sync": admin_info.get("sync").cloned().unwrap_or(Value::Null),
+        "storage": admin_info.get("storage").cloned().unwrap_or(Value::Null),
     }))
 }
 

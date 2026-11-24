@@ -143,6 +143,74 @@ impl quai_execution::historical::History for StagedPast<'_> {
         }
         self.base.created_at(height)
     }
+    fn unlocks_at(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<Vec<quai_execution::historical::ScheduledUnlock>>,
+        quai_execution::settlement::Error,
+    > {
+        let mut out = Vec::new();
+        for (tier, &depth) in quai_execution::economic_state::LOCK_PERIODS
+            .iter()
+            .enumerate()
+        {
+            if height <= depth {
+                continue;
+            }
+            let src = height - depth;
+            if src > self.floor {
+                let (inc, _) =
+                    self.overlay
+                        .get(&src)
+                        .ok_or(quai_execution::settlement::Error::Invalid(
+                            "missing staged replay redemption ancestry",
+                        ))?;
+                for tx in inc {
+                    if let Some((t, u)) = quai_execution::historical::extract_redeemable(tx) {
+                        if t as usize == tier {
+                            out.push(u);
+                        }
+                    }
+                }
+            } else {
+                out.extend(self.base.unlocks_for_tier(height, tier as u8)?);
+            }
+        }
+        Ok(Some(out))
+    }
+    fn trims_at(
+        &self,
+        height: u64,
+        denomination: u8,
+    ) -> Result<Option<Vec<OutPoint>>, quai_execution::settlement::Error> {
+        let Some(&depth) = quai_primitives::spec::TRIM_DEPTHS.get(denomination as usize) else {
+            return Ok(Some(vec![]));
+        };
+        if height <= depth {
+            return Ok(Some(vec![]));
+        }
+        let src = height - depth;
+        if src > self.floor {
+            let (_, cre) =
+                self.overlay
+                    .get(&src)
+                    .ok_or(quai_execution::settlement::Error::Invalid(
+                        "missing staged replay trim ancestry",
+                    ))?;
+            let mut out = Vec::new();
+            for (pt, d) in cre {
+                if *d > denomination {
+                    break;
+                }
+                if *d == denomination {
+                    out.push(*pt);
+                }
+            }
+            return Ok(Some(out));
+        }
+        self.base.trims_at(height, denomination)
+    }
 }
 impl StateReplay {
     /// A fresh replay state at genesis: an empty state database and history.

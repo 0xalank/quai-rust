@@ -892,11 +892,25 @@ fn cli_parses_light_workshares_builder_and_compact_miner_options() {
     assert!(!o.stateless);
     assert!(!o.archive);
     assert_eq!(o.prune_blocks, Some(256));
+    assert_eq!(o.keep_checkpoints, 1);
     assert_eq!(o.checkpoint_every, 2_000);
     assert_eq!(o.commit_every, 500);
     assert!(o.miner.enabled);
     assert!(o.p2p_publish);
     assert!(o.stratum.enabled);
+
+    // 1b. Compact full node preset (live tries + UTXOs + last 1,000 blocks + 1 checkpoint)
+    let parsed = parse(&args(&["run", "--compact"])).unwrap();
+    let Command::Run(c) = parsed.command else {
+        panic!("expected Command::Run");
+    };
+    assert!(!c.stateless);
+    assert!(!c.archive);
+    assert_eq!(c.prune_blocks, Some(1_000));
+    assert_eq!(c.keep_checkpoints, 1);
+    assert_eq!(c.checkpoint_every, 2_000);
+    assert_eq!(c.commit_every, 500);
+    assert!(!c.miner.enabled);
 
     // 2. Light client with MPT proof RPC + stateless workshare mining
     let parsed = parse(&args(&[

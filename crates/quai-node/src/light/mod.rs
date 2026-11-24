@@ -161,6 +161,7 @@ pub fn run_light(o: &LightOptions, log: &Log) -> Result<i32, String> {
     }
 
     let peer_head = Arc::new(AtomicU64::new(store.head().0));
+    let metrics = Arc::new(Metrics::new(store.head().0));
     {
         let n = node.clone();
         view.set_peer_counter(Box::new(move || {
@@ -170,6 +171,124 @@ pub fn run_light(o: &LightOptions, log: &Log) -> Result<i32, String> {
                 incoming: incoming as u64,
                 outgoing: outgoing as u64,
             }
+        }));
+    }
+    {
+        let n = node.clone();
+        let rt = runtime.handle().clone();
+        let st = store.clone();
+        let ph = peer_head.clone();
+        let metrics_c = metrics.clone();
+        let env = chain.spec().environment.clone();
+        let chain_id = chain.spec().chain_id;
+        let location = chain.location();
+        let genesis = chain.genesis_hash();
+        let genesis_hex = quai_primitives::encode_hex(&genesis);
+        let datadir = o.datadir.clone();
+        let mode_str = if o.builder_rpc.is_some() {
+            "light+builder-relay"
+        } else if mining_active {
+            "light+workshares"
+        } else {
+            "light"
+        }
+        .to_string();
+        let mining_mode_str = if o.builder_rpc.is_some() {
+            "builder-relay"
+        } else if mining_active {
+            "workshares"
+        } else {
+            "off"
+        }
+        .to_string();
+        let coinbase_hex = o.miner.coinbase.map(|c| quai_primitives::encode_hex(&c));
+        let stratum_cfg = o.stratum.clone();
+        let max_headers = o.max_headers as u64;
+        let p2p_publish = o.p2p_publish || mining_active;
+        view.set_p2p_node_info(Box::new(move || {
+            let info = rt.block_on(n.node_info()).ok();
+            let (peer_id, listen_addrs, external_addrs, nat, relay_server) = match info {
+                Some(i) => (
+                    i.peer_id,
+                    i.listen_addrs,
+                    i.external_addrs,
+                    i.nat,
+                    i.relay_server,
+                ),
+                None => (n.id.to_string(), vec![], vec![], "unknown".into(), false),
+            };
+            let local_head = st.head().0;
+            let best_peer = ph.load(Ordering::Relaxed);
+            let disk = crate::store::datadir_disk_usage(&datadir, &env, &genesis);
+            serde_json::json!({
+                "id": peer_id,
+                "name": format!("quai-rust-light/{}", env!("CARGO_PKG_VERSION")),
+                "mode": mode_str,
+                "network": env,
+                "slice": location,
+                "chainId": chain_id,
+                "genesis": genesis_hex,
+                "datadir": datadir.display().to_string(),
+                "listenAddr": listen_addrs.first().cloned().unwrap_or_default(),
+                "listenAddrs": listen_addrs,
+                "externalAddrs": external_addrs,
+                "nat": nat,
+                "relayServer": relay_server,
+                "p2pPublish": p2p_publish,
+                "sync": {
+                    "localHead": local_head,
+                    "peerHead": best_peer,
+                    "blocksPerSec": metrics_c.rate(),
+                    "syncing": best_peer > local_head,
+                    "reorgs": metrics_c.reorgs.load(Ordering::Relaxed),
+                    "worksharesValid": metrics_c.workshares_valid.load(Ordering::Relaxed),
+                },
+                "mining": {
+                    "enabled": mining_active,
+                    "mode": mining_mode_str,
+                    "coinbase": coinbase_hex,
+                    "stratumEnabled": stratum_cfg.enabled,
+                    "stratum": {
+                        "shaAddr": stratum_cfg.sha_addr,
+                        "scryptAddr": stratum_cfg.scrypt_addr,
+                        "kawpowAddr": stratum_cfg.kawpow_addr,
+                        "apiAddr": stratum_cfg.api_addr,
+                    },
+                },
+                "storage": crate::node::format_disk_usage(&disk, Some(max_headers)),
+                "protocols": {
+                    "quai": {
+                        "mode": mode_str,
+                        "network": env,
+                        "chainId": chain_id,
+                        "location": location,
+                        "genesis": genesis_hex,
+                        "head": local_head,
+                    }
+                }
+            })
+        }));
+    }
+    {
+        let n = node.clone();
+        let rt = runtime.handle().clone();
+        let ph = peer_head.clone();
+        view.set_p2p_peers_info(Box::new(move || {
+            let peers = rt.block_on(n.peers_info()).unwrap_or_default();
+            let head = ph.load(Ordering::Relaxed);
+            let head_opt = (head > 0).then_some(head);
+            let list: Vec<serde_json::Value> = peers
+                .into_iter()
+                .map(|p| crate::node::format_peer_snapshot(p, head_opt))
+                .collect();
+            serde_json::Value::Array(list)
+        }));
+    }
+    {
+        let n = node.clone();
+        let rt = runtime.handle().clone();
+        view.set_p2p_add_peer(Box::new(move |addr| {
+            crate::node::dial_peer_multiaddr(&n, &rt, addr)
         }));
     }
     {
@@ -252,7 +371,6 @@ pub fn run_light(o: &LightOptions, log: &Log) -> Result<i32, String> {
     };
 
     // Metrics endpoint.
-    let metrics = Arc::new(Metrics::new(store.head().0));
     if let Some(listen) = &o.metrics_listen {
         let listener = runtime
             .block_on(tokio::net::TcpListener::bind(listen))
@@ -288,6 +406,7 @@ pub fn run_light(o: &LightOptions, log: &Log) -> Result<i32, String> {
         caches,
         miner,
         peer_head,
+        metrics,
         o.checkpoint_height,
         stop.clone(),
         *log,

@@ -86,6 +86,11 @@ pub fn dispatch(view: &dyn ChainView, method: &str, params: &Value) -> Option<R<
         // --- Admin ---
         "admin_nodeInfo" => Args::new(params, 0).and_then(|_| Ok(view.admin_node_info()?)),
         "admin_peers" => Args::new(params, 0).and_then(|_| Ok(view.admin_peers()?)),
+        "admin_addPeer" => (|| {
+            let a = Args::new(params, 1)?;
+            let multiaddr = a.get(0, args::string)?;
+            Ok(Value::Bool(view.admin_add_peer(&multiaddr)?))
+        })(),
         "admin_exportChain" => (|| {
             let a = Args::new(params, 3)?;
             let file = a.get(0, args::string)?;

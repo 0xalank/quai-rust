@@ -909,6 +909,7 @@ pub struct LightView {
     peers_cb: RwLock<Option<Box<dyn Fn() -> PeerCounts + Send + Sync>>>,
     node_info_cb: RwLock<Option<Box<dyn Fn() -> Value + Send + Sync>>>,
     peers_info_cb: RwLock<Option<Box<dyn Fn() -> Value + Send + Sync>>>,
+    add_peer_cb: RwLock<Option<crate::rpc_view::PeerDialCallback>>,
     syncing_cb: RwLock<Option<Box<dyn Fn() -> Value + Send + Sync>>>,
 }
 
@@ -927,6 +928,7 @@ impl LightView {
             peers_cb: RwLock::new(None),
             node_info_cb: RwLock::new(None),
             peers_info_cb: RwLock::new(None),
+            add_peer_cb: RwLock::new(None),
             syncing_cb: RwLock::new(None),
         })
     }
@@ -956,6 +958,10 @@ impl LightView {
             .peers_info_cb
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Some(cb);
+    }
+
+    pub fn set_p2p_add_peer(&self, cb: crate::rpc_view::PeerDialCallback) {
+        *self.add_peer_cb.write().unwrap_or_else(|e| e.into_inner()) = Some(cb);
     }
 
     pub fn set_syncing(&self, cb: Box<dyn Fn() -> Value + Send + Sync>) {
@@ -1377,6 +1383,20 @@ impl ChainView for LightView {
             return Ok(f());
         }
         Ok(json!([]))
+    }
+
+    fn admin_add_peer(&self, multiaddr: &str) -> Result<bool, ViewError> {
+        if let Some(f) = self
+            .add_peer_cb
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
+            return f(multiaddr).map_err(ViewError::Go);
+        }
+        Err(ViewError::Unavailable(
+            "peer dialing is not configured on this light view".into(),
+        ))
     }
 
     // --- Miner delegation ---

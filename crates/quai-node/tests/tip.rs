@@ -117,6 +117,7 @@ fn settings(data: &std::path::Path, state: bool, resume: bool) -> Settings {
         archive: false,
         index_address_utxos: false,
         prune_blocks: None,
+        keep_checkpoints: 2,
     }
 }
 /// Heights in order from a list.

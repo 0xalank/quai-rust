@@ -648,6 +648,11 @@ pub trait ChainView: Send + Sync + 'static {
     fn admin_peers(&self) -> Result<serde_json::Value, ViewError> {
         Ok(serde_json::json!([]))
     }
+    fn admin_add_peer(&self, _multiaddr: &str) -> Result<bool, ViewError> {
+        Err(ViewError::Unavailable(
+            "peer dialing is not configured on this view".into(),
+        ))
+    }
     fn admin_export_chain(
         &self,
         _file: &str,

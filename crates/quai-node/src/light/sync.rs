@@ -7,6 +7,7 @@
 //! AuxTemplate gossip topics.
 use super::store::LightHeaderStore;
 use crate::log::Log;
+use crate::metrics::Metrics;
 use crate::miner::Miner;
 use crypto_bigint::Encoding as _;
 use prost::Message;
@@ -151,6 +152,7 @@ pub async fn run_header_sync(
     caches: Arc<SharedCaches>,
     miner: Option<Arc<Miner>>,
     peer_head: Arc<AtomicU64>,
+    metrics: Arc<Metrics>,
     checkpoint_height: Option<u64>,
     stop: Arc<AtomicBool>,
     log: Log,
@@ -205,6 +207,9 @@ pub async fn run_header_sync(
                     match validate_and_insert_header(&store, &caches, &raw) {
                         Ok(is_head) => {
                             peer_head.fetch_max(next_num, Ordering::Relaxed);
+                            metrics.blocks.fetch_add(1, Ordering::Relaxed);
+                            metrics.head.store(store.head().0, Ordering::Relaxed);
+                            metrics.sample_now();
                             if is_head {
                                 if let Some(m) = &miner {
                                     m.notify_new_head();
@@ -221,6 +226,7 @@ pub async fn run_header_sync(
                 };
                 if let Event::Gossip { topic, data, .. } = ev {
                     if blocks_topic.as_deref() == Some(topic.as_str()) {
+                        metrics.gossip_blocks.fetch_add(1, Ordering::Relaxed);
                         let raw = ProtoWorkObjectBlockView::decode(data.as_slice())
                             .ok()
                             .and_then(|v| v.work_object)
@@ -244,16 +250,22 @@ pub async fn run_header_sync(
                                 }
                             }
                             match validate_and_insert_header(&store, &caches, &wo_bytes) {
-                                Ok(is_head) if is_head => {
-                                    if let Some(m) = &miner {
-                                        m.notify_new_head();
+                                Ok(is_head) => {
+                                    metrics.blocks.fetch_add(1, Ordering::Relaxed);
+                                    metrics.head.store(store.head().0, Ordering::Relaxed);
+                                    metrics.sample_now();
+                                    if is_head {
+                                        if let Some(m) = &miner {
+                                            m.notify_new_head();
+                                        }
                                     }
                                 }
-                                Ok(_) => {}
                                 Err(e) => log.debug(&format!("light gossip block ignored: {e}")),
                             }
                         }
                     } else if ws_topic.as_deref() == Some(topic.as_str()) {
+                        metrics.gossip_workshares.fetch_add(1, Ordering::Relaxed);
+                        metrics.workshares_valid.fetch_add(1, Ordering::Relaxed);
                         if let Some(m) = &miner {
                             if let Ok(view) = ProtoWorkObjectShareView::decode(data.as_slice()) {
                                 if let Some(wo) = view.work_object {

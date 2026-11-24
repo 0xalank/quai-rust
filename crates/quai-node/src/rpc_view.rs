@@ -520,12 +520,15 @@ pub struct NodeInfo {
     appended: Mutex<VecDeque<(Hash, u64, u8, Arc<Vec<u8>>)>>,
     p2p_node_info: RwLock<Option<JsonCallback>>,
     p2p_peers_info: RwLock<Option<JsonCallback>>,
+    p2p_add_peer: RwLock<Option<PeerDialCallback>>,
     syncing: RwLock<Option<JsonCallback>>,
 }
 /// The network's peer counts (`net_peerCount`, `net_peerCountByDirection`).
 pub type PeerCounter = Box<dyn Fn() -> PeerCounts + Send + Sync>;
 /// Dynamic JSON snapshot hook (`admin_nodeInfo`, `admin_peers`, `eth_syncing`).
 pub type JsonCallback = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
+/// Dynamic peer dial hook (`admin_addPeer`).
+pub type PeerDialCallback = Box<dyn Fn(&str) -> Result<bool, String> + Send + Sync>;
 impl NodeInfo {
     pub fn set_peer_counter(&self, counter: PeerCounter) {
         *self.peers.write().unwrap_or_else(|e| e.into_inner()) = Some(counter);
@@ -541,6 +544,9 @@ impl NodeInfo {
             .p2p_peers_info
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Some(cb);
+    }
+    pub fn set_p2p_add_peer(&self, cb: PeerDialCallback) {
+        *self.p2p_add_peer.write().unwrap_or_else(|e| e.into_inner()) = Some(cb);
     }
     pub fn set_syncing(&self, cb: JsonCallback) {
         *self.syncing.write().unwrap_or_else(|e| e.into_inner()) = Some(cb);
@@ -558,6 +564,13 @@ impl NodeInfo {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .map(|f| f())
+    }
+    fn p2p_add_peer(&self, multiaddr: &str) -> Option<Result<bool, String>> {
+        self.p2p_add_peer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(|f| f(multiaddr))
     }
     fn syncing_status(&self) -> Option<serde_json::Value> {
         self.syncing
@@ -1098,6 +1111,32 @@ impl ExportView {
                         .collect()),
                     _ => Ok(vec![]),
                 }
+            }
+            fn unlocks_at(
+                &self,
+                height: u64,
+            ) -> Result<
+                Option<Vec<quai_execution::historical::ScheduledUnlock>>,
+                quai_execution::settlement::Error,
+            > {
+                if let Some(pr) = &self.past_reader {
+                    if let Some(u) = pr.unlocks_opt(height) {
+                        return Ok(Some(u));
+                    }
+                }
+                Ok(None)
+            }
+            fn trims_at(
+                &self,
+                height: u64,
+                denomination: u8,
+            ) -> Result<Option<Vec<OutPoint>>, quai_execution::settlement::Error> {
+                if let Some(pr) = &self.past_reader {
+                    if let Some(pts) = pr.trims_opt(height, denomination) {
+                        return Ok(Some(pts));
+                    }
+                }
+                Ok(None)
             }
         }
 
@@ -2418,6 +2457,15 @@ impl ChainView for ExportView {
             .as_ref()
             .and_then(|n| n.p2p_peers_info())
             .unwrap_or_else(|| serde_json::json!([])))
+    }
+    fn admin_add_peer(&self, multiaddr: &str) -> Result<bool, ViewError> {
+        match self.node.as_ref().and_then(|n| n.p2p_add_peer(multiaddr)) {
+            Some(Ok(ok)) => Ok(ok),
+            Some(Err(e)) => Err(ViewError::Go(e)),
+            None => Err(ViewError::Unavailable(
+                "peer dialing is not configured on this view".into(),
+            )),
+        }
     }
     fn admin_export_chain(
         &self,

@@ -499,11 +499,15 @@ pub struct PeerSnapshot {
     pub id: String,
     pub agent: String,
     pub remote_addr: String,
+    pub remote_ip: Option<String>,
+    pub multiaddrs: Vec<String>,
     pub inbound: bool,
     pub outbound: bool,
     pub relayed: bool,
     pub verified: bool,
     pub quality: i32,
+    pub latency_ms: Option<u64>,
+    pub connected_secs: u64,
     pub protocols: Vec<String>,
 }
 
@@ -1388,6 +1392,10 @@ struct PeerInfo {
     protocols: Vec<String>,
     /// Identify listen addresses that the dial policy allows.
     listen: Vec<Multiaddr>,
+    /// Last measured ping round-trip latency in milliseconds.
+    rtt_ms: Option<u64>,
+    /// Timestamp when the peer first established an active connection.
+    connected_at: Option<Instant>,
     relay_hop: bool,
     kad: bool,
 }
@@ -1652,11 +1660,42 @@ impl Driver {
     fn peers_snapshot(&self) -> Vec<PeerSnapshot> {
         let verified = read(&self.shared.verified).clone();
         let book = lock(&self.shared.book);
+        let now = Instant::now();
+        let extract_ip = |addr: &Multiaddr| -> Option<String> {
+            for proto in addr.iter() {
+                match proto {
+                    libp2p::multiaddr::Protocol::Ip4(ip) => return Some(ip.to_string()),
+                    libp2p::multiaddr::Protocol::Ip6(ip) => return Some(ip.to_string()),
+                    _ => {}
+                }
+            }
+            None
+        };
         let mut out = Vec::with_capacity(self.peers.len());
         for (peer_id, info) in &self.peers {
             let outbound = !info.outbound.is_empty();
             let inbound = info.connections.len() > info.outbound.len();
             let relayed = !info.connections.is_empty() && info.connections.values().all(|r| *r);
+            let mut addrs: Vec<String> = Vec::new();
+            let mut remote_ip: Option<String> = None;
+            for candidate in info
+                .remote_addr
+                .iter()
+                .chain(info.dialed.iter())
+                .chain(info.listen.iter())
+            {
+                let s = candidate.to_string();
+                if !addrs.contains(&s) {
+                    addrs.push(s);
+                }
+                if remote_ip.is_none() {
+                    remote_ip = extract_ip(candidate);
+                }
+            }
+            let connected_secs = info
+                .connected_at
+                .map(|t| now.saturating_duration_since(t).as_secs())
+                .unwrap_or(0);
             out.push(PeerSnapshot {
                 id: peer_id.to_string(),
                 agent: info.agent.clone(),
@@ -1666,11 +1705,15 @@ impl Driver {
                     .or(info.dialed.as_ref())
                     .map(ToString::to_string)
                     .unwrap_or_default(),
+                remote_ip,
+                multiaddrs: addrs,
                 inbound,
                 outbound,
                 relayed,
                 verified: verified.contains(peer_id),
                 quality: book.quality(peer_id),
+                latency_ms: info.rtt_ms,
+                connected_secs,
                 protocols: info.protocols.clone(),
             });
         }
@@ -2210,6 +2253,9 @@ impl Driver {
                 let info = self.peers.entry(peer_id).or_default();
                 info.connections.insert(connection_id, relayed);
                 info.remote_addr = Some(address.clone());
+                if info.connected_at.is_none() {
+                    info.connected_at = Some(Instant::now());
+                }
                 if endpoint.is_dialer() {
                     info.outbound.insert(connection_id);
                 }
@@ -2274,6 +2320,15 @@ impl Driver {
                     peer: peer_id,
                     error,
                 });
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
+                peer,
+                result: Ok(rtt),
+                ..
+            })) => {
+                if let Some(info) = self.peers.get_mut(&peer) {
+                    info.rtt_ms = Some(rtt.as_millis() as u64);
+                }
             }
             SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
                 peer,

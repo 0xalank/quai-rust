@@ -153,6 +153,7 @@ pub fn run_until(
         archive: false,
         index_address_utxos: false,
         prune_blocks: None,
+        keep_checkpoints: 2,
     };
     let caches = match caches {
         Some(c) => Some(c),

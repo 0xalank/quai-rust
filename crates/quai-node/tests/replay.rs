@@ -571,6 +571,7 @@ fn a_source_that_waits_gives_the_export_result() {
         archive: false,
         index_address_utxos: false,
         prune_blocks: None,
+        keep_checkpoints: 2,
     };
     let chain = quai_node::spec::Chain::for_environment("local").unwrap();
     let mut p =

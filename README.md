@@ -13,8 +13,9 @@ The default build and runtime have **zero Go toolchain or Go runtime dependency*
 - **Networks & Multi-Slice Support**: Supports `colosseum` (mainnet), `garden`, `orchard`, `lighthouse`, and `local` environments, with `--slice <R-Z>` multi-slice selection and `ExpandedNodeSet` hierarchy tracking.
 - **Public libp2p Networking**: Kademlia DHT (`/quai/kad/1.0.0`), GossipSub with conservative peer/topic scoring and protocol validators, AutoNAT, DCUtR hole punching, relay client + optional circuit relay server (`--p2p-relay-service`), full `handleRequest` peer serving across prime/region/zone views, and optional block/workshare publishing (`--p2p-publish`).
 - **Storage & Light Client Modes**:
-  - Default pruned state with crash-safe atomic checkpoints and batched `redb` compaction.
-  - `--compact-miner`: low-storage standalone full-block mining preset keeping only the active live EVM/UTXO/ETX state tries (aggressively compacted) and the last 256 canonical blocks (~13 MB), with lock-free `past.redb` lockup/trim reads.
+  - Default pruned state with crash-safe atomic checkpoints, scheduled compact lookback storage (`past.redb` v2, automatically migrating legacy v1 stores and pruning each coinbase lock tier and UTXO trim denomination immediately upon maturity), and batched `redb` compaction.
+  - `--compact`: low-storage full node preset keeping only the active live EVM/UTXO/ETX state tries (single compacted checkpoint), scheduled lookbacks, and the last 1,000 canonical blocks (~3–5 GB flat forever) with full local wallet/dApp RPC.
+  - `--compact-miner`: low-storage standalone full-block mining preset keeping only the active live EVM/UTXO/ETX state tries (aggressively compacted, single checkpoint) and recent canonical blocks (default 256), with lock-free `past.redb` lockup/trim reads.
   - `quai-node light`: Helios-style trustless light client — header-only P2P sync (`WorkObjectHeaderView` + PoW/PoEM verification, bounded recent header window) with cryptographic MPT proof verification (`quai_getProof`, `eth_getProof`, `keccak(code)`, verified `quai_call`, and verified receipts/txs) over an untrusted `--upstream-rpc`.
   - `--archive`: per-height state version persistence for historical RPC queries.
   - `--index-address-utxos`: workshare, donor, supply analytics, and locked-Quai indexes.

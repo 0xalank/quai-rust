@@ -337,7 +337,7 @@ fn parse_csv(v: &str) -> Vec<String> {
 fn parse_slice(flag: &str, v: &str) -> Result<[u8; 2], String> {
     let cleaned = v.trim().trim_start_matches('[').trim_end_matches(']');
     let parts: Vec<&str> = cleaned
-        .split(|c: char| c == ',' || c.is_ascii_whitespace())
+        .split(|c: char| c == ',' || c == '-' || c.is_ascii_whitespace())
         .filter(|s| !s.is_empty())
         .collect();
     if parts.len() != 2 {

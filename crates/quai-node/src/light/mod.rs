@@ -76,7 +76,7 @@ pub fn run_light(o: &LightOptions, log: &Log) -> Result<i32, String> {
         .join(&chain.spec().environment)
         .join("headers.redb");
     let store = LightHeaderStore::open(chain.clone(), &db_path, o.max_headers)?;
-    let caches = Arc::new(SharedCaches::new(16).map_err(|e| format!("pow caches: {e}"))?);
+    let caches = Arc::new(SharedCaches::new(4).map_err(|e| format!("pow caches: {e}"))?);
 
     let upstream = match &o.upstream_rpc {
         Some(url) => Some(HttpRpcClient::new(url)?),

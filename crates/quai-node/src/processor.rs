@@ -1789,7 +1789,10 @@ impl Processor {
         self.metrics = Some(m);
     }
     /// The RPC view of the store and the head state; the processor
-    /// publishes its head to it from now on.
+    /// publishes its head to it from now on. Before genesis arrives on a
+    /// fresh data directory, the view starts at a pre-genesis placeholder
+    /// `(0, [0; 32])` with no state so JSON-RPC/admin/peer telemetry can
+    /// serve immediately and transition smoothly once block 0 is accepted.
     pub fn live_view(
         &mut self,
     ) -> Result<(crate::rpc_view::ExportView, Arc<crate::rpc_view::Live>), String> {
@@ -1799,9 +1802,10 @@ impl Processor {
             .ok_or("live view without a block store")?;
         store.flush(false).map_err(io_err("block store"))?;
         let reader = store.reader().map_err(io_err("block store"))?;
-        let (hash, number) = self.checker.heads[2].ok_or("live view before genesis")?;
-        let head = (number, hash);
-        let state = self.head_state()?;
+        let (head, state) = match self.checker.heads[2] {
+            Some((hash, number)) => ((number, hash), self.head_state()?),
+            None => ((0, [0u8; 32]), None),
+        };
         let (mut view, live) =
             crate::rpc_view::ExportView::live(self.checker.chain.clone(), reader, head, state)?;
         if let (true, Some(dir)) = (self.settings.state, &self.dir) {

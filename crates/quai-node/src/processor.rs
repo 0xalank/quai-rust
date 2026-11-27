@@ -473,6 +473,7 @@ impl Checker {
         Ok(())
     }
     /// The trusted genesis in every context, as the chain spec builds it.
+    #[allow(clippy::expect_used)] // Infallible: built from the compiled-in chain genesis spec.
     fn install_genesis(&mut self) {
         let zone = Arc::new(self.chain.genesis().clone());
         let snapshots: [Arc<Snapshot>; 3] = std::array::from_fn(|c| {
@@ -807,7 +808,17 @@ impl Checker {
         // 2-8. Verifier::validate_block against the window: parent links,
         // bodies, proof-of-work, order, header/append rules, uncled entropy,
         // prime controllers, rollups and, with --state, execution.
-        let heads = self.heads.map(|h| h.expect("genesis checked first"));
+        let heads = [
+            self.heads[0].ok_or_else(|| {
+                fail(Context::Prime, "genesis", "prime head", "none")
+            })?,
+            self.heads[1].ok_or_else(|| {
+                fail(Context::Region, "genesis", "region head", "none")
+            })?,
+            self.heads[2].ok_or_else(|| {
+                fail(Context::Zone, "genesis", "zone head", "none")
+            })?,
+        ];
         let controller = self.controller.as_ref().ok_or_else(|| {
             fail(
                 Context::Prime,

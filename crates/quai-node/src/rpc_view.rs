@@ -2852,19 +2852,24 @@ impl ExportView {
 pub struct ViewChain {
     view: ExportView,
     seen: Mutex<Lru<Arc<BlockData>>>,
-    last: Mutex<Option<Arc<BlockData>>>,
+    last: Mutex<Arc<BlockData>>,
 }
 const SEEN_HEADS: usize = 1024;
 impl ViewChain {
     pub fn new(view: ExportView) -> Result<Self, String> {
+        let initial = {
+            let pinned = view.pinned();
+            let v: &dyn ChainView = pinned.as_deref().unwrap_or(&view);
+            v.block_by_number(v.head())
+                .map_err(|e| format!("transaction pool: head block: {e}"))?
+                .ok_or_else(|| "transaction pool: head block: unavailable".to_string())?
+        };
         let chain = Self {
             view,
             seen: Mutex::new((HashMap::new(), VecDeque::new())),
-            last: Mutex::new(None),
+            last: Mutex::new(initial.clone()),
         };
-        chain
-            .head()
-            .map_err(|e| format!("transaction pool: head block: {e}"))?;
+        chain.remember_chain(&initial);
         Ok(chain)
     }
     fn head(&self) -> Result<Arc<BlockData>, ViewError> {
@@ -2875,7 +2880,7 @@ impl ViewChain {
             .ok_or_else(|| ViewError::Unavailable("head block".into()))?;
         self.remember_chain(&block);
         if let Ok(mut last) = self.last.lock() {
-            *last = Some(block.clone());
+            *last = block.clone();
         }
         Ok(block)
     }
@@ -2917,13 +2922,8 @@ impl crate::txpool::PoolChain for ViewChain {
     fn current_block(&self) -> Arc<BlockData> {
         match self.head() {
             Ok(b) => b,
-            // The last head read (set by `new`).
-            Err(_) => self
-                .last
-                .lock()
-                .ok()
-                .and_then(|l| l.clone())
-                .expect("a head was read when the pool started"),
+            // The last head read (initialized by `new`).
+            Err(_) => self.last.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         }
     }
     fn get_block(&self, hash: &Hash, number: u64) -> Option<Arc<BlockData>> {

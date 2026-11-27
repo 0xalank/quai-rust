@@ -126,6 +126,8 @@ pub const KEYS: &[&str] = &[
     "stratum.no_vardiff",
     "stratum.proxy_protocol",
     "stratum.api_ws_origins",
+    "stratum.auth_token",
+    "stratum.subshares",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

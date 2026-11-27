@@ -133,6 +133,11 @@ pub struct StratumConfig {
     pub max_message_bytes: usize,
     pub max_authorizations: usize,
     pub ws_origins: Vec<String>,
+    /// Optional shared secret required in Stratum `mining.authorize` (`auth=<token>`).
+    pub auth_token: Option<String>,
+    /// Propagate D/128 KawPoW sub-shares onto workshare gossip so solo/home miners
+    /// can broadcast local RPC transactions without waiting for a full workshare.
+    pub subshares: bool,
 }
 
 impl Default for StratumConfig {
@@ -151,6 +156,8 @@ impl Default for StratumConfig {
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             max_authorizations: DEFAULT_MAX_AUTHORIZATIONS,
             ws_origins: vec![],
+            auth_token: None,
+            subshares: false,
         }
     }
 }
@@ -366,6 +373,7 @@ pub struct StratumServer {
     sessions: Mutex<HashMap<u64, Arc<Mutex<Session>>>>,
     next_session_id: AtomicU64,
     next_job_id: AtomicU64,
+    last_kawpow_epoch: AtomicU64,
     conn_permits: Arc<Semaphore>,
     stop: Arc<AtomicBool>,
     log: Log,
@@ -387,6 +395,7 @@ impl StratumServer {
             sessions: Mutex::new(HashMap::new()),
             next_session_id: AtomicU64::new(1),
             next_job_id: AtomicU64::new(1),
+            last_kawpow_epoch: AtomicU64::new(u64::MAX),
             conn_permits: Arc::new(Semaphore::new(max_conns)),
             stop,
             log,
@@ -703,6 +712,19 @@ impl StratumServer {
             }
         };
 
+        if let Some(expected) = self.config.auth_token.as_deref().filter(|t| !t.is_empty()) {
+            let valid = parsed
+                .auth_token
+                .as_deref()
+                .is_some_and(|got| constant_time_eq(got.as_bytes(), expected.as_bytes()));
+            if !valid {
+                sess.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .send_json(json!({"id": id, "result": false, "error": [24, "Invalid auth token", null]}));
+                return;
+            }
+        }
+
         let (algo, remote, diff) = {
             let mut s = sess.lock().unwrap_or_else(|e| e.into_inner());
             s.authorized = true;
@@ -837,8 +859,9 @@ impl StratumServer {
                 // Attempt submission to Miner to see if it meets Quai workshare / block target
                 let miner = self.miner.clone();
                 let pow_id = algo.pow_id();
+                let broadcast_subshares = self.config.subshares && algo == Algo::Kawpow;
                 let submit_outcome = tokio::task::spawn_blocking(move || {
-                    miner.submit_block(&raw_donor_block, pow_id)
+                    miner.submit_block_with_options(&raw_donor_block, pow_id, broadcast_subshares)
                 })
                 .await
                 .ok()
@@ -1066,6 +1089,18 @@ impl StratumServer {
         let Ok(job) = self.build_stratum_job(&wo, algo, diff) else {
             return;
         };
+        // Pre-warm the KawPoW verification light cache on the first job of each
+        // epoch (7500 donor blocks) so the first GPU share verifies immediately.
+        if algo == Algo::Kawpow {
+            let donor_height = u64::from(job.donor_height);
+            let epoch = donor_height / 7500;
+            if self.last_kawpow_epoch.swap(epoch, Ordering::Relaxed) != epoch {
+                let miner = self.miner.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = miner.prewarm_kawpow_cache(donor_height);
+                });
+            }
+        }
         let mut s = sess.lock().unwrap_or_else(|e| e.into_inner());
         let diff_changed = (diff - last_sent_diff).abs() > f64::EPSILON || last_sent_diff == 0.0;
         match algo {
@@ -1336,6 +1371,24 @@ struct ParsedAuth {
     skip: Option<bool>,
     lock: Option<u8>,
     parent_update: Option<bool>,
+    auth_token: Option<String>,
+}
+
+/// Constant-time byte slice equality for `--stratum-auth-token` checks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = a.len() ^ b.len();
+    let max_len = a.len().max(b.len());
+    for i in 0..max_len {
+        let ba = a.get(i).copied().unwrap_or(0);
+        let bb = b.get(i).copied().unwrap_or(0);
+        diff |= usize::from(ba ^ bb);
+    }
+    diff == 0
+}
+
+/// Public entrypoint for fuzzing Stratum `mining.authorize` username/password parsing.
+pub fn parse_auth_for_fuzz(username: &str, password: &str, location: &[u8; 2]) -> Result<(), String> {
+    parse_auth_identity(username, password, location).map(|_| ())
 }
 
 fn parse_auth_identity(
@@ -1380,10 +1433,13 @@ fn parse_auth_identity(
     let mut skip = None;
     let mut lock = None;
     let mut parent_update = None;
+    let mut auth_token = None;
+    let mut saw_kv = false;
 
     for token in password.split([',', '_']) {
         let token = token.trim();
         if let Some((k, v)) = token.split_once('=') {
+            saw_kv = true;
             let k = k.trim().to_ascii_lowercase();
             let v = v.trim();
             match k.as_str() {
@@ -1418,8 +1474,17 @@ fn parse_auth_identity(
                         parent_update = Some(b);
                     }
                 }
+                "auth" | "token" if !v.is_empty() => {
+                    auth_token = Some(v.to_string());
+                }
                 _ => {}
             }
+        }
+    }
+    if auth_token.is_none() && !saw_kv {
+        let bare = password.trim();
+        if !bare.is_empty() && bare != "x" {
+            auth_token = Some(bare.to_string());
         }
     }
 
@@ -1432,6 +1497,7 @@ fn parse_auth_identity(
         skip,
         lock,
         parent_update,
+        auth_token,
     })
 }
 
@@ -1520,4 +1586,38 @@ async fn parse_proxy_header<R: tokio::io::AsyncBufRead + AsyncReadExt + Unpin>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod auth_tests {
+    use super::*;
+
+    #[test]
+    fn constant_time_eq_checks_value_and_length() {
+        assert!(constant_time_eq(b"secret-token", b"secret-token"));
+        assert!(!constant_time_eq(b"secret-token", b"secret-tokeN"));
+        assert!(!constant_time_eq(b"secret", b"secret-token"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn parse_auth_identity_extracts_auth_token_modes() {
+        let loc = [0u8, 0u8];
+        let user = "0x0000000000000000000000000000000000000001.rig1";
+
+        let kv = parse_auth_identity(user, "d=25,auth=my-secret-123,lock=1", &loc).unwrap();
+        assert_eq!(kv.worker_name, "rig1");
+        assert_eq!(kv.difficulty, Some(25.0));
+        assert_eq!(kv.lock, Some(1));
+        assert_eq!(kv.auth_token.as_deref(), Some("my-secret-123"));
+
+        let tok = parse_auth_identity(user, "token=alt-secret", &loc).unwrap();
+        assert_eq!(tok.auth_token.as_deref(), Some("alt-secret"));
+
+        let bare = parse_auth_identity(user, "bare-secret", &loc).unwrap();
+        assert_eq!(bare.auth_token.as_deref(), Some("bare-secret"));
+
+        let default_x = parse_auth_identity(user, "x", &loc).unwrap();
+        assert_eq!(default_x.auth_token, None);
+    }
 }

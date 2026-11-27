@@ -11,3 +11,6 @@ sha2 = "=0.10.9"
 
 redb = "=4.5.0"
 quai-primitives = { path = "../quai-primitives" }
+
+[lints]
+workspace = true

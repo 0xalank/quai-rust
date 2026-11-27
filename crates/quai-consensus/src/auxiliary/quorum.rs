@@ -39,6 +39,7 @@ impl Quorum {
     pub fn for_spec(spec: &quai_primitives::spec::ChainSpec) -> Result<Self, Error> {
         Self::from_trusted_keys(spec.quorum_keys)
     }
+    #[allow(clippy::expect_used)] // Infallible: compile-time pinned MuSig2 quorum keys verified by unit tests.
     pub fn pinned() -> Self {
         pinned_keys()
             .and_then(Self::from_trusted_keys)

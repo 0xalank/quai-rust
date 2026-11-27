@@ -19,3 +19,6 @@ serde_json = "=1.0.154"
 
 [dev-dependencies]
 redb = "=4.5.0"
+
+[lints]
+workspace = true

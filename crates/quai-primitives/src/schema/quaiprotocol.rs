@@ -16,6 +16,24 @@ pub struct GossipAuxTemplate {
     #[prost(message, optional, tag = "1")]
     pub aux_template: ::core::option::Option<super::block::ProtoAuxTemplate>,
 }
+/// Hash list for batched P2P lookups (e.g. GetTrieNodes)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtoHashList {
+    #[prost(message, repeated, tag = "1")]
+    pub hashes: ::prost::alloc::vec::Vec<super::common::ProtoHash>,
+}
+/// Single trie node or contract code blob
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtoTrieNode {
+    #[prost(bytes = "vec", tag = "1")]
+    pub node_data: ::prost::alloc::vec::Vec<u8>,
+}
+/// Batched trie node or contract code blobs
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtoTrieNodes {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    pub nodes: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+}
 /// QuaiRequestMessage is the main 'envelope' for QuaiProtocol request messages
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct QuaiRequestMessage {
@@ -23,9 +41,9 @@ pub struct QuaiRequestMessage {
     pub id: u32,
     #[prost(message, optional, tag = "2")]
     pub location: ::core::option::Option<super::common::ProtoLocation>,
-    #[prost(oneof = "quai_request_message::Data", tags = "3, 4")]
+    #[prost(oneof = "quai_request_message::Data", tags = "3, 4, 10")]
     pub data: ::core::option::Option<quai_request_message::Data>,
-    #[prost(oneof = "quai_request_message::Request", tags = "5, 6, 7, 8, 9")]
+    #[prost(oneof = "quai_request_message::Request", tags = "5, 6, 7, 8, 9, 11, 12")]
     pub request: ::core::option::Option<quai_request_message::Request>,
 }
 /// Nested message and enum types in `QuaiRequestMessage`.
@@ -36,6 +54,8 @@ pub mod quai_request_message {
         Hash(super::super::common::ProtoHash),
         #[prost(bytes, tag = "4")]
         Number(::prost::alloc::vec::Vec<u8>),
+        #[prost(message, tag = "10")]
+        Hashes(super::ProtoHashList),
     }
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Request {
@@ -49,6 +69,10 @@ pub mod quai_request_message {
         BlockHash(super::super::common::ProtoHash),
         #[prost(message, tag = "9")]
         AuxTemplate(super::super::block::ProtoAuxTemplate),
+        #[prost(message, tag = "11")]
+        TrieNode(super::ProtoTrieNode),
+        #[prost(message, tag = "12")]
+        TrieNodes(super::ProtoTrieNodes),
     }
 }
 /// QuaiResponseMessage is the main 'envelope' for QuaiProtocol response messages
@@ -58,7 +82,7 @@ pub struct QuaiResponseMessage {
     pub id: u32,
     #[prost(message, optional, tag = "2")]
     pub location: ::core::option::Option<super::common::ProtoLocation>,
-    #[prost(oneof = "quai_response_message::Response", tags = "3, 4, 5, 6, 7")]
+    #[prost(oneof = "quai_response_message::Response", tags = "3, 4, 5, 6, 7, 8, 9")]
     pub response: ::core::option::Option<quai_response_message::Response>,
 }
 /// Nested message and enum types in `QuaiResponseMessage`.
@@ -75,6 +99,10 @@ pub mod quai_response_message {
         BlockHash(super::super::common::ProtoHash),
         #[prost(message, tag = "7")]
         AuxTemplate(super::super::block::ProtoAuxTemplate),
+        #[prost(message, tag = "8")]
+        TrieNode(super::ProtoTrieNode),
+        #[prost(message, tag = "9")]
+        TrieNodes(super::ProtoTrieNodes),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

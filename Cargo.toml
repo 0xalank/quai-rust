@@ -1,12 +1,34 @@
 [workspace]
 members = ["crates/quai-rpc", "crates/quai-store", "crates/quai-primitives", "crates/quai-network", "crates/quai-execution", "crates/quai-consensus", "crates/quai-node"]
+exclude = ["vendor", "fuzz"]
 resolver = "2"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
 [profile.release]
+overflow-checks = true
 lto = "thin"
 codegen-units = 1
 
+[profile.dev]
+overflow-checks = true
+
+[profile.test]
+overflow-checks = true
 
 # Keep full 3072-bit commitment fixtures practical in the debug test suite.
 [profile.test.package.num-bigint]
 opt-level = 2
+
+# Patched rust-libp2p crates for go-libp2p v0.32.1 NAT interoperability:
+# - libp2p-dcutr: match go-libp2p's inverted TCP simultaneous-open hole-punch roles
+# - libp2p-gossipsub: emit Event::HandlerDisabled instead of silently wedging after 5 substream attempts
+[patch.crates-io]
+libp2p-dcutr = { path = "vendor/libp2p-dcutr" }
+libp2p-gossipsub = { path = "vendor/libp2p-gossipsub" }

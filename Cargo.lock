@@ -1651,8 +1651,6 @@ dependencies = [
 [[package]]
 name = "libp2p-dcutr"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b4107305e12158af3e66960b6181789c547394c9c9a8696f721521602bfc73a"
 dependencies = [
  "asynchronous-codec",
  "either",
@@ -1689,8 +1687,6 @@ dependencies = [
 [[package]]
 name = "libp2p-gossipsub"
 version = "0.49.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3573f3d8e30bd62cda336df5c7c1041a1caa40a648376b8e1e274d585c0ed25c"
 dependencies = [
  "async-channel",
  "asynchronous-codec",
@@ -2591,6 +2587,7 @@ dependencies = [
 name = "quai-node"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "crypto-bigint",
  "futures-util",

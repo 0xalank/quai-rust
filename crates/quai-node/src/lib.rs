@@ -30,6 +30,7 @@ pub mod state;
 pub mod store;
 pub mod stratum;
 pub mod tip;
+pub mod trie_sync;
 pub mod txpool;
 pub mod uncles;
 pub mod window;

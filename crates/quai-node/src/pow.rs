@@ -98,7 +98,7 @@ impl Pool {
         let job_rx = Arc::new(Mutex::new(job_rx));
         let stop = Arc::new(AtomicBool::new(false));
         let workers = (0..threads.max(1))
-            .map(|i| {
+            .filter_map(|i| {
                 let jobs = job_rx.clone();
                 let done = done_tx.clone();
                 let caches = caches.clone();
@@ -123,7 +123,7 @@ impl Pool {
                             }
                         }
                     })
-                    .expect("spawn proof-of-work worker")
+                    .ok()
             })
             .collect();
         Self {

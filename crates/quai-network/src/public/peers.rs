@@ -130,10 +130,15 @@ pub struct Ban {
 /// Maximum tracked peers per table in [`Book`] to bound long-uptime memory.
 const MAX_BOOK_ENTRIES: usize = 8192;
 
-/// Scores, bans and rates of the peers this node has seen.
+/// Baseline latency assigned to peers without a measured RTT yet so they stay
+/// eligible for probing without displacing verified fast peers.
+const UNKNOWN_RTT_MS: u64 = 250;
+
+/// Scores, latencies, bans and rates of the peers this node has seen.
 #[derive(Debug, Default)]
 pub struct Book {
     quality: HashMap<PeerId, i32>,
+    latency_ms: HashMap<PeerId, u64>,
     bans: HashMap<PeerId, Ban>,
     inbound: HashMap<PeerId, Rate>,
     outbound: HashMap<PeerId, Rate>,
@@ -141,6 +146,26 @@ pub struct Book {
 impl Book {
     pub fn quality(&self, peer: &PeerId) -> i32 {
         self.quality.get(peer).copied().unwrap_or(MIN_SCORE)
+    }
+    pub fn latency_ms(&self, peer: &PeerId) -> Option<u64> {
+        self.latency_ms.get(peer).copied()
+    }
+    /// Update EWMA round-trip latency for `peer` (alpha = 1/4).
+    pub fn record_latency(&mut self, peer: PeerId, sample: Duration) {
+        if !self.latency_ms.contains_key(&peer) && self.latency_ms.len() >= MAX_BOOK_ENTRIES {
+            if let Some(evict) = self.latency_ms.keys().next().copied() {
+                self.latency_ms.remove(&evict);
+            }
+        }
+        let sample_ms = (sample.as_millis() as u64).max(1);
+        let next = match self.latency_ms.get(&peer).copied() {
+            Some(prev) => (prev.saturating_mul(3).saturating_add(sample_ms)) / 4,
+            None => sample_ms,
+        };
+        self.latency_ms.insert(peer, next.max(1));
+    }
+    pub fn clear_latency(&mut self, peer: &PeerId) {
+        self.latency_ms.remove(peer);
     }
     pub fn adjust(&mut self, peer: PeerId, adjustment: Adjustment) -> i32 {
         if !self.quality.contains_key(&peer) && self.quality.len() >= MAX_BOOK_ENTRIES {
@@ -152,17 +177,22 @@ impl Book {
         self.quality.insert(peer, q);
         q
     }
-    /// The candidates in go-quai's request order: Best, Responsive, then
-    /// LastResort, by score within a bucket.
+    /// Candidates in go-quai's bucket order (Best, Responsive, LastResort),
+    /// latency-ranked within each quality bucket so faster peers win sync rounds.
     pub fn order(&self, peers: &[PeerId]) -> Vec<PeerId> {
+        let now = Instant::now();
         let max = peers.iter().map(|p| self.quality(p)).max().unwrap_or(0);
-        let mut v: Vec<(Bucket, i32, PeerId)> = peers
+        let mut v: Vec<(Bucket, u64, i32, PeerId)> = peers
             .iter()
-            .filter(|p| !self.is_banned(p, Instant::now()))
-            .map(|p| (bucket(self.quality(p), max), -self.quality(p), *p))
+            .filter(|p| !self.is_banned(p, now))
+            .map(|p| {
+                let q = self.quality(p);
+                let rtt = self.latency_ms.get(p).copied().unwrap_or(UNKNOWN_RTT_MS);
+                (bucket(q, max), rtt, -q, *p)
+            })
             .collect();
         v.sort();
-        v.into_iter().map(|(_, _, p)| p).collect()
+        v.into_iter().map(|(_, _, _, p)| p).collect()
     }
     pub fn ban(&mut self, peer: PeerId, reason: impl Into<String>, duration: Option<Duration>) {
         let now = Instant::now();
@@ -482,6 +512,24 @@ mod tests {
         // A timed ban ends.
         book.ban(b, "wrong network", Some(Duration::from_millis(1)));
         assert!(!book.is_banned(&b, Instant::now() + Duration::from_millis(5)));
+    }
+
+    #[test]
+    fn latency_ranks_peers_within_quality_bucket() {
+        let mut book = Book::default();
+        let (slow, mid, fast) = (peer(), peer(), peer());
+        for p in [slow, mid, fast] {
+            for _ in 0..10 {
+                book.adjust(p, Adjustment::Response);
+            }
+        }
+        book.record_latency(slow, Duration::from_millis(400));
+        book.record_latency(mid, Duration::from_millis(120));
+        book.record_latency(fast, Duration::from_millis(25));
+        assert_eq!(book.order(&[slow, mid, fast]), vec![fast, mid, slow]);
+        // EWMA smooths subsequent samples
+        book.record_latency(fast, Duration::from_millis(105));
+        assert_eq!(book.latency_ms(&fast), Some(45));
     }
 
     #[test]

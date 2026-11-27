@@ -199,6 +199,9 @@ pub const FIELDS: &[&[(u32, u8, Option<usize>)]] = &[
         (7, 2, Some(22)),
         (8, 2, Some(1)),
         (9, 2, Some(13)),
+        (10, 2, Some(68)),
+        (11, 2, Some(69)),
+        (12, 2, Some(70)),
     ],
     &[
         (1, 0, None),
@@ -208,10 +211,15 @@ pub const FIELDS: &[&[(u32, u8, Option<usize>)]] = &[
         (5, 2, Some(21)),
         (6, 2, Some(1)),
         (7, 2, Some(13)),
+        (8, 2, Some(69)),
+        (9, 2, Some(70)),
     ],
     &[(1, 2, Some(63)), (2, 2, Some(64))],
     &[(1, 2, Some(67)), (2, 2, None), (3, 0, None), (4, 0, None)],
     &[(1, 2, None), (2, 2, None)],
+    &[(1, 2, Some(1))],
+    &[(1, 2, None)],
+    &[(1, 2, None)],
 ];
 pub const NAMES: &[&str] = &[
     ".common.ProtoLocation",
@@ -282,6 +290,9 @@ pub const NAMES: &[&str] = &[
     ".quaiprotocol.QuaiMessage",
     ".peerdb.ProtoPeerInfo",
     ".peerdb.ProtoAddrInfo",
+    ".quaiprotocol.ProtoHashList",
+    ".quaiprotocol.ProtoTrieNode",
+    ".quaiprotocol.ProtoTrieNodes",
 ];
 pub fn canonicalize(name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
     super::preflight(name, bytes)?;
@@ -497,6 +508,15 @@ pub fn canonicalize(name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|e| e.to_string())?
             .encode_to_vec(),
         ".peerdb.ProtoAddrInfo" => super::peerdb::ProtoAddrInfo::decode(bytes)
+            .map_err(|e| e.to_string())?
+            .encode_to_vec(),
+        ".quaiprotocol.ProtoHashList" => super::quaiprotocol::ProtoHashList::decode(bytes)
+            .map_err(|e| e.to_string())?
+            .encode_to_vec(),
+        ".quaiprotocol.ProtoTrieNode" => super::quaiprotocol::ProtoTrieNode::decode(bytes)
+            .map_err(|e| e.to_string())?
+            .encode_to_vec(),
+        ".quaiprotocol.ProtoTrieNodes" => super::quaiprotocol::ProtoTrieNodes::decode(bytes)
             .map_err(|e| e.to_string())?
             .encode_to_vec(),
         _ => return Err("unsupported public message type".into()),

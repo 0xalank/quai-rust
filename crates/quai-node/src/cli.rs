@@ -129,6 +129,8 @@ Run options:
   --stratum-no-vardiff  Disable automatic Stratum variable difficulty
   --stratum-proxy-protocol  Expect HAProxy PROXY protocol v1/v2 on Stratum ports
   --stratum-api-ws-origins <CSV>  Allowed WebSocket origins for /api/ws
+  --stratum-auth-token <TOKEN>    Require constant-time auth token in mining.authorize
+  --stratum-subshares             Broadcast D/128 KawPoW sub-shares to propagate local txs
   --shadow-bootstrap <HASH|auto>
                         TEST TOOL for the shadow run, not for production.
                         With --stateless and an empty data directory, start
@@ -444,6 +446,8 @@ struct Flags {
     stratum_no_vardiff: bool,
     stratum_proxy_protocol: bool,
     stratum_api_ws_origins: Option<Vec<String>>,
+    stratum_auth_token: Option<String>,
+    stratum_subshares: bool,
 }
 const REPLAY_ONLY: &[&str] = &["--state", "--store", "--resume", "--no-report", "--pow-dag"];
 const RUN_ONLY: &[&str] = &[
@@ -488,6 +492,8 @@ const RUN_AND_LIGHT: &[&str] = &[
     "--stratum-no-vardiff",
     "--stratum-proxy-protocol",
     "--stratum-api-ws-origins",
+    "--stratum-auth-token",
+    "--stratum-subshares",
 ];
 const LIGHT_ONLY: &[&str] = &[
     "--upstream-rpc",
@@ -573,6 +579,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 | "--stratum-name"
                 | "--stratum-pool-tag"
                 | "--stratum-api-ws-origins"
+                | "--stratum-auth-token"
         );
         let value = if takes_value {
             match inline {
@@ -731,6 +738,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--stratum-no-vardiff" => f.stratum_no_vardiff = true,
             "--stratum-proxy-protocol" => f.stratum_proxy_protocol = true,
             "--stratum-api-ws-origins" => f.stratum_api_ws_origins = Some(parse_csv(&v)),
+            "--stratum-auth-token" => f.stratum_auth_token = Some(v),
+            "--stratum-subshares" => f.stratum_subshares = true,
             "--checkpoint-every" | "--commit-every" => {
                 let n: u64 = number(&flag, &v)?;
                 if n == 0 {
@@ -961,6 +970,12 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     Some(v) => v,
                     None => config.list("stratum.api_ws_origins")?.unwrap_or_default(),
                 },
+                auth_token: f
+                    .stratum_auth_token
+                    .or(config.text("stratum.auth_token")?)
+                    .filter(|t| !t.is_empty()),
+                subshares: f.stratum_subshares
+                    || config.flag("stratum.subshares")?.unwrap_or(false),
                 ..default_stratum
             };
             let o = crate::node::Options {
@@ -1139,6 +1154,12 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     Some(v) => v,
                     None => config.list("stratum.api_ws_origins")?.unwrap_or_default(),
                 },
+                auth_token: f
+                    .stratum_auth_token
+                    .or(config.text("stratum.auth_token")?)
+                    .filter(|t| !t.is_empty()),
+                subshares: f.stratum_subshares
+                    || config.flag("stratum.subshares")?.unwrap_or(false),
                 ..default_stratum
             };
             Command::Light(crate::light::LightOptions {

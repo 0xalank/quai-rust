@@ -24,6 +24,10 @@ pub const STREAM_PROTOCOL: &str = "/quai/1.0.0";
 /// also talk to a go-quai node.
 pub const DHT_PROTOCOL: &str = "/quai/kad/1.0.0";
 pub const MAX_FRAME_BYTES: usize = 3 << 20;
+/// Maximum number of trie node hashes in a single batched `GetTrieNodes` request.
+pub const MAX_TRIE_NODE_BATCH_SIZE: usize = 256;
+/// Soft byte cap for a batched `GetTrieNodes` response (matches go-quai).
+pub const MAX_TRIE_NODE_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 #[derive(Debug)]
 pub enum Error {
     Io(io::Error),
@@ -153,6 +157,8 @@ enum ResponseKind {
     Blocks,
     Hash,
     Aux,
+    TrieNode,
+    TrieNodes,
 }
 fn request_kind(request: &rq::Request) -> ResponseKind {
     match request {
@@ -161,6 +167,8 @@ fn request_kind(request: &rq::Request) -> ResponseKind {
         rq::Request::WorkObjectBlocks(_) => ResponseKind::Blocks,
         rq::Request::BlockHash(_) => ResponseKind::Hash,
         rq::Request::AuxTemplate(_) => ResponseKind::Aux,
+        rq::Request::TrieNode(_) => ResponseKind::TrieNode,
+        rq::Request::TrieNodes(_) => ResponseKind::TrieNodes,
     }
 }
 fn response_kind(response: &rs::Response) -> ResponseKind {
@@ -170,6 +178,8 @@ fn response_kind(response: &rs::Response) -> ResponseKind {
         rs::Response::WorkObjectBlocksView(_) => ResponseKind::Blocks,
         rs::Response::BlockHash(_) => ResponseKind::Hash,
         rs::Response::AuxTemplate(_) => ResponseKind::Aux,
+        rs::Response::TrieNode(_) => ResponseKind::TrieNode,
+        rs::Response::TrieNodes(_) => ResponseKind::TrieNodes,
     }
 }
 /// A bounded book for one authenticated peer/connection. The transport must

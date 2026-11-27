@@ -1,0 +1,48 @@
+[package]
+name = "quai-rust-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+prost = "=0.14.4"
+serde_json = "=1.0.154"
+quai-primitives = { path = "../crates/quai-primitives" }
+quai-consensus = { path = "../crates/quai-consensus" }
+quai-network = { path = "../crates/quai-network" }
+quai-rpc = { path = "../crates/quai-rpc" }
+quai-node = { path = "../crates/quai-node" }
+
+[[bin]]
+name = "fuzz_p2p_envelope"
+path = "fuzz_targets/fuzz_p2p_envelope.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_work_object_auxpow"
+path = "fuzz_targets/fuzz_work_object_auxpow.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_transaction"
+path = "fuzz_targets/fuzz_transaction.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_trie_node"
+path = "fuzz_targets/fuzz_trie_node.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_jsonrpc"
+path = "fuzz_targets/fuzz_jsonrpc.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_stratum_auth"
+path = "fuzz_targets/fuzz_stratum_auth.rs"
+doc = false

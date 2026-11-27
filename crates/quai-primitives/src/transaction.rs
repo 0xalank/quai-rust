@@ -336,10 +336,8 @@ impl Transaction {
                             }),
                             pub_key: Some(
                                 PublicKey::from_sec1_bytes(&v.public_key)
-                                    .expect("decoded key")
-                                    .to_encoded_point(true)
-                                    .as_bytes()
-                                    .to_vec(),
+                                    .map(|k| k.to_encoded_point(true).as_bytes().to_vec())
+                                    .unwrap_or_else(|_| v.public_key.clone()),
                             ),
                         })
                         .collect(),
@@ -432,8 +430,11 @@ impl Transaction {
         let keys = v
             .inputs
             .iter()
-            .map(|v| PublicKey::from_sec1_bytes(&v.public_key).expect("decoded key"))
-            .collect::<Vec<_>>();
+            .map(|v| {
+                PublicKey::from_sec1_bytes(&v.public_key)
+                    .map_err(|_| "invalid input public key".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         if keys.len() == 1 {
             return Ok(keys[0].to_encoded_point(true).as_bytes().to_vec());
         }
@@ -453,7 +454,7 @@ impl Transaction {
                 Option::<Scalar>::from(Scalar::from_repr(
                     reduce_order(tagged(b"KeyAgg coefficient", &message)).into(),
                 ))
-                .expect("reduced scalar")
+                .ok_or_else(|| "invalid keyagg scalar".to_string())?
             };
             sum += ProjectivePoint::from(*key.as_affine()) * coefficient;
         }

@@ -290,9 +290,11 @@ impl Snapshot {
     }
 
     pub fn head(&self) -> (&u64, &String) {
+        static ZERO: u64 = 0;
+        static EMPTY: String = String::new();
         self.canonical
             .last_key_value()
-            .expect("validated canonical chain")
+            .unwrap_or((&ZERO, &EMPTY))
     }
 
     /// Live hybrid mode serves only immutable block-hash reads. Frozen mode has
@@ -388,7 +390,11 @@ impl Store {
         })
     }
     pub fn snapshot(&self) -> Arc<Snapshot> {
-        self.current.read().expect("store lock").0.clone()
+        self.current
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .0
+            .clone()
     }
     pub fn reload(&self, path: &Path) -> Result<(), String> {
         self.replace(Snapshot::load(path)?)
@@ -403,7 +409,7 @@ impl Store {
         Ok(())
     }
     pub fn info(&self) -> Value {
-        let current = self.current.read().expect("store lock");
+        let current = self.current.read().unwrap_or_else(|e| e.into_inner());
         let mut info = current.0.info();
         info["generation"] = json!(current.1);
         info

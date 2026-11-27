@@ -170,8 +170,10 @@ pub struct Checked {
     pub prime: Option<prime_controller::Step>,
 }
 impl Checked {
-    pub fn zone(&self) -> &Arc<Record> {
-        self.records[2].as_ref().expect("checked zone record")
+    pub fn zone(&self) -> Result<&Arc<Record>, Error> {
+        self.records[2]
+            .as_ref()
+            .ok_or(Error::Invalid("checked zone record"))
     }
 }
 /// A zone block executed with every state root equal to its header.
@@ -675,7 +677,10 @@ pub fn execute<P: historical::History>(
     state: &mut ParentState<'_, P>,
     checked: &Checked,
 ) -> Result<Executed, Failure> {
-    let zone = checked.zone().clone();
+    let zone = checked
+        .zone()
+        .map_err(|e| fail(2, "checked zone record", "present", format!("{e:?}")))?
+        .clone();
     let confirmed = confirmation::confirm(
         parent.histories,
         parent.known,
@@ -841,7 +846,7 @@ impl Ancestry {
     /// ancestry's current heads.
     pub fn commit(&mut self, validated: Validated) -> Result<(), Error> {
         let Validated { checked, executed } = validated;
-        let zone = checked.zone().clone();
+        let zone = checked.zone()?.clone();
         for c in checked.order as usize..3 {
             let r = checked.records[c]
                 .as_ref()

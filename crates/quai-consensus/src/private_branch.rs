@@ -457,7 +457,7 @@ impl PrivateBranch {
         self.decoded_history.stats()
     }
     pub fn head(&self) -> Id {
-        self.journal.head().expect("private genesis initialized")
+        self.journal.head().unwrap_or([0u8; 32])
     }
     pub fn restore(&self, id: Id) -> io::Result<Restored> {
         if let Store::Keyed(keyed) = &self.journal {

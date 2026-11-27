@@ -25,8 +25,10 @@ fn dial_policy_separates_loopback_and_public_addresses() {
     assert!(!DialPolicy::Public.allows(&loopback));
     for a in [
         "/ip4/8.8.8.8/tcp/4002",
+        "/ip4/8.8.8.8/udp/4002/quic-v1",
         "/ip4/34.120.1.2/tcp/4002/p2p/12D3KooWB72Vs7gfLgvJsmR7cex7tG5WY7WDdqJD124Res3byDyk",
         "/ip6/2606:4700::1111/tcp/4002",
+        "/ip6/2606:4700::1111/udp/4002/quic-v1",
     ] {
         let a: Multiaddr = a.parse().unwrap();
         assert!(DialPolicy::Public.allows(&a), "{a}");
@@ -34,6 +36,7 @@ fn dial_policy_separates_loopback_and_public_addresses() {
     }
     for a in [
         "/ip4/192.168.1.10/tcp/4002",
+        "/ip4/192.168.1.10/udp/4002/quic-v1",
         "/ip4/10.0.0.1/tcp/4002",
         "/ip4/172.20.10.2/tcp/4002",
         "/ip4/100.64.0.1/tcp/4002",
@@ -41,7 +44,8 @@ fn dial_policy_separates_loopback_and_public_addresses() {
         "/ip4/0.1.2.3/tcp/4002",
         "/ip4/240.0.0.1/tcp/4002",
         "/ip4/8.8.8.8/tcp/0",
-        "/ip4/8.8.8.8/udp/4002/quic-v1",
+        "/ip4/8.8.8.8/udp/0/quic-v1",
+        "/ip4/8.8.8.8/udp/4002",
         "/ip6/::1/tcp/4002",
         "/ip6/fe80::1/tcp/4002",
         "/ip6/fd00::1/tcp/4002",
@@ -55,7 +59,8 @@ fn dial_policy_separates_loopback_and_public_addresses() {
         assert!(DialPolicy::Public.allows_target(&a));
         assert!(!DialPolicy::Loopback.allows_target(&a));
     }
-    assert!(!DialPolicy::Public.allows_target(&"/dns4/x.example/udp/1/quic-v1".parse().unwrap()));
+    assert!(DialPolicy::Public.allows_target(&"/dns4/x.example/udp/1/quic-v1".parse().unwrap()));
+    assert!(!DialPolicy::Public.allows_target(&"/dns4/x.example/udp/1".parse().unwrap()));
 }
 
 #[test]

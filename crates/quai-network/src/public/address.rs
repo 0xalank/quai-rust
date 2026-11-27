@@ -31,11 +31,11 @@ pub enum DialPolicy {
     Public,
 }
 impl DialPolicy {
-    /// The check for every resolved TCP dial address.
+    /// The check for every resolved TCP/QUIC dial address.
     pub fn allows(self, a: &Multiaddr) -> bool {
         match self {
-            Self::Loopback => loopback_address(a),
-            Self::Public => global_tcp(a),
+            Self::Loopback => loopback_address(a) || loopback_quic(a),
+            Self::Public => global_transport(a),
         }
     }
     /// The check for a dial target before DNS resolution.
@@ -45,16 +45,18 @@ impl DialPolicy {
             relay.iter().any(|p| matches!(p, Protocol::P2p(_))) && circuit_tail(a)
         };
         match (self, relay_part(a)) {
-            (Self::Loopback, Some(relay)) => loopback_address(&relay) && circuit(&relay),
-            (Self::Loopback, None) => loopback_address(a),
-            (Self::Public, Some(relay)) => {
-                (global_tcp(&relay) || dns_tcp(&relay)) && circuit(&relay)
+            (Self::Loopback, Some(relay)) => {
+                (loopback_address(&relay) || loopback_quic(&relay)) && circuit(&relay)
             }
-            (Self::Public, None) => global_tcp(a) || dns_tcp(a),
+            (Self::Loopback, None) => loopback_address(a) || loopback_quic(a),
+            (Self::Public, Some(relay)) => {
+                (global_transport(&relay) || dns_transport(&relay)) && circuit(&relay)
+            }
+            (Self::Public, None) => global_transport(a) || dns_transport(a),
         }
     }
     /// The check for a listen address: loopback for the loopback policy,
-    /// any TCP address (and relay circuits) for the public policy.
+    /// any TCP or QUIC-v1 address for the public policy.
     pub fn allows_listen(self, a: &Multiaddr) -> bool {
         let mut p = a.iter();
         let ip = match p.next() {
@@ -62,36 +64,63 @@ impl DialPolicy {
             Some(Protocol::Ip6(ip)) => IpAddr::V6(ip),
             _ => return false,
         };
-        let tcp = matches!(p.next(), Some(Protocol::Tcp(_))) && p.next().is_none();
-        tcp && match self {
-            Self::Loopback => ip.is_loopback(),
-            Self::Public => true,
-        }
+        let valid_proto = match p.next() {
+            Some(Protocol::Tcp(_)) => p.next().is_none(),
+            Some(Protocol::Udp(_)) => {
+                matches!(p.next(), Some(Protocol::QuicV1)) && p.next().is_none()
+            }
+            _ => false,
+        };
+        valid_proto
+            && match self {
+                Self::Loopback => ip.is_loopback(),
+                Self::Public => true,
+            }
     }
 }
-fn tcp_tail<'a>(mut p: impl Iterator<Item = Protocol<'a>>) -> bool {
-    matches!(p.next(), Some(Protocol::Tcp(port)) if port != 0)
+fn transport_tail<'a>(mut p: impl Iterator<Item = Protocol<'a>>) -> bool {
+    let ok = match p.next() {
+        Some(Protocol::Tcp(port)) if port != 0 => true,
+        Some(Protocol::Udp(port)) if port != 0 => matches!(p.next(), Some(Protocol::QuicV1)),
+        _ => false,
+    };
+    ok && match p.next() {
+        None => true,
+        Some(Protocol::P2p(_)) => p.next().is_none(),
+        _ => false,
+    }
+}
+fn loopback_quic(a: &Multiaddr) -> bool {
+    let mut p = a.iter();
+    let loopback = match p.next() {
+        Some(Protocol::Ip4(ip)) => ip.is_loopback(),
+        Some(Protocol::Ip6(ip)) => ip.is_loopback(),
+        _ => false,
+    };
+    loopback
+        && matches!(p.next(), Some(Protocol::Udp(port)) if port != 0)
+        && matches!(p.next(), Some(Protocol::QuicV1))
         && match p.next() {
             None => true,
             Some(Protocol::P2p(_)) => p.next().is_none(),
             _ => false,
         }
 }
-fn global_tcp(a: &Multiaddr) -> bool {
+fn global_transport(a: &Multiaddr) -> bool {
     let mut p = a.iter();
     let global = match p.next() {
         Some(Protocol::Ip4(ip)) => global_ip(IpAddr::V4(ip)),
         Some(Protocol::Ip6(ip)) => global_ip(IpAddr::V6(ip)),
         _ => false,
     };
-    global && tcp_tail(p)
+    global && transport_tail(p)
 }
-fn dns_tcp(a: &Multiaddr) -> bool {
+fn dns_transport(a: &Multiaddr) -> bool {
     let mut p = a.iter();
     matches!(
         p.next(),
         Some(Protocol::Dns(_) | Protocol::Dns4(_) | Protocol::Dns6(_))
-    ) && tcp_tail(p)
+    ) && transport_tail(p)
 }
 /// After the relay part: `/p2p-circuit`, then at most one `/p2p/<target>`.
 fn circuit_tail(a: &Multiaddr) -> bool {
@@ -283,8 +312,11 @@ mod tests {
         assert!(!DialPolicy::Public.allows(&loopback));
         for a in [
             "/ip4/8.8.8.8/tcp/4002",
+            "/ip4/8.8.8.8/udp/4002/quic-v1",
             "/ip6/2606:4700::1111/tcp/4002",
+            "/ip6/2606:4700::1111/udp/4002/quic-v1",
             "/dns4/colosseum1.qu.ai/tcp/4002/p2p/12D3KooWB72Vs7gfLgvJsmR7cex7tG5WY7WDdqJD124Res3byDyk",
+            "/dns4/colosseum1.qu.ai/udp/4002/quic-v1/p2p/12D3KooWB72Vs7gfLgvJsmR7cex7tG5WY7WDdqJD124Res3byDyk",
         ] {
             assert!(DialPolicy::Public.allows_target(&a.parse().unwrap()), "{a}");
         }
@@ -310,7 +342,9 @@ mod tests {
             "/ip4/100.64.0.1/tcp/4002",
             "/ip4/169.254.1.1/tcp/4002",
             "/ip4/8.8.8.8/tcp/0",
-            "/ip4/8.8.8.8/udp/4002/quic-v1",
+            "/ip4/8.8.8.8/udp/0/quic-v1",
+            "/ip4/8.8.8.8/udp/4002",
+            "/ip4/192.168.1.10/udp/4002/quic-v1",
             "/ip6/::1/tcp/4002",
             "/ip6/fd00::1/tcp/4002",
             "/ip6/::ffff:192.168.1.1/tcp/4002",

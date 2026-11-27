@@ -59,13 +59,13 @@ use libp2p::{
     },
     dcutr, dns, gossipsub, identify, identity, kad,
     multiaddr::Protocol,
-    noise, ping, relay,
+    noise, ping, quic, relay,
     swarm::{
         behaviour::toggle::Toggle,
         dial_opts::{DialOpts, PeerCondition},
         ConnectionId, NetworkBehaviour, SwarmEvent,
     },
-    tcp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, Transport,
+    tcp, upnp, yamux, Multiaddr, PeerId, StreamProtocol, Swarm, Transport,
 };
 use peers::Gate;
 use prost::Message;
@@ -76,7 +76,7 @@ use quai_primitives::{
         common::{ProtoHash, ProtoLocation},
         quaiprotocol::{
             quai_message::Payload, quai_request_message as rq, quai_response_message as rs,
-            QuaiMessage, QuaiRequestMessage, QuaiResponseMessage,
+            ProtoHashList, QuaiMessage, QuaiRequestMessage, QuaiResponseMessage,
         },
     },
     spec,
@@ -307,13 +307,19 @@ impl Config {
             ping_timeout: PING_TIMEOUT,
         }
     }
-    /// The public profile on TCP `port` (0: any free port).
+    /// The public profile on TCP + QUIC `port` (0: any free port).
     pub fn public(port: u16) -> Self {
         Self {
             policy: DialPolicy::Public,
-            listen: vec![Multiaddr::empty()
-                .with(Protocol::Ip4(Ipv4Addr::UNSPECIFIED))
-                .with(Protocol::Tcp(port))],
+            listen: vec![
+                Multiaddr::empty()
+                    .with(Protocol::Ip4(Ipv4Addr::UNSPECIFIED))
+                    .with(Protocol::Tcp(port)),
+                Multiaddr::empty()
+                    .with(Protocol::Ip4(Ipv4Addr::UNSPECIFIED))
+                    .with(Protocol::Udp(port))
+                    .with(Protocol::QuicV1),
+            ],
             reachability: true,
             relays: COLOSSEUM_BOOTNODES
                 .iter()
@@ -357,6 +363,7 @@ struct Behaviour {
     relay_server: Toggle<relay::Behaviour>,
     dcutr: Toggle<dcutr::Behaviour>,
     autonat: Toggle<autonat::Behaviour>,
+    upnp: Toggle<upnp::tokio::Behaviour>,
 }
 
 /// Kademlia query progress as this node observes it.
@@ -735,14 +742,31 @@ fn build_transport(
         inner,
         allowed: circuits,
     });
-    match (config.policy, relay_transport) {
-        (DialPolicy::Loopback, None) => secure(tcp, key),
-        (DialPolicy::Loopback, Some(relay)) => secure(tcp.or_transport(relay), key),
-        (DialPolicy::Public, None) => secure(dns::tokio::Transport::system(tcp)?, key),
+    let tcp_transport = match (config.policy, relay_transport) {
+        (DialPolicy::Loopback, None) => secure(tcp, key)?,
+        (DialPolicy::Loopback, Some(relay)) => secure(tcp.or_transport(relay), key)?,
+        (DialPolicy::Public, None) => secure(dns::tokio::Transport::system(tcp)?, key)?,
         (DialPolicy::Public, Some(relay)) => {
-            secure(dns::tokio::Transport::system(tcp.or_transport(relay))?, key)
+            secure(dns::tokio::Transport::system(tcp.or_transport(relay))?, key)?
         }
-    }
+    };
+    let quic_raw = PolicyTcp {
+        inner: quic::tokio::Transport::new(quic::Config::new(key)),
+        policy: config.policy,
+        listen: !config.listen.is_empty(),
+    };
+    let quic_transport: BoxedTransport = match config.policy {
+        DialPolicy::Loopback => quic_raw
+            .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
+            .boxed(),
+        DialPolicy::Public => dns::tokio::Transport::system(quic_raw)?
+            .map(|(p, m), _| (p, StreamMuxerBox::new(m)))
+            .boxed(),
+    };
+    Ok(tcp_transport
+        .or_transport(quic_transport)
+        .map(|either, _| either.into_inner())
+        .boxed())
 }
 
 impl PublicNode {
@@ -851,6 +875,10 @@ impl PublicNode {
                     ),
                     dcutr: Toggle::from(c.reachability.then(|| dcutr::Behaviour::new(local))),
                     autonat: Toggle::from(autonat),
+                    upnp: Toggle::from(
+                        (c.reachability && c.policy == DialPolicy::Public)
+                            .then(upnp::tokio::Behaviour::default),
+                    ),
                 })
             })
             .map_err(err)?
@@ -1107,6 +1135,20 @@ impl PublicNode {
             data: Some(match &query {
                 Query::Number(n) => rq::Data::Number(number_bytes(*n)),
                 Query::Hash(h) => rq::Data::Hash(ProtoHash { value: h.to_vec() }),
+                Query::Hashes(list) => {
+                    if list.is_empty() || list.len() > crate::MAX_TRIE_NODE_BATCH_SIZE {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "trie node batch size must be in 1..=256",
+                        ));
+                    }
+                    rq::Data::Hashes(ProtoHashList {
+                        hashes: list
+                            .iter()
+                            .map(|h| ProtoHash { value: h.to_vec() })
+                            .collect(),
+                    })
+                }
             }),
             request: Some(want.request()),
         };
@@ -1114,9 +1156,11 @@ impl PublicNode {
             payload: Some(Payload::Request(request)),
         }
         .encode_to_vec();
+        let started = Instant::now();
         let mut stream = self.open(peer).await?;
         stream.write(&bytes).await?;
         let frame = stream.read().await.map_err(|e| e.to_string());
+        let elapsed = started.elapsed();
         let _ = stream.close().await;
         let (outcome, response) = classify(frame, id, location, &query, want);
         {
@@ -1124,13 +1168,16 @@ impl PublicNode {
             match &outcome {
                 Outcome::Timeout(_) => {
                     book.adjust(peer, Adjustment::Timeout);
+                    book.record_latency(peer, IO_TIMEOUT);
                 }
-                Outcome::Empty if matches!(query, Query::Hash(_)) => {
+                Outcome::Empty if matches!(query, Query::Hash(_) | Query::Hashes(_)) => {
                     book.adjust(peer, Adjustment::Nack);
+                    book.record_latency(peer, elapsed);
                 }
                 Outcome::Empty | Outcome::Ban(_) => {}
                 Outcome::Valid => {
                     book.adjust(peer, Adjustment::Response);
+                    book.record_latency(peer, elapsed);
                 }
                 Outcome::Bad(_) => {
                     book.adjust(peer, Adjustment::BadResponse);
@@ -1166,6 +1213,47 @@ impl PublicNode {
         }
         Ok(None)
     }
+    /// Fetch a single verified trie node or contract bytecode blob by Keccak-256 hash.
+    pub async fn get_trie_node(
+        &self,
+        location: &[u8],
+        hash: Hash,
+    ) -> io::Result<Option<Vec<u8>>> {
+        match self
+            .request(location, Query::Hash(hash), Want::TrieNode)
+            .await?
+        {
+            Some((_, rs::Response::TrieNode(node))) if !node.node_data.is_empty() => {
+                Ok(Some(node.node_data))
+            }
+            _ => Ok(None),
+        }
+    }
+    /// Fetch a batch of up to [`crate::MAX_TRIE_NODE_BATCH_SIZE`] Keccak-256 verified
+    /// trie nodes / contract bytecode blobs, returning `(hash, bytes)` pairs.
+    pub async fn get_trie_nodes(
+        &self,
+        location: &[u8],
+        hashes: Vec<Hash>,
+    ) -> io::Result<Vec<(Hash, Vec<u8>)>> {
+        if hashes.is_empty() || hashes.len() > crate::MAX_TRIE_NODE_BATCH_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "trie node batch size must be in 1..=256",
+            ));
+        }
+        match self
+            .request(location, Query::Hashes(hashes), Want::TrieNodes)
+            .await?
+        {
+            Some((_, rs::Response::TrieNodes(resp))) => Ok(resp
+                .nodes
+                .into_iter()
+                .map(|blob| (quai_primitives::transaction::keccak(&blob), blob))
+                .collect()),
+            _ => Ok(Vec::new()),
+        }
+    }
     /// go-quai `BanPeer`: refuse the peer until the process stops and close
     /// its connections.
     pub async fn ban(&self, peer: PeerId, reason: String) {
@@ -1173,11 +1261,12 @@ impl PublicNode {
     }
 }
 
-/// A request by number or by hash.
+/// A request by number, by hash, or by batch of hashes.
 #[derive(Clone, Debug)]
 pub enum Query {
     Number(u64),
     Hash(Hash),
+    Hashes(Vec<Hash>),
 }
 /// The go-quai request types this node sends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1186,6 +1275,8 @@ pub enum Want {
     Header,
     Blocks,
     BlockHash,
+    TrieNode,
+    TrieNodes,
 }
 impl Want {
     fn request(self) -> rq::Request {
@@ -1194,6 +1285,8 @@ impl Want {
             Self::Header => rq::Request::WorkObjectHeader(Default::default()),
             Self::Blocks => rq::Request::WorkObjectBlocks(Default::default()),
             Self::BlockHash => rq::Request::BlockHash(ProtoHash::default()),
+            Self::TrieNode => rq::Request::TrieNode(Default::default()),
+            Self::TrieNodes => rq::Request::TrieNodes(Default::default()),
         }
     }
     fn matches(self, r: &rs::Response) -> bool {
@@ -1203,6 +1296,8 @@ impl Want {
                 | (Self::Header, rs::Response::WorkObjectHeaderView(_))
                 | (Self::Blocks, rs::Response::WorkObjectBlocksView(_))
                 | (Self::BlockHash, rs::Response::BlockHash(_))
+                | (Self::TrieNode, rs::Response::TrieNode(_))
+                | (Self::TrieNodes, rs::Response::TrieNodes(_))
         )
     }
 }
@@ -1294,6 +1389,51 @@ fn check_answer(response: &rs::Response, location: &[u8], query: &Query) -> Outc
         }
         rs::Response::WorkObjectBlocksView(_) | rs::Response::AuxTemplate(_) => {
             return Outcome::Valid
+        }
+        rs::Response::TrieNode(node) => {
+            if node.node_data.is_empty() {
+                return Outcome::Empty;
+            }
+            return match query {
+                Query::Hash(expected) => {
+                    if quai_primitives::transaction::keccak(&node.node_data) == *expected {
+                        Outcome::Valid
+                    } else {
+                        Outcome::Ban("trie node keccak256 mismatch".into())
+                    }
+                }
+                _ => Outcome::Bad("trie node response for non-hash query".into()),
+            };
+        }
+        rs::Response::TrieNodes(resp) => {
+            if resp.nodes.is_empty() {
+                return Outcome::Empty;
+            }
+            return match query {
+                Query::Hashes(requested) => {
+                    if resp.nodes.len() > requested.len()
+                        || resp.nodes.len() > crate::MAX_TRIE_NODE_BATCH_SIZE
+                    {
+                        return Outcome::Ban("trie nodes response exceeded batch size".into());
+                    }
+                    let req_set: HashSet<Hash> = requested.iter().copied().collect();
+                    let mut seen = HashSet::with_capacity(resp.nodes.len());
+                    for blob in &resp.nodes {
+                        if blob.is_empty() {
+                            return Outcome::Ban("empty blob in trie nodes response".into());
+                        }
+                        let digest = quai_primitives::transaction::keccak(blob);
+                        if !req_set.contains(&digest) {
+                            return Outcome::Ban("unsolicited blob in trie nodes response".into());
+                        }
+                        if !seen.insert(digest) {
+                            return Outcome::Ban("duplicate blob in trie nodes response".into());
+                        }
+                    }
+                    Outcome::Valid
+                }
+                _ => Outcome::Bad("trie nodes response for non-batch query".into()),
+            };
         }
         rs::Response::WorkObjectBlockView(v) => v.work_object.as_ref(),
         rs::Response::WorkObjectHeaderView(v) => v.work_object.as_ref(),
@@ -2295,6 +2435,7 @@ impl Driver {
                 if num_established == 0 {
                     write(&self.shared.connected).remove(&peer_id);
                     write(&self.shared.verified).remove(&peer_id);
+                    lock(&self.shared.book).clear_latency(&peer_id);
                     self.peers.remove(&peer_id);
                     self.waiting.retain(|p| *p != peer_id);
                     self.note_directions(peer_id);
@@ -2329,6 +2470,7 @@ impl Driver {
                 if let Some(info) = self.peers.get_mut(&peer) {
                     info.rtt_ms = Some(rtt.as_millis() as u64);
                 }
+                lock(&self.shared.book).record_latency(peer, rtt);
             }
             SwarmEvent::Behaviour(BehaviourEvent::Ping(ping::Event {
                 peer,
@@ -2386,6 +2528,35 @@ impl Driver {
                 message_id,
                 message,
             })) => self.on_gossip(propagation_source, message_id, message),
+            SwarmEvent::Behaviour(BehaviourEvent::Gossip(gossipsub::Event::HandlerDisabled {
+                peer_id,
+            })) => {
+                // Our patched libp2p-gossipsub reports when a connection's
+                // gossipsub handler disabled itself after MAX_SUBSTREAM_ATTEMPTS.
+                // Disconnect immediately and redial its direct address so NATed
+                // nodes do not silently stall behind a dead gossip connection.
+                let redial = self.peers.get(&peer_id).and_then(|info| {
+                    info.dialed
+                        .clone()
+                        .or_else(|| info.listen.first().cloned())
+                });
+                let _ = self.swarm.disconnect_peer_id(peer_id);
+                if let Some(addr) = redial {
+                    if !lock(&self.shared.book).is_banned(&peer_id, Instant::now())
+                        && self.config.policy.allows(&addr)
+                    {
+                        let opts = DialOpts::peer_id(peer_id)
+                            .condition(PeerCondition::DisconnectedAndNotDialing)
+                            .addresses(vec![addr])
+                            .build();
+                        let _ = self.swarm.dial(opts);
+                    }
+                }
+            }
+            SwarmEvent::Behaviour(BehaviourEvent::Upnp(upnp::Event::NewExternalAddr(addr))) => {
+                self.swarm.add_external_address(addr.clone());
+                self.emit(Event::ExternalAddr(addr));
+            }
             SwarmEvent::Behaviour(BehaviourEvent::Kad(kad::Event::ModeChanged { new_mode })) => {
                 self.kad_mode = new_mode.to_string();
             }

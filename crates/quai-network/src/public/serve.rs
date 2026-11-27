@@ -49,6 +49,12 @@ impl Store for NotFound {
             (rq::Request::BlockHash(_), rq::Data::Number(_)) => {
                 Some(rs::Response::BlockHash(ProtoHash::default()))
             }
+            (rq::Request::TrieNode(_), rq::Data::Hash(_)) => {
+                Some(rs::Response::TrieNode(Default::default()))
+            }
+            (rq::Request::TrieNodes(_), rq::Data::Hashes(_)) => {
+                Some(rs::Response::TrieNodes(Default::default()))
+            }
             _ => None,
         }
     }
@@ -236,11 +242,132 @@ mod tests {
                     rs::Response::WorkObjectBlocksView(v) => v.work_objects.is_empty(),
                     rs::Response::BlockHash(h) => h.value.is_empty(),
                     rs::Response::AuxTemplate(_) => false,
+                    rs::Response::TrieNode(n) => n.node_data.is_empty(),
+                    rs::Response::TrieNodes(ns) => ns.nodes.is_empty(),
                 };
                 assert!(empty);
             }
         }
         // A response or garbage gets no answer.
         assert!(answer(&NotFound, &[1, 2, 3]).is_none());
+    }
+
+    #[test]
+    fn trie_node_not_found_and_classify_keccak_verification() {
+        use super::super::{classify, Outcome, Query, Want};
+        use quai_primitives::{
+            schema::quaiprotocol::{ProtoHashList, ProtoTrieNode, ProtoTrieNodes},
+            transaction::keccak,
+        };
+
+        let loc = vec![0u8, 0u8];
+        let blob1 = b"evm-trie-node-alpha".to_vec();
+        let blob2 = b"etx-trie-node-beta".to_vec();
+        let h1 = keccak(&blob1);
+        let h2 = keccak(&blob2);
+
+        // NotFound answers empty TrieNode and TrieNodes
+        let req_single = request(
+            77,
+            loc.clone(),
+            rq::Data::Hash(ProtoHash { value: h1.to_vec() }),
+            rq::Request::TrieNode(Default::default()),
+        );
+        let empty_single = answer(&NotFound, &frame(&req_single)).unwrap();
+        let (outcome, val) = classify(Ok(empty_single), 77, &loc, &Query::Hash(h1), Want::TrieNode);
+        assert_eq!(outcome, Outcome::Empty);
+        assert!(val.is_none());
+
+        let req_batch = request(
+            78,
+            loc.clone(),
+            rq::Data::Hashes(ProtoHashList {
+                hashes: vec![
+                    ProtoHash { value: h1.to_vec() },
+                    ProtoHash { value: h2.to_vec() },
+                ],
+            }),
+            rq::Request::TrieNodes(Default::default()),
+        );
+        let empty_batch = answer(&NotFound, &frame(&req_batch)).unwrap();
+        let (outcome, val) = classify(
+            Ok(empty_batch),
+            78,
+            &loc,
+            &Query::Hashes(vec![h1, h2]),
+            Want::TrieNodes,
+        );
+        assert_eq!(outcome, Outcome::Empty);
+        assert!(val.is_none());
+
+        // Valid single TrieNode response passes Keccak256 check
+        let ok_frame = QuaiMessage {
+            payload: Some(Payload::Response(QuaiResponseMessage {
+                id: 79,
+                location: Some(ProtoLocation { value: loc.clone() }),
+                response: Some(rs::Response::TrieNode(ProtoTrieNode {
+                    node_data: blob1.clone(),
+                })),
+            })),
+        }
+        .encode_to_vec();
+        let (outcome, val) = classify(Ok(ok_frame), 79, &loc, &Query::Hash(h1), Want::TrieNode);
+        assert_eq!(outcome, Outcome::Valid);
+        assert!(val.is_some());
+
+        // Corrupted single TrieNode triggers Ban
+        let bad_frame = QuaiMessage {
+            payload: Some(Payload::Response(QuaiResponseMessage {
+                id: 80,
+                location: Some(ProtoLocation { value: loc.clone() }),
+                response: Some(rs::Response::TrieNode(ProtoTrieNode {
+                    node_data: b"corrupted".to_vec(),
+                })),
+            })),
+        }
+        .encode_to_vec();
+        let (outcome, val) = classify(Ok(bad_frame), 80, &loc, &Query::Hash(h1), Want::TrieNode);
+        assert!(matches!(outcome, Outcome::Ban(_)));
+        assert!(val.is_none());
+
+        // Valid partial batch passes, duplicate or unsolicited triggers Ban
+        let ok_batch = QuaiMessage {
+            payload: Some(Payload::Response(QuaiResponseMessage {
+                id: 81,
+                location: Some(ProtoLocation { value: loc.clone() }),
+                response: Some(rs::Response::TrieNodes(ProtoTrieNodes {
+                    nodes: vec![blob2.clone()],
+                })),
+            })),
+        }
+        .encode_to_vec();
+        let (outcome, val) = classify(
+            Ok(ok_batch),
+            81,
+            &loc,
+            &Query::Hashes(vec![h1, h2]),
+            Want::TrieNodes,
+        );
+        assert_eq!(outcome, Outcome::Valid);
+        assert!(val.is_some());
+
+        let dup_batch = QuaiMessage {
+            payload: Some(Payload::Response(QuaiResponseMessage {
+                id: 82,
+                location: Some(ProtoLocation { value: loc.clone() }),
+                response: Some(rs::Response::TrieNodes(ProtoTrieNodes {
+                    nodes: vec![blob1.clone(), blob1],
+                })),
+            })),
+        }
+        .encode_to_vec();
+        let (outcome, _) = classify(
+            Ok(dup_batch),
+            82,
+            &loc,
+            &Query::Hashes(vec![h1, h2]),
+            Want::TrieNodes,
+        );
+        assert!(matches!(outcome, Outcome::Ban(_)));
     }
 }

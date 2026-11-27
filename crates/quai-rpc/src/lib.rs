@@ -239,16 +239,14 @@ fn error(code: i64, message: &str) -> Outcome {
 
 // serde_json fails only on a failed writer or a map key that is not a string.
 // A `Vec` writer cannot fail and a `Value` map has only string keys.
-const VALUE_WRITES: &str = "a serde_json::Value always serializes into a Vec";
-
 fn encode(id: &Value, outcome: Outcome) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(256);
     bytes.extend_from_slice(b"{\"jsonrpc\":\"2.0\",\"id\":");
-    serde_json::to_writer(&mut bytes, id).expect(VALUE_WRITES);
+    let _ = serde_json::to_writer(&mut bytes, id);
     match outcome {
         Outcome::Result(value) => {
             bytes.extend_from_slice(b",\"result\":");
-            serde_json::to_writer(&mut bytes, &value).expect(VALUE_WRITES);
+            let _ = serde_json::to_writer(&mut bytes, &value);
         }
         Outcome::Encoded(value) => {
             // Reserve the result marker and closing brace with the payload.
@@ -258,7 +256,7 @@ fn encode(id: &Value, outcome: Outcome) -> Vec<u8> {
         }
         Outcome::Error(value) => {
             bytes.extend_from_slice(b",\"error\":");
-            serde_json::to_writer(&mut bytes, &value).expect(VALUE_WRITES);
+            let _ = serde_json::to_writer(&mut bytes, &value);
         }
     }
     bytes.push(b'}');

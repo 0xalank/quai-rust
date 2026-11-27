@@ -1225,6 +1225,18 @@ impl Miner {
     /// Verify and submit a mined donor block (`quai_submitShaBlock`,
     /// `quai_submitScryptBlock`, `quai_submitKawpowBlock` & Stratum `mining.submit`).
     pub fn submit_block(&self, raw: &[u8], pow_id: u8) -> Result<SubmitOutcome, String> {
+        self.submit_block_with_options(raw, pow_id, false)
+    }
+
+    /// Verify and submit a mined donor block, optionally broadcasting D/128
+    /// sub-shares onto the workshare gossip topic (`--stratum-subshares`) so
+    /// solo miners can propagate local mempool transactions.
+    pub fn submit_block_with_options(
+        &self,
+        raw: &[u8],
+        pow_id: u8,
+        broadcast_subshares: bool,
+    ) -> Result<SubmitOutcome, String> {
         let parsed = parse_submitted_donor_block(raw, pow_id)?;
         let aux_key = aux_lookup_key(parsed.coinbase.commitment, parsed.coinbase.signature_time);
         let pending = {
@@ -1310,7 +1322,13 @@ impl Miner {
             share_rules::number(solved_header.wire().number.as_deref().unwrap_or_default())
                 .unwrap_or(0);
 
-        self.record_and_broadcast(&solved_wo, &solved_header, classification, true);
+        self.record_and_broadcast(
+            &solved_wo,
+            &solved_header,
+            classification,
+            true,
+            broadcast_subshares,
+        );
 
         let status = match classification {
             Classification::Sub => 0,
@@ -1367,12 +1385,22 @@ impl Miner {
         }
     }
 
+    /// Pre-build the KawPoW light verification cache for `donor_height`'s epoch
+    /// so the first submitted GPU share verifies immediately without stalling.
+    pub fn prewarm_kawpow_cache(&self, donor_height: u64) -> Result<(), String> {
+        self.caches
+            .get(Algorithm::Kawpow, donor_height)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
     fn record_and_broadcast(
         &self,
         wo: &WorkObject,
         header: &Header,
         class: Classification,
         mined: bool,
+        broadcast_subshares: bool,
     ) {
         let mode = self.mode();
         if matches!(class, Classification::Valid | Classification::Block) {
@@ -1427,7 +1455,9 @@ impl Miner {
                             hook(topic, view.encode_to_vec());
                         }
                     }
-                } else if class == Classification::Valid {
+                } else if class == Classification::Valid
+                    || (class == Classification::Sub && broadcast_subshares)
+                {
                     if let Ok(proto_wo) = ProtoWorkObject::decode(wo.encode().as_slice()) {
                         let view = ProtoWorkObjectShareView {
                             work_object: Some(proto_wo),
@@ -1467,7 +1497,7 @@ impl Miner {
                 .unwrap_or_else(|e| e.into_inner());
             by_seal.get(&header.seal_hash()).cloned().unwrap_or(wo)
         };
-        self.record_and_broadcast(&full_wo, &header, class, true);
+        self.record_and_broadcast(&full_wo, &header, class, true, false);
         Ok(())
     }
 
@@ -1502,7 +1532,7 @@ impl Miner {
         };
         if let Ok(wo) = WorkObject::decode_auxiliary(&proto_wo.encode_to_vec(), self.aux_schedule())
         {
-            self.record_and_broadcast(&wo, &header, class, false);
+            self.record_and_broadcast(&wo, &header, class, false, false);
         }
         Ok(class)
     }
@@ -1520,7 +1550,7 @@ impl Miner {
             .map_err(|e| format!("classify sub-workshare: {e}"))?;
         match class {
             Classification::Valid | Classification::Block => {
-                self.record_and_broadcast(&wo, &header, class, false);
+                self.record_and_broadcast(&wo, &header, class, false, false);
                 Ok(class)
             }
             Classification::Sub => {

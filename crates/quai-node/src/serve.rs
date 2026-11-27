@@ -13,16 +13,29 @@
 //! "not found" answer.
 use crate::rpc_view::ExportView;
 use prost::Message;
-use quai_network::public::serve::{NotFound, Store};
+use quai_network::{
+    public::serve::{NotFound, Store},
+    MAX_TRIE_NODE_BATCH_SIZE, MAX_TRIE_NODE_RESPONSE_BYTES,
+};
 use quai_primitives::schema::{
     block::{
         ProtoManifest, ProtoTransactions, ProtoWorkObject, ProtoWorkObjectBlockView,
         ProtoWorkObjectBlocksView, ProtoWorkObjectHeaderView,
     },
     common::{ProtoHash, ProtoHashes},
-    quaiprotocol::{quai_request_message as rq, quai_response_message as rs, QuaiRequestMessage},
+    quaiprotocol::{
+        quai_request_message as rq, quai_response_message as rs, ProtoTrieNode, ProtoTrieNodes,
+        QuaiRequestMessage,
+    },
 };
 use quai_primitives::Hash;
+use std::collections::HashSet;
+use std::sync::Arc;
+
+/// Optional reader for serving zone state/ETX trie nodes and contract bytecode over P2P.
+pub trait TrieNodeReader: Send + Sync {
+    fn trie_node(&self, hash: &Hash) -> Option<Vec<u8>>;
+}
 
 /// go-quai's `C_NumPrimeBlocksToDownload`: the blocks of one
 /// WorkObjectBlocks answer.
@@ -34,6 +47,7 @@ pub struct StoreServer {
     genesis: Hash,
     /// The locations of the slice's prime, region and zone chains.
     locations: [Vec<u8>; 3],
+    trie_reader: Option<Arc<dyn TrieNodeReader>>,
 }
 impl StoreServer {
     pub fn new(view: ExportView, genesis: Hash, location: [u8; 2]) -> Self {
@@ -41,7 +55,12 @@ impl StoreServer {
             view,
             genesis,
             locations: [vec![], vec![location[0]], location.to_vec()],
+            trie_reader: None,
         }
+    }
+    pub fn with_trie_reader(mut self, reader: Arc<dyn TrieNodeReader>) -> Self {
+        self.trie_reader = Some(reader);
+        self
     }
     fn hash_at(&self, ctx: usize, number: u64) -> Option<Hash> {
         if number == 0 {
@@ -135,6 +154,7 @@ impl Store for StoreServer {
         let named = || match data {
             rq::Data::Hash(h) => hash32(h),
             rq::Data::Number(n) => number(n).and_then(|n| self.hash_at(ctx, n)),
+            rq::Data::Hashes(_) => None,
         };
         match request.request.as_ref()? {
             rq::Request::BlockHash(_) => match data {
@@ -144,7 +164,7 @@ impl Store for StoreServer {
                         .map(|h| h.to_vec())
                         .unwrap_or_default(),
                 })),
-                rq::Data::Hash(_) => None,
+                rq::Data::Hash(_) | rq::Data::Hashes(_) => None,
             },
             rq::Request::WorkObjectBlock(_) => Some(rs::Response::WorkObjectBlockView(
                 ProtoWorkObjectBlockView {
@@ -161,6 +181,57 @@ impl Store for StoreServer {
                     work_objects: named().and_then(|h| self.from(ctx, &h)).unwrap_or_default(),
                 },
             )),
+            rq::Request::TrieNode(_) => {
+                let rq::Data::Hash(h) = data else {
+                    return None;
+                };
+                if ctx != ZONE {
+                    return Some(rs::Response::TrieNode(ProtoTrieNode::default()));
+                }
+                let node_data = hash32(h)
+                    .and_then(|hash| self.trie_reader.as_ref()?.trie_node(&hash))
+                    .unwrap_or_default();
+                Some(rs::Response::TrieNode(ProtoTrieNode { node_data }))
+            }
+            rq::Request::TrieNodes(_) => {
+                let rq::Data::Hashes(list) = data else {
+                    return None;
+                };
+                if list.hashes.is_empty() || list.hashes.len() > MAX_TRIE_NODE_BATCH_SIZE {
+                    return None;
+                }
+                if ctx != ZONE {
+                    return Some(rs::Response::TrieNodes(ProtoTrieNodes::default()));
+                }
+                let Some(reader) = self.trie_reader.as_ref() else {
+                    return Some(rs::Response::TrieNodes(ProtoTrieNodes::default()));
+                };
+                let mut seen = HashSet::with_capacity(list.hashes.len());
+                let mut nodes = Vec::new();
+                let mut total_bytes = 0usize;
+                for proto_hash in &list.hashes {
+                    let hash = hash32(proto_hash)?;
+                    if !seen.insert(hash) {
+                        continue;
+                    }
+                    if let Some(blob) = reader.trie_node(&hash) {
+                        if blob.is_empty() {
+                            continue;
+                        }
+                        if !nodes.is_empty()
+                            && total_bytes.saturating_add(blob.len()) > MAX_TRIE_NODE_RESPONSE_BYTES
+                        {
+                            break;
+                        }
+                        total_bytes = total_bytes.saturating_add(blob.len());
+                        nodes.push(blob);
+                        if total_bytes >= MAX_TRIE_NODE_RESPONSE_BYTES {
+                            break;
+                        }
+                    }
+                }
+                Some(rs::Response::TrieNodes(ProtoTrieNodes { nodes }))
+            }
             _ => NotFound.answer(request),
         }
     }

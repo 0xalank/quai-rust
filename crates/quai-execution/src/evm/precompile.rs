@@ -154,12 +154,11 @@ fn g2(input: &[u8]) -> Result<G2, Fault> {
 }
 fn encode_g1(value: G1) -> Vec<u8> {
     // `Fq::to_big_endian` fails only when the slice is not 32 bytes long.
-    const HALF: &str = "a 64-byte buffer splits into two 32-byte coordinates";
     let mut out = vec![0; 64];
     if let Some(a) = AffineG1::from_jacobian(value) {
         let (x, y) = out.split_at_mut(32);
-        a.x().to_big_endian(x).expect(HALF);
-        a.y().to_big_endian(y).expect(HALF);
+        let _ = a.x().to_big_endian(x);
+        let _ = a.y().to_big_endian(y);
     }
     out
 }

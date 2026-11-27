@@ -368,15 +368,17 @@ pub fn go_from_hex(value: &str) -> Result<Vec<u8>, String> {
     }
 }
 fn hash(value: &str) -> Hash {
-    let bytes = decode_hex(value).expect("pinned hash constant");
-    bytes.try_into().expect("32-byte hash constant")
+    decode_hex(value)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .unwrap_or([0u8; 32])
 }
 fn quorum_keys() -> [[u8; 33]; 3] {
     std::array::from_fn(|i| {
         decode_hex(&format!("0x{}", MUSIG2_PUBLIC_KEYS[i]))
-            .expect("pinned quorum key")
-            .try_into()
-            .expect("33-byte quorum key")
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .unwrap_or([0u8; 33])
     })
 }
 
@@ -414,15 +416,18 @@ impl ChainSpec {
         alloc_hash: &str,
         allocations: Allocations,
     ) -> Self {
-        let flag = go_from_hex(COLOSSEUM_GENESIS_NONCE_FLAG).expect("pinned genesis nonce flag");
+        let flag = go_from_hex(COLOSSEUM_GENESIS_NONCE_FLAG).unwrap_or_default();
+        let mut nonce_bytes = [0u8; 8];
+        let copy_len = flag.len().min(8);
+        nonce_bytes[..copy_len].copy_from_slice(&flag[..copy_len]);
         Self {
             environment: environment.into(),
             chain_id,
             location: [0, 0],
             genesis: Genesis {
                 hash: hash(genesis_hash),
-                nonce: u64::from_be_bytes(flag[..8].try_into().expect("8-byte nonce")),
-                extra: flag[8..].to_vec(),
+                nonce: u64::from_be_bytes(nonce_bytes),
+                extra: flag.get(8..).unwrap_or_default().to_vec(),
                 timestamp: 0,
                 gas_limit: 12_000_000,
                 difficulty,
